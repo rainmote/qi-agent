@@ -35,6 +35,6 @@
   {:ns agent.plugins.remote-registry}
   {:ns agent.plugins.remote-api}
   {:ns agent.plugins.tui-ink
-   :config {:command ["node" "apps/tui/dist/main.js"]
+   :config {:command ["apps/tui-rs/target/release/bb-agent-tui"]
             :theme "Qwen Dark"
             :shutdown-timeout-ms 1500}}]}

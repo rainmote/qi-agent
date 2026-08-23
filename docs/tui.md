@@ -1,6 +1,10 @@
-# Qwen Code 对齐的 Ink TUI
+# Qwen Code 对齐的 Ink TUI（兼容实现）
 
-## 当前默认方案
+> 默认前端已迁移到 Rust/Ratatui；构建、运行、能力矩阵和验证方式见
+> [Rust/Ratatui TUI](tui-ratatui.md)。本文保留 TypeScript/React/Ink 实现的协议细节和回退
+> 说明，`bb tui-ink-build` 可继续构建该兼容前端。
+
+## 兼容方案
 
 默认 profile 使用 `agent.plugins.tui-ink`。Agent runtime 仍然完全运行在 Babashka 进程中；
 TypeScript、React 与 Ink 只实现终端表现层。这一边界让 TUI 可以贴近 Qwen Code 的布局和

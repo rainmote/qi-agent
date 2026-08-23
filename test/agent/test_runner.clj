@@ -2,6 +2,7 @@
   (:require [agent.cancellation :as cancellation]
             [agent.command :as command]
             [agent.cli :as cli]
+            [agent.install :as install]
             [agent.api :as api]
             [agent.kernel :as kernel]
             [agent.plugin :as plugin]
@@ -31,6 +32,23 @@
             [clojure.test :refer [deftest is run-tests testing]]))
 
 (declare delete-tree! tool-call)
+
+(deftest global-installer-keeps-the-callers-workspace
+  (let [profile {:plugins [{:ns 'agent.plugins.session}
+                           {:ns 'agent.plugins.tui-ink
+                            :config {:command ["node" "relative.js"]}}]}
+        installed (install/installed-profile profile "/opt/dao")
+        launcher (install/launcher-script "/opt/dao")]
+    (is (= ["/opt/dao/apps/tui-rs/target/release/bb-agent-tui"]
+           (get-in installed [:plugins 1 :config :command])))
+    (is (= 'agent.plugins.session (get-in installed [:plugins 0 :ns])))
+    (is (str/includes? launcher "# Managed by dao `bb install`."))
+    (is (str/includes? launcher "export BB_AGENT_COMMAND=dao"))
+    (is (str/includes? launcher "--deps-root \"$INSTALL_DIR\""))
+    (is (str/includes? launcher "\"$@\""))
+    (is (not (str/includes? launcher "cd ")))
+    (is (install/path-entry? "/usr/bin:/opt/tools" "/opt/tools"))
+    (is (not (install/path-entry? "/usr/bin:/opt/toolsmith" "/opt/tools")))))
 
 (deftest reversible-kernel-effects
   (let [ctx (kernel/create-context)

@@ -75,11 +75,42 @@ do not change the core Qwen interaction or hierarchy.
 - Post-fix evidence: `tool-summary-comparison.png` and `bb-agent-tool-summary-160x44.png`. The implementation frame shows one completed `Searched …, read …, listed …` line with Qwen's success glyph and semantic color in the same 160 × 44 terminal geometry.
 - Regression result: 106 TUI tests, the complete TypeScript/web suite, and 69 Clojure tests with 526 assertions pass. The final consistency pass also covers reused tool-call IDs across steps/runs, every canceled late-provider outcome, and both durable `run_id` spellings. A real PTY run launched with inherited `NO_COLOR=1`, retained 256-color output, completed the mock tool batch, and exited without Node performance or color-conflict warnings.
 
-## Follow-up polish
+### Iteration 6 — Rust/Ratatui replacement
+
+- Migration: added `apps/tui-rs`, a Rust 2024/Ratatui frontend that reuses the existing JSONL bridge and leaves the Babashka runtime boundary unchanged. The default and offline mock profiles now launch its release binary; React/Ink remains an explicit compatibility fallback.
+- Visual contract: Ratatui `TestBackend` renders deterministic 160 × 44 and 80-column buffers. Tests cover the wide wordmark/runtime panel, narrow breakpoint, Tips/history hierarchy, double-rule composer, software cursor, footer, dialog-exclusive control region, two-pane theme preview, semantic tool aggregation, multiline input, slash suggestions, queue and extension slots.
+- Interaction contract: state-machine tests cover grapheme editing/history, idle submit, busy steer, `Ctrl+Q` follow-up, abort/exit, model/session/tree/theme selection, approval navigation, required input/custom JSON validation, durable-event deduplication, streaming projection and monotonic tool completion.
+- Cross-implementation result: the legacy TypeScript baseline remains green at 109 TUI tests. The initial Rust replacement passed 23 projection/interaction/UI tests under strict `clippy -D warnings`, and the Babashka bridge suite remained green at 70 tests and 544 assertions, proving that switching the child command did not change host behavior.
+- Real terminal result: a 160 × 44 pseudo-terminal smoke run started the offline mock profile, loaded snapshot and commands, submitted a user turn, completed the mixed read/search/list tool batch, rendered the final assistant response, invoked `frontend.exit`, and restored the terminal cleanly.
+- Performance fix: the first PTY pass revealed unnecessary continuous redraw. Rendering is now dirty-state driven, with timed redraw only while an animated busy state is visible; the idle frontend no longer consumes a core.
+- Terminal-channel regression fix: fullscreen initialization no longer calls `Terminal::clear`, whose cursor-position query writes through process stdout (reserved for JSONL) and can spin forever when no terminal answers. The frontend now clears directly through its `/dev/tty` backend and enables Crossterm's `use-dev-tty` event source. A committed Expect smoke test verifies startup, a complete mock turn, and clean exit; an idle-process check measured 0.1% CPU instead of a saturated core.
+- Busy-copy parity fix: Ratatui now ships the same 74 individually written Chinese humorous phrases as Ink, chooses one as soon as work starts, rotates it every 15 seconds, and shows elapsed time plus the cancel affordance. The 80-column row stays compact, 31–79 columns use two lines, and ≤30 columns retain only the essential cancel hint.
+
+### Iteration 7 — Rust feature-completeness pass
+
+- Content parity: assistant output now uses styled Qwen/GFM blocks for headings, rules, quotes, lists, task lists, fenced code, links, emphasis and strike-through. ANSI/OSC escapes, terminal controls and bidi overrides are removed from every untrusted host surface before rendering.
+- Tool parity: search/read/list retain the compact mixed sentence, while shell/edit/write/agent calls render as individual actions with live output, elapsed and timeout metadata, complete error/result tails, six-state icons and cancellation styling. `Ctrl+O` remains the global toggle; `Ctrl+T` adds per-group focus, navigation and expansion.
+- Long-session parity: transcript rendering now selects only the bottom visible item window plus a small overscan instead of formatting the entire history every frame. Mouse-wheel and page navigation retain bottom-follow behavior, clamp safely at both ends, and an ASCII scrollbar exposes position.
+- Interaction parity: queue previews are capped at three with overflow and `Ctrl+Q` guidance; approval dialogs retain Qwen's static waiting row; registered host shortcuts take precedence and surface failed invocation responses. Multiline editing adds `Ctrl+A`, `Ctrl+E`, `Ctrl+N`, preferred grapheme columns and normalized pasted line endings. The humorous phrase continues rotating while tool work pauses only the model-response timer, exactly like the Ink baseline.
+- Protocol parity: durable snapshot IDs seed live-event deduplication, duplicate tool calls update in place, LLM text/reasoning deltas project incrementally, and idle/abort transitions terminalize abandoned tools instead of leaving stale running rows.
+- Regression result: the Rust suite now passes 41 projection/editor/interaction/UI tests under strict `clippy -D warnings`. The full cross-language and real-PTY results are recorded by the final verification commands in `docs/tui-ratatui.md`.
+
+### Iteration 8 — native terminal scrollback
+
+- Architecture correction: the default Rust frontend now uses Ratatui's inline viewport instead of the alternate screen. Only streaming assistant text, active tool frames, composer, loading state and dialogs are redrawn.
+- Stable-history contract: the header and the contiguous completed history prefix are rendered once with `insert_before`. A running or confirming tool blocks later rows from committing, which preserves event order; when it reaches success, error or cancellation, its final frame moves into terminal scrollback.
+- Native navigation: mouse capture and the in-app ASCII scrollbar are disabled in inline mode. The terminal owns wheel, scrollbar and history-key navigation, so completed output remains available after redraws and after the frontend exits.
+- Protocol safety: Crossterm cursor-position queries are temporarily directed to `/dev/tty`, while stdout remains the JSONL bridge channel. Cleanup clears only the live inline viewport and restores bracketed paste, cursor visibility and raw mode without deleting committed history.
+- Regression result: 44 Rust tests include TestBackend scrollback, contiguous-commit and constrained-height dialog assertions. The 160 × 44 real-PTY smoke test completes a mock turn, verifies clean exit, and rejects alternate-screen or mouse-capture enable sequences.
+
+## Upstream-only follow-up polish
+
+These are differences from newer upstream Qwen surfaces, not regressions against
+the TypeScript/Ink implementation being replaced in this repository.
 
 - P3: the checked-in Qwen source screenshot is from v0.19.2 and contains different session content. Current component source was used to resolve later token and layout behavior, but an upstream current-version idle screenshot would make future pixel diffs more exact.
-- P2: Qwen can show token/rate telemetry in the wide loading row and divides a constrained output budget among multiple action-tool results. This frontend does not yet receive token-rate data and currently applies the output cap per action tool.
-- P2: virtual-list first-pass height is conservative for unusually long CJK tool summaries; Ink's measured height corrects it after layout.
+- P2: Qwen can show token/rate telemetry in the wide loading row. The current host protocol does not publish those values, so the Rust frontend cannot display them yet.
+- P3: the action-tool output safety cap is applied per tool instead of sharing one constrained budget across all sibling tools; expanded mode still exposes each complete result.
 - Expected difference: the wordmark, product title, version, provider, model, path, and transcript content remain specific to bb-agent.
 
 ## Implementation checklist

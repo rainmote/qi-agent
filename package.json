@@ -7,8 +7,9 @@
     "node": ">=22.12.0"
   },
   "scripts": {
-    "test": "npm run typecheck && npm run test:web && npm run test:web-ui && npm run test:tui && bb test",
+    "test": "npm run typecheck && npm run test:web && npm run test:web-ui && npm run test:tui && npm run test:tui:rust && bb test",
     "tui:build": "esbuild apps/tui/main.tsx --bundle --platform=node --format=esm --packages=external --outfile=apps/tui/dist/main.js",
+    "tui:rust:build": "cargo build --release --manifest-path apps/tui-rs/Cargo.toml",
     "tui:dev": "tsx apps/tui/main.tsx",
     "web": "npm run web:build && npm run web:start",
     "web:build": "vite build",
@@ -16,7 +17,8 @@
     "typecheck": "tsc --noEmit",
     "test:web": "tsx --test apps/web-host/*.test.ts",
     "test:web-ui": "tsx --test apps/web/src/*.test.tsx",
-    "test:tui": "tsx --test apps/tui/*.test.ts apps/tui/*.test.tsx apps/tui/components/*.test.tsx"
+    "test:tui": "tsx --test apps/tui/*.test.ts apps/tui/*.test.tsx apps/tui/components/*.test.tsx",
+    "test:tui:rust": "cargo test --manifest-path apps/tui-rs/Cargo.toml"
   },
   "dependencies": {
     "@vitejs/plugin-react": "6.0.5",

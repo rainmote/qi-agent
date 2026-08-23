@@ -20,13 +20,32 @@ flowchart LR
 
 ## 快速运行
 
-要求 Babashka 1.13 或更新版本。默认交互界面使用 React/Ink，还需要 Node.js 22.12 或
-更新版本。首次运行先安装并构建 TUI：
+要求 Babashka 1.13、Rust 1.85 或更新版本。默认交互界面使用 Rust/Ratatui；首次运行先构建
+release TUI：
 
 ```bash
-npm install
 bb tui-build
 ```
+
+需要在其他仓库直接使用本 Agent 时，在本仓库执行一次：
+
+```bash
+bb install
+```
+
+该命令会在临时目录安装依赖并构建 TUI，把应用安装到
+`~/.local/share/dao`，并创建 `~/.local/bin/dao`。只要
+`~/.local/bin` 已在 `PATH` 中，之后可从任意仓库启动：
+
+```bash
+cd /path/to/another-project
+dao
+```
+
+启动器不会切换工作目录，因此文件工具、信任状态和 `.bb-agent/sessions` 都属于调用
+`dao` 时所在的仓库。可用 `DAO_INSTALL_DIR`、`DAO_BIN_DIR`，或
+`bb install --install-dir PATH --bin-dir PATH` 覆盖默认安装位置。重复执行 `bb install`
+会构建并原子替换之前由该命令管理的安装；若目标 `dao` 是其他程序，安装器会拒绝覆盖。
 
 先运行完全离线的两轮工具调用示例：
 
@@ -37,6 +56,7 @@ bb agent --config examples/mock.edn --once "六乘七是多少？"
 运行测试：
 
 ```bash
+bb tui-test
 bb test
 ```
 
@@ -110,11 +130,12 @@ API key。认证缓存位置是官方文档支持的，但订阅后端协议并�
 插件也可以连接其他兼容 `/chat/completions` 的服务。Codex Responses 和 DeepSeek Chat
 Completions 都会把文本 delta 立即写到终端，不再等待完整响应下载结束。
 
-交互模式默认加载 `agent.plugins.tui-ink`：Babashka 继续持有 session、agent loop、工具与
-审批，Node/React/Ink 子进程只负责全屏终端界面。当前界面按 Qwen Code 的默认暗色、
+交互模式默认通过 `agent.plugins.tui-ink` 的兼容 bridge 启动 Rust/Ratatui 前端：Babashka
+继续持有 session、agent loop、工具与审批，Rust 子进程只负责终端界面。当前界面按
+Qwen Code 的默认暗色、
 欢迎 banner、消息符号、双横线输入区与弹窗布局呈现，并包含带代码/diff 分栏预览、可即时切换的 Qwen
 内置主题、session 恢复、流式
-Markdown/reasoning、紧凑工具状态、多行 Unicode 输入、命令补全、输入历史、长会话虚拟滚动，
+Markdown/reasoning、紧凑工具状态、多行 Unicode 输入、命令补全、输入历史和原生终端历史滚动，
 以及 model、session、theme 和审批选择器。离线体验：
 
 ```bash
@@ -122,9 +143,11 @@ bb tui-build
 bb agent --config examples/tui-mock.edn --mode tui
 ```
 
-Ink 子进程默认使用 `TERM=xterm-256color`、`FORCE_COLOR=1` 和
-`NODE_ENV=production`，并移除从宿主继承的 `NO_COLOR`。因此 Ghostty 不需要再手工补环境变量；
-生产模式也会避免长时间动画触发 Node 的 `MaxPerformanceEntryBufferExceededWarning`。
+Ratatui 直接打开 controlling TTY，stdin/stdout 仍只承载逐行 JSON 协议。完成的消息和工具框会
+写入 terminal scrollback，只有流式内容、运行中工具与输入区继续重绘，因此终端滚动条和滚轮可直接
+查看历史；程序不启用 alternate screen 或鼠标捕获，异常退出会恢复 raw mode 和光标。旧版 React/Ink
+源码保留在 `apps/tui/`，可运行
+`bb tui-ink-build` 后在自定义 profile 中显式覆盖 `:command` 回退诊断。
 
 同一次模型响应里的 read/search/list 工具会聚合成一条 Qwen 风格语义摘要，例如
 `Searching ToolGroup, reading README.md, listing apps/tui…`；运行中的状态图标和底部短语会动态
@@ -133,9 +156,9 @@ Ink 子进程默认使用 `TERM=xterm-256color`、`FORCE_COLOR=1` 和
 `Enter` 在空闲时提交、运行中 steer；`Ctrl+Q` 在运行中排入 follow-up；`Alt+Enter`、
 `Ctrl+N`、`Ctrl+Enter` 或 `Shift+Enter` 插入换行；`Esc`/`Ctrl+C` 中止当前运行，
 `Ctrl+O` 展开或折叠 reasoning 与工具详情，`Tab` 补全 slash command，
-`PageUp/PageDown` 查看历史。向上滚动后，新消息不会强制把视口拉回底部。`/model`、
+使用终端滚动条、鼠标滚轮或终端自身的历史快捷键查看已完成内容。`/model`、
 `/sessions` 和 `/theme` 打开对应选择器。完整安装、按键、命令、TTY/JSONL 架构与旧版
-Clojure TUI 兼容方式见 [TUI 文档](docs/tui.md)。
+Clojure/Ink TUI 兼容方式见 [Ratatui TUI 文档](docs/tui-ratatui.md)。
 
 默认 profile 会显示实际发生的工具调用：
 
@@ -294,11 +317,11 @@ ChatGPT Responses 与 OpenAI-compatible adapter 会转换成各自的多模态�
 
 注册 service、tool、observer、interceptor 和自定义 disposer 都会形成 effect。插件卸载时，effect 按注册的逆序撤销，不会留下旧工具或事件监听器。
 
-TUI 也是普通插件。默认 `agent.plugins.tui-ink` 通过 frontend-neutral Remote API 和
-`agent.ui` prompt 边界接入，不把 React 状态塞进 agent loop。当前 Ink 界面已经处理
+TUI 也是普通插件。默认 Ratatui 子进程复用 `agent.plugins.tui-ink` 的 frontend-neutral
+Remote API bridge 和 `agent.ui` prompt 边界，不把 Rust UI 状态塞进 agent loop。当前界面处理
 approval、select、confirm、input 和 custom prompt，也会投影 JSON-safe status、widget 和
 notification，并通过 Remote API 调用注册在 host 的 shortcut handler。Clojure
-message/entry/tool renderer 函数不能跨进程变成 React 组件，函数值字段只显示不可用占位符；
+message/entry/tool renderer 函数不能跨进程变成 Ratatui widget，函数值字段只显示不可用占位符；
 需要原生 renderer 时仍可使用兼容的 `agent.plugins.tui`。
 工具仍可分别声明 `:render-model` 和 `:render-tui`，避免模型上下文文本与终端表现互相绑死；
 旧 TUI 扩展示例见 `plugins/example/ui_demo.clj`。
@@ -352,8 +375,9 @@ src/agent/protocol.clj          version 1 JSON event 与 stdin/stdout RPC
 src/agent/api.clj               稳定的公开 Clojure embedding API
 src/agent/command.clj           line/TUI 共用的 slash command dispatcher
 src/agent/ui.clj                可逆 UI extension 与 prompt API
-src/agent/plugins/tui_ink.clj   默认 Ink 子进程、TTY/JSONL bridge 与 prompt adapter
-apps/tui/                       React/Ink UI、projection、transport 与组件测试
+src/agent/plugins/tui_ink.clj   Ratatui/Ink 共用的 TTY/JSONL bridge 与 prompt adapter
+apps/tui-rs/                    默认 Rust/Ratatui UI、projection、编辑器与 UI 测试
+apps/tui/                       兼容的 React/Ink UI 与原有基线测试
 src/agent/plugins/tui.clj       兼容的 JLine/Clojure 全屏 TUI
 src/agent/plugins/*.clj         tools、trust、approval、policy、stream、trace、mock
 plugins/example/math.clj        仓库外置插件示例

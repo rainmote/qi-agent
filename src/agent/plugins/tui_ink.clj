@@ -1,5 +1,5 @@
 (ns agent.plugins.tui-ink
-  "Ink TUI process bridge.
+  "External TUI process bridge (Ratatui by default, Ink-compatible).
 
   The child process owns the terminal. Its stdin/stdout are reserved for a
   versioned, line-delimited JSON protocol, so this plugin never rebinds or
@@ -84,25 +84,26 @@
 (defn- error-response [id error]
   {:type "response" :id id :ok false :error (error-data error)})
 
-(defn- normalize-command [{:keys [command entrypoint]
-                           :or {entrypoint "apps/tui/dist/main.js"}}]
-  (let [command (or command ["node" entrypoint])]
+(defn- normalize-command [{:keys [command entrypoint]}]
+  (let [command (or command
+                    (when entrypoint ["node" entrypoint])
+                    ["apps/tui-rs/target/release/bb-agent-tui"])]
     (when-not (and (sequential? command)
                    (seq command)
                    (every? #(and (string? %) (not (str/blank? %))) command))
-      (throw (ex-info "Ink TUI :command must be a non-empty argv vector"
+      (throw (ex-info "TUI :command must be a non-empty argv vector"
                       {:command command})))
     (vec command)))
 
 (defn- start-process! [{:keys [cwd env] :as config}]
   (when-not (or (nil? env) (map? env))
-    (throw (ex-info "Ink TUI :env must be a map" {:env env})))
+    (throw (ex-info "TUI :env must be a map" {:env env})))
   (let [command (normalize-command config)
         builder (ProcessBuilder. ^java.util.List command)]
     (when cwd
       (let [directory (.getCanonicalFile (io/file cwd))]
         (when-not (.isDirectory directory)
-          (throw (ex-info "Ink TUI :cwd must be a directory"
+          (throw (ex-info "TUI :cwd must be a directory"
                           {:cwd (str directory)})))
         (.directory builder directory)))
     ;; Child-only defaults keep Ink on its production renderer and preserve
@@ -315,7 +316,7 @@
       (json/generate-string projected)
       projected
       (catch Throwable error
-        (throw (ex-info "Ink TUI prompt is not JSON serializable"
+        (throw (ex-info "TUI prompt is not JSON serializable"
                         {:kind kind} error))))))
 
 (defn- option-values [request]
@@ -433,7 +434,7 @@
                       {:shutdown-timeout-ms timeout-ms})))
     (locking active-run
       (when @active-run
-        (throw (ex-info "The Ink TUI is already running" {})))
+        (throw (ex-info "The TUI is already running" {})))
       (let [process (start-process! config)
             writer (io/writer (.getOutputStream process)
                               :encoding (.name StandardCharsets/UTF_8))
@@ -490,7 +491,7 @@
               result
               (if (and (not (.isAlive process)) (zero? (.exitValue process)))
                 nil
-                (throw (ex-info "Ink TUI process exited unexpectedly"
+                (throw (ex-info "TUI process exited unexpectedly"
                                 {:command (normalize-command config)
                                  :exit-code (when-not (.isAlive process)
                                               (.exitValue process))})))))
@@ -508,7 +509,7 @@
 
 (def plugin
   {:id :frontend/tui-ink
-   :description "Qwen-style Ink TUI child process and JSON-RPC bridge."
+   :description "Qwen-style Ratatui/Ink child process and JSON-RPC bridge."
    :requires #{:agent/session :session/store :remote/registry}
    :provides #{:frontend/interactive :ui/prompt :interaction/remote
                :ui/extensions}
@@ -540,7 +541,7 @@
            request!
            (fn [kind prompt]
              (when-not (:writer @active-run)
-               (throw (ex-info "The Ink TUI prompt service is not active" {})))
+               (throw (ex-info "The TUI prompt service is not active" {})))
              (let [id (str (random-uuid))
                    completion (promise)
                    approval? (approval-request? kind prompt)
@@ -638,7 +639,7 @@
            register!
            (fn [definition] (register-method! ctx registry definition))]
        (when-not (pos-int? timeout-ms)
-         (throw (ex-info "Ink TUI interaction timeout must be positive"
+         (throw (ex-info "TUI interaction timeout must be positive"
                          {:timeout-ms timeout-ms})))
        (register!
         {:method "interaction.list"
@@ -703,7 +704,7 @@
                     :error {:message (:message failure)}})))))})
        (register!
         {:method "frontend.exit"
-         :description "Exit the Ink frontend and optionally select a session."
+         :description "Exit the TUI frontend and optionally select a session."
          :params-schema
          {:type "object"
           :properties {"outcome" {:type "object"}}
@@ -713,7 +714,7 @@
          (fn [{:keys [outcome]}]
            (let [{:keys [exit?] outcome-atom :outcome :as run} @active-run]
              (when-not run
-               (throw (ex-info "The Ink TUI is not running" {})))
+               (throw (ex-info "The TUI is not running" {})))
              (let [normalized (when (seq outcome)
                                 (normalize-outcome outcome))]
                (reset! outcome-atom normalized)

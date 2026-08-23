@@ -3,8 +3,18 @@
   {agent {:doc "Run the plugin-based LLM agent"
          :requires ([agent.cli :as cli])
          :task (apply cli/entrypoint *command-line-args*)}
-  tui-build {:doc "Build the Qwen-style Ink TUI plugin"
-             :task (shell "npm run tui:build")}
+  install {:doc "Install the dao command for use from any workspace"
+           :requires ([agent.install :as install])
+           :task (apply install/entrypoint *command-line-args*)}
+  tui-build {:doc "Build the Qwen-style Ratatui frontend"
+             :task (shell "cargo build --release --manifest-path apps/tui-rs/Cargo.toml")}
+  tui-test {:doc "Run Ratatui unit/UI tests and the real-PTY smoke test"
+            :task (do
+                    (shell "cargo test --manifest-path apps/tui-rs/Cargo.toml")
+                    (shell "cargo build --release --manifest-path apps/tui-rs/Cargo.toml")
+                    (shell "expect apps/tui-rs/tests/pty-smoke.exp"))}
+  tui-ink-build {:doc "Build the legacy TypeScript/Ink frontend"
+                 :task (shell "npm run tui:build")}
   test {:doc "Run the test suite"
         :extra-paths ["test"]
         :requires ([agent.test-runner :as test-runner])

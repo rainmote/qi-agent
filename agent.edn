@@ -165,6 +165,9 @@
   {:ns agent.plugins.remote-api}
 
   {:ns agent.plugins.tui-ink
-   :config {:command ["node" "apps/tui/dist/main.js"]
+   ;; The bridge namespace is retained for protocol compatibility; the default
+   ;; child is now the Rust/Ratatui implementation. Override :command with the
+   ;; old Node entrypoint only when diagnosing the legacy Ink frontend.
+   :config {:command ["apps/tui-rs/target/release/bb-agent-tui"]
             :theme "Qwen Dark"
             :shutdown-timeout-ms 1500}}]}

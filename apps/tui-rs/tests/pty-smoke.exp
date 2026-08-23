@@ -1,0 +1,66 @@
+#!/usr/bin/expect -f
+
+log_user 0
+set timeout 10
+
+set repo_root [file normalize [file join [file dirname [info script]] ../../..]]
+cd $repo_root
+set capture_path [file join /tmp "bb-agent-tui-pty-[pid].log"]
+log_file -noappend $capture_path
+
+proc fail {message code} {
+    puts stderr $message
+    catch {send -- "\003"}
+    after 100
+    catch {send -- "\003"}
+    exit $code
+}
+
+# Set the geometry before exec. Some Expect PTYs otherwise start at 0x0, so
+# Ratatui's first frame would correctly contain no cells.
+spawn -noecho sh -c {stty rows 44 columns 160; exec bb agent --config examples/tui-mock.edn --mode tui}
+
+# Ratatui anchors an inline viewport by asking the real terminal for its cursor
+# row. Expect supplies the response that an interactive terminal emulator would
+# normally send automatically.
+expect_before {
+    -re "\x1b\\\[6n" {
+        send -- "\x1b\[1;1R"
+        exp_continue
+    }
+}
+
+expect {
+    "Tips:" { puts "startup: rendered" }
+    timeout { fail "startup: timed out" 2 }
+    eof { fail "startup: early exit" 3 }
+}
+
+send -- "hello\r"
+expect {
+    # Ratatui may place cursor/style sequences between adjacent words, so use
+    # the final stable token instead of matching a multi-word phrase.
+    "summary." { puts "turn: rendered" }
+    timeout { fail "turn: timed out" 4 }
+    eof { fail "turn: early exit" 5 }
+}
+
+send -- "\004"
+expect {
+    eof {
+        log_file
+        set capture [open $capture_path rb]
+        set terminal_output [read $capture]
+        close $capture
+        file delete -force $capture_path
+        if {[string first "\x1b\[?1049h" $terminal_output] >= 0} {
+            fail "terminal: alternate screen was unexpectedly enabled" 7
+        }
+        if {[string first "\x1b\[?1006h" $terminal_output] >= 0} {
+            fail "terminal: mouse capture was unexpectedly enabled" 8
+        }
+        puts "scrollback: native"
+        puts "exit: clean"
+    }
+    timeout { fail "exit: timed out" 6 }
+}

@@ -14,19 +14,20 @@
     plugins)))
 
 (def usage
-  (str "Babashka plugin LLM agent\n\n"
-       "  bb agent [--config agent.edn] --once \"prompt\"\n"
-       "  bb agent [--config agent.edn] --provider PROVIDER --once \"prompt\"\n"
-       "  bb agent [--config agent.edn] --mode json --once \"prompt\"\n"
-       "  bb agent [--config agent.edn] --mode tui\n"
-       "  bb agent [--config agent.edn] --mode rpc\n"
-       "  bb agent [--config agent.edn] --mode rpc --approval-mode ask\n"
-       "  bb agent [--config agent.edn]\n"
-       "  bb agent [--config agent.edn] --list\n"
-       "  bb agent --session PATH [--once \"prompt\"]\n"
-       "  bb agent --session PATH --fork DESTINATION\n"
-       "  bb agent --session PATH --compact\n"
-       "  bb agent --session PATH --session-info\n"))
+  (let [command (or (System/getenv "BB_AGENT_COMMAND") "bb agent")]
+    (str "Babashka plugin LLM agent\n\n"
+         "  " command " [--config agent.edn] --once \"prompt\"\n"
+         "  " command " [--config agent.edn] --provider PROVIDER --once \"prompt\"\n"
+         "  " command " [--config agent.edn] --mode json --once \"prompt\"\n"
+         "  " command " [--config agent.edn] --mode tui\n"
+         "  " command " [--config agent.edn] --mode rpc\n"
+         "  " command " [--config agent.edn] --mode rpc --approval-mode ask\n"
+         "  " command " [--config agent.edn]\n"
+         "  " command " [--config agent.edn] --list\n"
+         "  " command " --session PATH [--once \"prompt\"]\n"
+         "  " command " --session PATH --fork DESTINATION\n"
+         "  " command " --session PATH --compact\n"
+         "  " command " --session PATH --session-info\n")))
 
 (defn- parse-args [args]
   (loop [remaining args
