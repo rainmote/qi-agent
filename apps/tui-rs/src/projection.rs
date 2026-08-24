@@ -166,6 +166,11 @@ pub fn apply_envelope(mut projection: UiProjection, envelope: &Envelope) -> UiPr
         envelope.run_id.as_deref(),
         envelope.seq,
     );
+    if let Some(cursor) = envelope.cursor {
+        projection.cursor = cursor;
+    } else if let Some(generation) = envelope.generation {
+        projection.cursor.generation = generation;
+    }
     sync_streaming(&mut projection);
     projection
 }
@@ -296,7 +301,7 @@ fn apply_event(
         _ => {}
     }
     if let Some(seq) = seq {
-        projection.cursor = projection.cursor.max(seq);
+        projection.cursor.sequence = projection.cursor.sequence.max(seq);
     }
     projection
 }

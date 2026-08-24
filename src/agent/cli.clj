@@ -19,7 +19,6 @@
          "  " command " [--config agent.edn] --once \"prompt\"\n"
          "  " command " [--config agent.edn] --provider PROVIDER --once \"prompt\"\n"
          "  " command " [--config agent.edn] --mode json --once \"prompt\"\n"
-         "  " command " [--config agent.edn] --mode tui\n"
          "  " command " [--config agent.edn] --mode rpc\n"
          "  " command " [--config agent.edn] --mode rpc --approval-mode ask\n"
          "  " command " [--config agent.edn]\n"
@@ -66,8 +65,8 @@
                                     "--approval-mode requires a value" {})))
         "--mode" (if-let [mode (second remaining)]
                    (let [value (keyword mode)]
-                     (when-not (contains? #{:print :json :rpc :tui} value)
-                       (throw (ex-info "--mode must be print, tui, json, or rpc"
+                     (when-not (contains? #{:print :json :rpc} value)
+                       (throw (ex-info "--mode must be print, json, or rpc"
                                        {:mode mode})))
                      (recur (nnext remaining) (assoc options :mode value)))
                    (throw (ex-info "--mode requires a value" {})))
@@ -86,39 +85,12 @@
         (throw (ex-info "Profile has no session plugin to configure" {})))
       (assoc-in config [:plugins index :config :path] path))))
 
-(defn ensure-tui-session-path
-  "Give interactive TUI sessions a recoverable default JSONL path.
-
-  Set `:ephemeral true` on the session plugin to explicitly opt out."
-  [config]
-  (let [plugins (:plugins config)
-        index (session-plugin-index plugins)]
-    (when-not index
-      (throw (ex-info "Profile has no session plugin to configure" {})))
-    (let [session-config (get-in config [:plugins index :config])]
-      (if (or (:ephemeral session-config) (:path session-config))
-        config
-        (let [timestamp (.format
-                         (java.time.format.DateTimeFormatter/ofPattern
-                          "yyyyMMdd-HHmmss")
-                         (java.time.LocalDateTime/now))
-              suffix (subs (str (random-uuid)) 0 8)]
-          (assoc-in config [:plugins index :config :path]
-                    (str ".bb-agent/sessions/" timestamp "-" suffix
-                         ".jsonl")))))))
-
 (defn- for-mode [config mode]
   (update config :plugins
           (fn [plugins]
             (->> plugins
-                 (remove #(and (contains? #{:json :rpc :tui} mode)
+                 (remove #(and (contains? #{:json :rpc} mode)
                                (= 'agent.plugins.stream-console (:ns %))))
-                 (remove #(and (= :tui mode)
-                               (= 'agent.plugins.trace (:ns %))))
-                 (remove #(and (not= :tui mode)
-                               (contains? #{'agent.plugins.tui
-                                            'agent.plugins.tui-ink}
-                                          (:ns %))))
                  vec))))
 
 (defn- approval-plugin-index [plugins]
@@ -141,9 +113,8 @@
     config
     (let [plugins (:plugins config)
           approval-index (approval-plugin-index plugins)]
-      (when-not approval-index
-        (throw (ex-info "RPC profile has no approval plugin" {})))
-      (if (some #(= 'agent.plugins.remote-interaction (:ns %)) plugins)
+      (if (or (nil? approval-index)
+              (some #(= 'agent.plugins.remote-interaction (:ns %)) plugins))
         config
         (assoc config :plugins
                (vec (concat (subvec plugins 0 approval-index)
@@ -230,26 +201,6 @@
                       (println "Error:" (ex-message error))))))
               (recur))))))))
 
-(defn- run-tui! [config provider allow-external-plugins]
-  (loop [next-config config
-         next-provider provider]
-    (let [ctx (plugin/boot! next-config
-                            {:allow-external-plugins
-                             allow-external-plugins})
-          outcome
-          (try
-            (when next-provider
-              ((:select! (kernel/require-service ctx :llm/registry))
-               next-provider))
-            (if-let [frontend (kernel/service ctx :frontend/interactive)]
-              ((:run! frontend))
-              (do (interactive! ctx) nil))
-            (finally
-              (kernel/dispose-all! ctx)))]
-      (when-let [path (:next-session outcome)]
-        (recur (with-session-path config path)
-               (or (:next-provider outcome) next-provider))))))
-
 (defn -main [& args]
   (let [{profile-path :config
          session-info? :session-info
@@ -258,47 +209,36 @@
         (parse-args args)]
     (if help
       (println usage)
-      (let [mode (or mode (if prompt :print :tui))
-            _ (when (and (= :tui mode) prompt)
-                (throw
-                 (ex-info
-                  "TUI mode does not accept --once; omit --once to open the TUI"
-                  {})))
-            interactive-tui?
-            (and (= :tui mode)
-                 (not (or list fork compact session-info? prompt)))
+      (let [mode (or mode :print)
             config (-> (plugin/read-config profile-path)
                        (with-session-path session)
                        (for-mode mode)
                        (with-remote-interaction mode)
-                       (with-approval-mode approval-mode)
-                       (cond-> interactive-tui? ensure-tui-session-path))
+                       (with-approval-mode approval-mode))
             allow-external-plugins (trust/trusted-root? ".")]
-        (if interactive-tui?
-          (run-tui! config provider allow-external-plugins)
-          (let [ctx (plugin/boot! config
-                                  {:allow-external-plugins
-                                   allow-external-plugins})]
-            (try
-              (when provider
-                ((:select! (kernel/require-service ctx :llm/registry))
-                 provider))
-              (let [store (kernel/require-service ctx :session/store)]
-                (cond
-                  list (print-inventory ctx)
-                  fork (println (pr-str ((:fork! store) fork)))
-                  compact (println (pr-str ((:compact! store))))
-                  session-info? (println (pr-str (session-info store)))
-                  (= :rpc mode) (protocol/rpc! ctx)
-                  (= :json mode)
-                  (if prompt
-                    (protocol/json-once! ctx prompt)
-                    (throw (ex-info "JSON mode requires --once PROMPT" {})))
-                  prompt (run-and-print!
-                          ctx (kernel/require-service ctx :agent/run) prompt)
-                  :else (interactive! ctx)))
-              (finally
-                (kernel/dispose-all! ctx)))))))))
+        (let [ctx (plugin/boot! config
+                                {:allow-external-plugins
+                                 allow-external-plugins})]
+          (try
+            (when provider
+              ((:select! (kernel/require-service ctx :llm/registry))
+               provider))
+            (let [store (kernel/require-service ctx :session/store)]
+              (cond
+                list (print-inventory ctx)
+                fork (println (pr-str ((:fork! store) fork)))
+                compact (println (pr-str ((:compact! store))))
+                session-info? (println (pr-str (session-info store)))
+                (= :rpc mode) (protocol/rpc! ctx)
+                (= :json mode)
+                (if prompt
+                  (protocol/json-once! ctx prompt)
+                  (throw (ex-info "JSON mode requires --once PROMPT" {})))
+                prompt (run-and-print!
+                        ctx (kernel/require-service ctx :agent/run) prompt)
+                :else (interactive! ctx)))
+            (finally
+              (kernel/dispose-all! ctx))))))))
 
 (defn entrypoint
   "Command-line boundary with concise user-facing failures.

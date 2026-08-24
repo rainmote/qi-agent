@@ -1,0 +1,25 @@
+{:plugins
+ [{:ns agent.plugins.session}
+  {:ns agent.plugins.mock
+   :config
+   {:responses
+    [{:message
+      {:role "assistant"
+       :content nil
+       :tool_calls
+       [{:id "approval-write"
+         :type "function"
+         :function
+         {:name "write"
+          :arguments "{\"path\":\"approval.txt\",\"content\":\"must be approved\"}"}}]}
+      :finish-reason "tool_calls"}
+     {:message {:role "assistant" :content "approval resolved"}
+      :finish-reason "stop"}]}}
+  {:ns agent.plugins.execution-world :config {:root "."}}
+  {:ns agent.plugins.tools}
+  {:ns agent.plugins.remote-registry}
+  {:ns agent.plugins.approval :config {:mode :ask}}
+  {:ns agent.plugins.policy
+   :config {:approval-tools ["write"] :trusted-tools []}}
+  {:ns agent.plugins.runtime :config {:max-steps 2}}
+  {:ns agent.plugins.remote-api}]}

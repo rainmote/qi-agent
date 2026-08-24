@@ -1,6 +1,8 @@
 (ns agent.plugins.subagent
   "Provider-neutral subagent registry and run lifecycle."
   (:require [agent.kernel :as kernel]
+            [clojure.edn :as edn]
+            [clojure.java.io :as io]
             [clojure.string :as str]))
 
 (defn- provider-id [value]
@@ -10,12 +12,48 @@
     :else value))
 
 (defn- public-provider [provider]
-  (dissoc provider :start))
+  (dissoc provider :start :restore))
 
 (defn- public-job [job]
   (-> job
-      (dissoc :handle :completion)
+      (dissoc :handle :completion :parent-context)
       (update :provider provider-id)))
+
+(defn- roster-path [ctx]
+  (let [store (kernel/service ctx :session/store)
+        session-file (some-> (:path store) io/file .getCanonicalFile)
+        sessions-dir (some-> session-file .getParentFile)
+        metadata-dir (some-> sessions-dir .getParentFile)]
+    (when (and metadata-dir (= ".bb-agent" (.getName metadata-dir)))
+      (str (io/file metadata-dir "artifacts" (:session-id store)
+                    "children.edn")))))
+
+(defn- load-roster [path]
+  (if-not (and path (.isFile (io/file path)))
+    {:children [] :tombstones []}
+    (try
+      (let [value (edn/read-string (slurp path))]
+        (if (map? value) value {:children [] :tombstones []}))
+      (catch Throwable _ {:children [] :tombstones []}))))
+
+(defn- write-roster! [path jobs tombstones]
+  (when path
+    (let [target (io/file path)
+          parent (.getParentFile target)]
+      (.mkdirs parent)
+      (let [temporary (java.io.File/createTempFile ".children-" ".edn" parent)]
+        (try
+          (spit temporary
+                (str (pr-str {:version 1
+                              :children (mapv public-job (vals jobs))
+                              :tombstones (vec tombstones)})
+                     "\n"))
+          (java.nio.file.Files/move
+           (.toPath temporary) (.toPath target)
+           (into-array java.nio.file.CopyOption
+                       [java.nio.file.StandardCopyOption/REPLACE_EXISTING]))
+          (finally
+            (when (.exists temporary) (.delete temporary))))))))
 
 (defn- requested-capabilities [request]
   (cond-> []
@@ -59,9 +97,58 @@
    :start
    (fn [ctx _]
      (let [providers (atom {})
-           jobs (atom {})
+           path (roster-path ctx)
+           loaded (load-roster path)
+           tombstones (atom (vec (:tombstones loaded)))
+           jobs
+           (atom
+            (into {}
+                  (map (fn [job]
+                         (let [completion (promise)
+                               status (if (= :running (:status job))
+                                        :uncertain (:status job))
+                               restored (assoc job
+                                               :provider (provider-id (:provider job))
+                                               :status status
+                                               :handle nil
+                                               :completion completion)]
+                           (deliver completion
+                                    (or (:result restored)
+                                        {:id (:id restored) :status status}))
+                           [(:id restored) restored])))
+                  (:children loaded)))
+           store (kernel/service ctx :session/store)
+           persist! #(write-roster! path @jobs @tombstones)
+           complete!
+           (fn [agent-id provider depth completion result]
+             (let [completed-at (System/currentTimeMillis)
+                   completed (assoc result
+                                    :id agent-id
+                                    :agent_id agent-id
+                                    :provider provider
+                                    :depth depth)]
+               (swap! jobs update agent-id
+                      #(when %
+                         (assoc % :status :completed
+                                  :completed-at completed-at
+                                  :result completed)))
+               (persist!)
+               (deliver completion completed)
+               (kernel/emit! ctx :subagent/end completed)))
+           watch!
+           (fn [agent-id provider depth completion result]
+             (future
+               (let [value
+                     (try
+                       @result
+                       (catch Throwable error
+                         {:output ""
+                          :stop-reason :error
+                          :error (ex-message error)
+                          :details (ex-data error)}))]
+                 (complete! agent-id provider depth completion value))))
            register!
-           (fn [{:keys [id start capabilities] :as provider}]
+           (fn [{:keys [id start restore capabilities] :as provider}]
              (let [id (provider-id id)
                    provider (assoc provider :id id)]
                (when-not (and (keyword? id) (fn? start) (map? capabilities))
@@ -74,95 +161,153 @@
                (swap! providers assoc id provider)
                (kernel/emit! ctx :subagent/provider-added
                              (public-provider provider))
+               (when (fn? restore)
+                 (doseq [[agent-id job] @jobs
+                         :when (and (= id (:provider job))
+                                    (nil? (:handle job))
+                                    (not (contains? #{:stopped :deleted}
+                                                    (:status job))))]
+                   (try
+                     (let [handle (restore (public-job job))]
+                       (swap! jobs update agent-id
+                              #(assoc % :handle handle
+                                      :session-id (or (:session-id handle)
+                                                      (:session-id %)))))
+                     (catch Throwable error
+                       (swap! jobs update agent-id
+                              #(assoc % :status :failed
+                                      :error (ex-message error))))))
+                 (persist!))
                (let [active? (atom true)]
                  (fn []
                    (when (compare-and-set! active? true false)
                      (swap! providers dissoc id)
                      (kernel/emit! ctx :subagent/provider-removed
                                    {:provider id}))))))
-           release!
-           (fn [run-id]
-             (when-let [job (get @jobs run-id)]
-               (swap! jobs dissoc run-id)
-               (try ((get-in job [:handle :dispose!]))
-                    (catch Throwable _))
-               true))
            start!
            (fn [request]
-             (let [id (provider-id (:provider request))
-                   provider (get @providers id)]
+             (let [provider-id (provider-id (:provider request))
+                   provider (get @providers provider-id)]
                (when-not provider
                  (throw (ex-info "Subagent provider is not registered"
-                                 {:provider id
+                                 {:provider provider-id
                                   :available (set (keys @providers))})))
                (let [request (validate-request! provider request)
-                     run-id (or (:id request) (str (random-uuid)))
+                     agent-id (or (:agent-id request) (:id request)
+                                  (str "agent-" (random-uuid)))
                      started-at (System/currentTimeMillis)
                      handle ((:start provider)
-                             (assoc request :id run-id :provider id))]
+                             (assoc request :id agent-id
+                                            :agent-id agent-id
+                                            :provider provider-id))]
                  (when-not (and (map? handle)
                                 (instance? clojure.lang.IDeref (:result handle))
                                 (fn? (:cancel! handle))
                                 (fn? (:dispose! handle)))
                    (throw (ex-info "Subagent provider returned an invalid handle"
-                                   {:provider id :run-id run-id})))
+                                   {:provider provider-id :agent-id agent-id})))
                  (let [completion (promise)
-                       job {:id run-id
+                       job {:id agent-id
+                            :agent_id agent-id
                             :label (or (:label request) (:prompt request))
-                            :provider id
+                            :provider provider-id
                             :depth (:depth request)
                             :status :running
                             :started-at started-at
+                            :session-id (:session-id handle)
+                            :session-path (:session-path handle)
                             :handle handle
                             :completion completion}]
-                   (when (contains? @jobs run-id)
+                   (when (contains? @jobs agent-id)
                      ((:dispose! handle))
-                     (throw (ex-info "Subagent run id is already active"
-                                     {:run-id run-id})))
-                   (swap! jobs assoc run-id job)
+                     (throw (ex-info "Subagent agent id is already retained"
+                                     {:agent-id agent-id})))
+                   (swap! jobs assoc agent-id job)
+                   (persist!)
                    (kernel/emit! ctx :subagent/start (public-job job))
-                   (future
-                     (let [result
-                           (try
-                             @(:result handle)
-                             (catch Throwable error
-                               {:output ""
-                                :stop-reason :error
-                                :error (ex-message error)
-                                :details (ex-data error)}))
-                           completed-at (System/currentTimeMillis)
-                           completed (assoc result
-                                            :id run-id
-                                            :provider id
-                                            :depth (:depth request))]
-                       (swap! jobs update run-id
-                              #(when %
-                                 (assoc % :status :completed
-                                          :completed-at completed-at
-                                          :result completed)))
-                       (deliver completion completed)
-                       (kernel/emit! ctx :subagent/end completed)))
+                   (watch! agent-id provider-id (:depth request)
+                           completion (:result handle))
                    (public-job job)))))
            wait!
-           (fn [run-id & [timeout-ms]]
-             (let [job (get @jobs run-id)]
+           (fn [agent-id & [timeout-ms]]
+             (let [job (get @jobs agent-id)]
                (when-not job
                  (throw (ex-info "Subagent run was not found"
-                                 {:run-id run-id})))
+                                 {:agent-id agent-id})))
                (let [result (if (some? timeout-ms)
                               (deref (:completion job) timeout-ms ::timeout)
                               @(:completion job))]
                  (if (= ::timeout result)
-                   {:id run-id :status :running}
+                   {:id agent-id :agent_id agent-id :status (:status job)}
                    result))))
            interrupt!
-           (fn [run-id]
-             (if-let [job (get @jobs run-id)]
+           (fn [agent-id]
+             (if-let [job (get @jobs agent-id)]
                (if (= :running (:status job))
                  (boolean ((get-in job [:handle :cancel!])))
                  false)
                (throw (ex-info "Subagent run was not found"
-                               {:run-id run-id}))))
+                               {:agent-id agent-id}))))
+           invoke!
+           (fn [agent-id method params]
+             (let [job (get @jobs agent-id)
+                   invoke (get-in job [:handle :invoke!])]
+               (when-not job
+                 (throw (ex-info "Subagent was not found" {:agent-id agent-id})))
+               (when-not (fn? invoke)
+                 (throw (ex-info "Subagent is not currently routable"
+                                 {:agent-id agent-id :status (:status job)})))
+               (invoke method params)))
+           send!
+           (fn [agent-id message]
+             (let [job (get @jobs agent-id)
+                   message! (get-in job [:handle :message!])]
+               (when-not job
+                 (throw (ex-info "Subagent was not found" {:agent-id agent-id})))
+               (when-not (fn? message!)
+                 (throw (ex-info "Subagent is not currently routable"
+                                 {:agent-id agent-id :status (:status job)})))
+               (let [{:keys [result queued] :as accepted} (message! message)
+                     completion (when-not queued (promise))
+                     run-id (str (random-uuid))]
+                 (when (and (not queued)
+                            (not (instance? clojure.lang.IDeref result)))
+                   (throw (ex-info "Subagent message did not return a run result"
+                                   {:agent-id agent-id})))
+                 (swap! jobs update agent-id
+                        #(cond-> (assoc % :status :running :run-id run-id
+                                         :updated-at (System/currentTimeMillis))
+                           completion (assoc :completion completion)))
+                 (when store
+                   ((:append! store) "agent/message/sent"
+                    {:to agent-id :message message :run_id run-id}))
+                 (persist!)
+                 (when completion
+                   (watch! agent-id (:provider job) (:depth job)
+                           completion result))
+                 (merge {:id agent-id :agent_id agent-id :run_id run-id
+                         :accepted true}
+                        (dissoc accepted :result :task)))))
+           stop!
+           (fn [agent-id]
+             (when-let [job (get @jobs agent-id)]
+               (try ((get-in job [:handle :dispose!])) (catch Throwable _))
+               (swap! jobs update agent-id
+                      #(assoc % :status :stopped :handle nil
+                                :stopped-at (System/currentTimeMillis)))
+               (persist!)
+               true))
+           delete!
+           (fn [agent-id]
+             (when-let [job (get @jobs agent-id)]
+               (try ((get-in job [:handle :dispose!])) (catch Throwable _))
+               (let [tombstone {:agent_id agent-id
+                                :session_id (:session-id job)
+                                :deleted_at (System/currentTimeMillis)}]
+                 (swap! tombstones conj tombstone)
+                 (swap! jobs dissoc agent-id)
+                 (persist!)
+                 tombstone)))
            runtime
            {:register! register!
             :providers #(->> @providers vals (map public-provider)
@@ -175,10 +320,16 @@
             :job #(some-> (get @jobs %) public-job)
             :wait! wait!
             :interrupt! interrupt!
-            :release! release!}]
+            :invoke! invoke!
+            :send! send!
+            :stop! stop!
+            :delete! delete!
+            :release! delete!
+            :tombstones #(vec @tombstones)}]
        (kernel/register-service! ctx :subagents/runtime runtime)
        (fn []
-         (doseq [run-id (keys @jobs)]
-           (when-let [job (get @jobs run-id)]
+         (doseq [agent-id (keys @jobs)]
+           (when-let [job (get @jobs agent-id)]
              (try ((get-in job [:handle :cancel!])) (catch Throwable _)))
-           (release! run-id)))))})
+           (when-let [dispose! (get-in @jobs [agent-id :handle :dispose!])]
+             (try (dispose!) (catch Throwable _)))))))})

@@ -1866,7 +1866,7 @@ mod tests {
                     ToolCall {
                         call_id: "l".into(),
                         name: "ls".into(),
-                        arguments: json!({"path":"apps/tui/components"}),
+                        arguments: json!({"path":"apps/tui-rs/src"}),
                         status: ToolStatus::Success,
                         ..ToolCall::default()
                     },
@@ -1875,7 +1875,7 @@ mod tests {
         let output = frame(&app, 160, 44);
         assert_eq!(
             output
-                .matches("Searched ToolGroup, read README.md, listed apps/tui/components")
+                .matches("Searched ToolGroup, read README.md, listed apps/tui-rs/src")
                 .count(),
             1
         );
@@ -1948,7 +1948,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_names_and_descriptions_match_the_typescript_renderer() {
+    fn tool_names_and_descriptions_match_semantic_renderer_contract() {
         assert_eq!(tool_display_name("hash_read"), "HashRead");
         assert_eq!(tool_display_name("XMLParser"), "XMLParser");
         assert_eq!(tool_display_name("myCustom-tool"), "MyCustomTool");

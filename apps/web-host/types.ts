@@ -17,7 +17,8 @@ export interface SessionSummary {
 }
 
 export interface WorkerMessage {
-  type: "ready" | "response" | "event" | "run-result";
+  type: "ready" | "response" | "event" | "run-result" |
+    "snapshot.begin" | "snapshot.chunk" | "snapshot.end";
   version: number;
   id?: string;
   ok?: boolean;
@@ -26,6 +27,9 @@ export interface WorkerMessage {
   event?: string;
   data?: Record<string, unknown>;
   session_id?: string;
+  transfer_id?: string;
+  chunks?: number;
+  index?: number;
   [key: string]: unknown;
 }
 

@@ -1264,7 +1264,7 @@ mod tests {
     }
 
     #[test]
-    fn multiline_shortcuts_and_failed_host_shortcut_match_typescript() {
+    fn multiline_shortcuts_and_failed_host_shortcut_follow_ui_contract() {
         let mut app = App::with_projection(UiProjection::default());
         app.editor.insert("first");
         app.handle_key(key(KeyCode::Char('n'), KeyModifiers::CONTROL));

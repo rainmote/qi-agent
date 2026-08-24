@@ -227,7 +227,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn exposes_the_same_builtin_theme_names_as_the_ink_baseline() {
+    fn exposes_the_complete_builtin_theme_registry() {
         assert_eq!(THEME_NAMES.len(), 16);
         assert_eq!(THEME_NAMES[1], "Qwen Light");
         assert_eq!(THEME_NAMES[2], "Qwen Dark");

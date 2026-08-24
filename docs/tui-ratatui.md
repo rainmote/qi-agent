@@ -2,33 +2,27 @@
 
 ## 定位
 
-默认终端前端位于 `apps/tui-rs/`，使用 Rust、Ratatui 0.30 和 Crossterm 0.29。它替代
-TypeScript/React/Ink 作为默认实现，但不改动 Babashka 内核：session、agent loop、模型、工具、
-审批、策略和命令仍由 host 持有。
-
-为保持 profile 和协议兼容，Clojure bridge 暂时仍使用 namespace
-`agent.plugins.tui-ink`。默认 `:command` 已切到：
-
-```clojure
-["apps/tui-rs/target/release/bb-agent-tui"]
-```
+唯一受支持的外部终端前端位于 `apps/tui-rs/`，使用 Rust、Ratatui 0.30 和 Crossterm 0.29。
+旧 TypeScript/React/Ink 实现和过渡性的 `agent.plugins.tui-ink` bridge 已经删除。Rust 前端是
+常驻 daemon 的普通客户端；session、agent loop、模型、工具、审批、策略和命令由 resident
+Babashka worker 持有，关闭 TUI 只产生 detach。
 
 ## 构建与运行
 
 ```bash
 bb tui-build
-bb agent --mode tui
+apps/tui-rs/target/release/dao
 ```
 
 完全离线的真实工具批次：
 
 ```bash
-bb agent --config examples/tui-mock.edn --mode tui
+apps/tui-rs/target/release/dao --repository-root . --config examples/tui-mock.edn
 ```
 
 Rust 前端直接打开 controlling TTY。它通过 TTY 读取按键，并使用 Ratatui inline viewport
-维护屏幕底部的动态区；进程的 stdin/stdout 只承载 bridge 的 JSONL
-`ready | request | response | event` 协议，诊断只写 stderr。完成的消息和工具组由
+维护屏幕底部的动态区；公开 JSONL 协议运行在 owner-only Unix socket 上，诊断只写日志或
+stderr。完成的消息和工具组由
 `insert_before` 提交到 terminal scrollback，流式 assistant、运行中工具、composer 和 dialog
 留在动态区重绘。程序不启用 alternate screen 和鼠标捕获，所以终端原生滚动条、滚轮与历史快捷键
 可以直接查看已经完成的对话。没有 controlling TTY 时应运行测试，不应启动交互界面。
@@ -79,21 +73,12 @@ Rust 测试使用 Ratatui `TestBackend` 验证 160×44、80 列、Markdown、多
 `bb tui-test` 还会使用真实的 160×44 PTY 验证启动渲染、消息提交、响应显示和干净退出，断言不会
 启用 alternate screen 或鼠标捕获，并防止协议 stdout 与控制终端 `/dev/tty` 再次混用。
 
-## 兼容回退
+## Daemon 架构
 
-TypeScript/Ink 实现仍保留为迁移期回退：
+Rust TUI、headless CLI 和 WebUI 使用同一个 daemon 协议与 supervisor SQLite 事实源。daemon
+崩溃时 resident worker 继续运行；新 daemon 会收养 live worker。worker 重启只恢复 transcript、
+durable state 和显式 `replay_safe` REPL cell，不会重放结果不确定的副作用。完整进程边界与协议见
+[Daemon-backed Agent 架构](daemon-agent-architecture.md)。
 
-```bash
-bb tui-ink-build
-```
-
-然后在自定义 profile 中覆盖：
-
-```clojure
-{:ns agent.plugins.tui-ink
- :config {:command ["node" "apps/tui/dist/main.js"]
-          :theme "Qwen Dark"}}
-```
-
-旧版原生 Clojure TUI 仍是 `agent.plugins.tui`。一个 profile 只能配置一个
+原生 Clojure TUI 仍是 `agent.plugins.tui`。一个 profile 只能配置一个
 `:frontend/interactive` provider。

@@ -44,7 +44,7 @@ export interface Interaction {
 export interface SessionSnapshot {
   session_id: string;
   path: string;
-  cursor: number;
+  cursor: { generation: number; sequence: number };
   events: DurableEvent[];
   state: AgentState;
   models: { current: ModelEntry | null; providers: ModelEntry[] } | null;

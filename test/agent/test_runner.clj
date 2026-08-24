@@ -19,7 +19,6 @@
             [agent.plugins.subagent-tools]
             [agent.plugins.trust :as trust]
             [agent.plugins.tui :as tui]
-            [agent.plugins.tui-ink :as tui-ink]
             [agent.schema :as schema]
             [agent.streaming :as streaming]
             [agent.system-prompt :as system-prompt]
@@ -34,17 +33,13 @@
 (declare delete-tree! tool-call)
 
 (deftest global-installer-keeps-the-callers-workspace
-  (let [profile {:plugins [{:ns 'agent.plugins.session}
-                           {:ns 'agent.plugins.tui-ink
-                            :config {:command ["node" "relative.js"]}}]}
-        installed (install/installed-profile profile "/opt/dao")
-        launcher (install/launcher-script "/opt/dao")]
-    (is (= ["/opt/dao/apps/tui-rs/target/release/bb-agent-tui"]
-           (get-in installed [:plugins 1 :config :command])))
-    (is (= 'agent.plugins.session (get-in installed [:plugins 0 :ns])))
+  (let [launcher (install/launcher-script "/opt/dao")]
     (is (str/includes? launcher "# Managed by dao `bb install`."))
-    (is (str/includes? launcher "export BB_AGENT_COMMAND=dao"))
-    (is (str/includes? launcher "--deps-root \"$INSTALL_DIR\""))
+    (is (str/includes?
+         launcher
+         "\"$INSTALL_DIR/apps/tui-rs/target/release/dao\""))
+    (is (str/includes? launcher "--repository-root \"$INSTALL_DIR\""))
+    (is (str/includes? launcher "--config \"$INSTALL_DIR/agent.edn\""))
     (is (str/includes? launcher "\"$@\""))
     (is (not (str/includes? launcher "cd ")))
     (is (install/path-entry? "/usr/bin:/opt/tools" "/opt/tools"))
@@ -80,272 +75,12 @@
      {:ns 'agent.plugins.runtime}
      {:ns 'agent.plugins.tui}]}))
 
-(deftest tui-sessions-are-recoverable-by-default
-  (let [base {:plugins [{:ns 'agent.plugins.session :config {:path nil}}]}
-        configured (cli/ensure-tui-session-path base)
-        path (get-in configured [:plugins 0 :config :path])]
-    (is (re-find #"^\.bb-agent/sessions/\d{8}-\d{6}-[0-9a-f]{8}\.jsonl$"
-                 path))
-    (is (= "/tmp/explicit.jsonl"
-           (get-in (cli/ensure-tui-session-path
-                    (assoc-in base [:plugins 0 :config :path]
-                              "/tmp/explicit.jsonl"))
-                   [:plugins 0 :config :path])))
-    (is (nil? (get-in (cli/ensure-tui-session-path
-                       (assoc-in base [:plugins 0 :config :ephemeral] true))
-                      [:plugins 0 :config :path])))))
-
-(deftest ink-tui-is-profile-selected-and-excluded-from-rpc-workers
+(deftest rpc-mode-removes-console-streaming
   (let [profile {:plugins [{:ns 'agent.plugins.session}
-                           {:ns 'agent.plugins.tui-ink}]}
+                           {:ns 'agent.plugins.stream-console}]}
         for-mode (var-get #'cli/for-mode)]
-    (is (= ['agent.plugins.session 'agent.plugins.tui-ink]
-           (mapv :ns (:plugins (for-mode profile :tui)))))
     (is (= ['agent.plugins.session]
-           (mapv :ns (:plugins (for-mode profile :rpc))))))
-  (let [ctx (plugin/boot!
-             {:plugins
-              [{:ns 'agent.plugins.session}
-               {:ns 'agent.plugins.mock :config {:responses []}}
-               {:ns 'agent.plugins.remote-registry}
-               {:ns 'agent.plugins.runtime}
-               {:ns 'agent.plugins.remote-api}
-               ;; The command must not be launched until :run! is invoked.
-               {:ns 'agent.plugins.tui-ink
-                :config {:command ["missing-ink-tui-test-command"]}}]})]
-    (try
-      (is (some? (kernel/service ctx :frontend/interactive)))
-      (is (some? (kernel/service ctx :ui/prompt)))
-      (is (some? (kernel/service ctx :ui/extensions)))
-      (is (contains?
-           (set (map :method
-                     ((:methods (kernel/require-service
-                                 ctx :remote/registry)))))
-           "frontend.exit"))
-      (finally
-        (kernel/dispose-all! ctx)))))
-
-(deftest ink-tui-projects-extensions-safely-and-invokes-only-shortcuts
-  (let [ctx (plugin/boot!
-             {:plugins
-              [{:ns 'agent.plugins.session}
-               {:ns 'agent.plugins.mock :config {:responses []}}
-               {:ns 'agent.plugins.remote-registry}
-               {:ns 'agent.plugins.runtime}
-               {:ns 'agent.plugins.tui-ink
-                :config {:command ["missing-ink-tui-test-command"]}}]})
-        extension-ctx (kernel/plugin-context ctx :test/ink-extension)
-        observer-ctx (kernel/plugin-context ctx :test/ink-error-observer)
-        invocations (atom [])
-        errors (atom [])]
-    (try
-      (kernel/on! observer-ctx :ui/run-error
-                  (fn [_ event] (swap! errors conj event)))
-      (ui/set-status! extension-ctx :static "ready")
-      (ui/set-status! extension-ctx :dynamic (fn [] "not portable"))
-      (ui/set-widget! extension-ctx :dynamic-widget
-                      (fn [_] ["not portable"]))
-      (ui/register-shortcut!
-       extension-ctx "ctrl+g"
-       {:description "Run registered action"
-        :handler #(swap! invocations conj
-                         (select-keys % [:frontend :shortcut]))})
-      (ui/register-shortcut!
-       extension-ctx "ctrl+e"
-       {:description "Fail safely"
-        :handler (fn [_] (throw (ex-info "shortcut failed" {})))})
-      (let [extensions (kernel/require-service ctx :ui/extensions)
-            registry (kernel/require-service ctx :remote/registry)
-            snapshot ((:snapshot extensions))]
-        (is (string? (json/generate-string snapshot)))
-        (is (= "ready"
-               (get-in snapshot [:registries :statuses "static" "value"])))
-        (is (= "[host function unavailable]"
-               (get-in snapshot
-                       [:registries :statuses "dynamic" "value"])))
-        (is (= "[host function unavailable]"
-               (get-in snapshot
-                       [:registries :widgets "dynamic-widget" "value"])))
-        (is (= true
-               (get-in snapshot
-                       [:registries :shortcuts "ctrl+g" :host-invokable])))
-        (is (= {:shortcut "ctrl+g" :invoked true}
-               ((:invoke! registry) "ui.shortcut.invoke"
-                {:shortcut "ctrl+g"})))
-        (is (= [{:frontend :tui-ink :shortcut "ctrl+g"}] @invocations))
-        (is (= false
-               (:invoked ((:invoke! registry) "ui.shortcut.invoke"
-                          {:shortcut "ctrl+e"}))))
-        (is (= [{:shortcut "ctrl+e" :message "shortcut failed"}] @errors))
-        (is (thrown-with-msg?
-             clojure.lang.ExceptionInfo #"not registered"
-             ((:invoke! registry) "ui.shortcut.invoke"
-              {:shortcut "ctrl+unknown"}))))
-      (let [live-events (set (var-get
-                              (ns-resolve 'agent.plugins.tui-ink
-                                          'live-events)))]
-        (is (contains? live-events :ui/run-error))
-        (is (contains? live-events :tool.execution/confirming))
-        (is (contains? live-events :tool.execution/start))
-        (is (not (contains? live-events :llm/stream))))
-      (finally
-        (kernel/dispose-all! ctx)))))
-
-(deftest ink-tui-child-defaults-color-and-production-with-env-override
-  (let [start-process! (var-get (ns-resolve 'agent.plugins.tui-ink
-                                            'start-process!))
-        node-script
-        (str "process.stdout.write(JSON.stringify({"
-             "nodeEnv:process.env.NODE_ENV||null,"
-             "term:process.env.TERM||null,"
-             "forceColor:process.env.FORCE_COLOR||null,"
-             "noColor:process.env.NO_COLOR||null}))")
-        read-env
-        (fn [config]
-          (let [process (start-process!
-                         (merge {:command ["node" "-e" node-script]} config))]
-            (try
-              (let [value (slurp (.getInputStream process))]
-                (.waitFor process)
-                (json/parse-string value true))
-              (finally
-                (when (.isAlive process) (.destroy process))))))]
-    (is (= {:nodeEnv "production"
-            :term "xterm-256color"
-            :forceColor "1"
-            :noColor nil}
-           (read-env {})))
-    (is (= {:nodeEnv "development"
-            :term "screen-256color"
-            :forceColor "0"
-            :noColor "1"}
-           (read-env {:env {"NODE_ENV" "development"
-                            "TERM" "screen-256color"
-                            "FORCE_COLOR" "0"
-                            "NO_COLOR" "1"}})))))
-
-(deftest ink-tui-rpc-reader-resolves-prompts-opened-by-command-handlers
-  (let [node-script
-        (str
-         "let buffer='';"
-         "const send=value=>console.log(JSON.stringify(value));"
-         "process.stdin.setEncoding('utf8');"
-         "process.stdin.on('data',chunk=>{buffer+=chunk;"
-         "const lines=buffer.split('\\n');buffer=lines.pop();"
-         "for(const line of lines){if(!line)continue;"
-         "const message=JSON.parse(line);"
-         "if(message.type==='ready'){"
-         "send({type:'request',id:'command',method:'command.execute',"
-         "params:{command:'/ask'}});"
-         "}else if(message.type==='event'&&"
-         "message.event==='interaction/request'){"
-         "if(message.data.kind!=='input')process.exit(7);"
-         "send({type:'request',id:'prompt',method:'ui.prompt.resolve',"
-         "params:{id:message.data.id,value:'typed'}});"
-         "}else if(message.type==='response'&&message.id==='command'){"
-         "if(!message.ok||message.result.output!=='typed')process.exit(8);"
-         "send({type:'request',id:'exit',method:'frontend.exit',params:{}});"
-         "}else if(message.type==='response'&&message.id==='exit'){"
-         "process.exit(message.ok?0:9);}}});")
-        ctx (plugin/boot!
-             {:plugins
-              [{:ns 'agent.plugins.session}
-               {:ns 'agent.plugins.mock :config {:responses []}}
-               {:ns 'agent.plugins.remote-registry}
-               {:ns 'agent.plugins.runtime}
-               {:ns 'agent.plugins.remote-api}
-               {:ns 'agent.plugins.tui-ink
-                :config {:command ["node" "-e" node-script]
-                         :interaction-timeout-ms 2000
-                         :shutdown-timeout-ms 1000}}]})
-        command-ctx (kernel/plugin-context ctx :test/async-prompt-command)]
-    (try
-      (kernel/register-command!
-       command-ctx
-       {:name "ask"
-        :description "Open an input prompt from an RPC command."
-        :execute
-        (fn [_ {:keys [context]}]
-          (ui/input! context {:title "Answer" :schema {:type "string"}}))})
-      (is (nil? ((:run! (kernel/require-service
-                          ctx :frontend/interactive)))))
-      (finally
-        (kernel/dispose-plugin! ctx :test/async-prompt-command)
-        (kernel/dispose-all! ctx)))))
-
-(deftest ink-tui-turn-abort-cancels-an-open-tool-approval
-  (let [node-script
-        (str
-         "let buffer='';let abortAck=false;let aborted=false;let exiting=false;"
-         "const seen={confirming:false,resolved:false,end:false,result:false,step:false,start:false};"
-         "const timer=setTimeout(()=>process.exit(30),4000);"
-         "const send=value=>console.log(JSON.stringify(value));"
-         "const maybeExit=()=>{if(abortAck&&aborted&&!exiting){"
-         "if(seen.start||!seen.confirming||!seen.resolved||!seen.end||!seen.result||!seen.step)process.exit(31);"
-         "exiting=true;send({type:'request',id:'exit',method:'frontend.exit',params:{}});}};"
-         "process.stdin.setEncoding('utf8');"
-         "process.stdin.on('data',chunk=>{buffer+=chunk;"
-         "const lines=buffer.split('\\n');buffer=lines.pop();"
-         "for(const line of lines){if(!line)continue;const message=JSON.parse(line);"
-         "if(message.type==='ready'){send({type:'request',id:'submit',method:'turn.submit',params:{message:'approve'}});continue;}"
-         "if(message.type==='response'&&message.id==='submit'){if(!message.ok||!message.result.accepted)process.exit(32);continue;}"
-         "if(message.type==='response'&&message.id==='abort'){if(!message.ok||!message.result.aborted)process.exit(33);abortAck=true;maybeExit();continue;}"
-         "if(message.type==='response'&&message.id==='exit'){clearTimeout(timer);process.exit(message.ok?0:34);continue;}"
-         "if(message.type!=='event')continue;"
-         "if(message.event==='tool.execution/confirming')seen.confirming=true;"
-         "else if(message.event==='tool.execution/start')seen.start=true;"
-         "else if(message.event==='interaction/request'){send({type:'request',id:'abort',method:'turn.abort',params:{}});}"
-         "else if(message.event==='interaction/resolved'){if(message.data.cancelled!==true||message.data.decision!=='deny')process.exit(35);seen.resolved=true;}"
-         "else if(message.event==='tool.execution/end'){if(message.data.status!=='canceled'||message.data.cancelled!==true)process.exit(36);seen.end=true;}"
-         "else if(message.event==='tool/result'){if(message.data.status!=='canceled'||message.data.cancelled!==true)process.exit(37);seen.result=true;}"
-         "else if(message.event==='step/end'){if(message.data.aborted!==true)process.exit(38);seen.step=true;}"
-         "else if(message.event==='agent/aborted'&&message.durable===true){"
-         "if(typeof message.run_id!=='string'||!message.run_id)process.exit(39);"
-         "aborted=true;maybeExit();}"
-         "}});")
-        executed? (atom false)
-        ctx (plugin/boot!
-             {:plugins
-              [{:ns 'agent.plugins.session}
-               {:ns 'agent.plugins.mock
-                :config {:responses
-                         [{:message
-                           {:role "assistant" :content nil
-                            :tool_calls [(tool-call "approval-call" "danger" {})]}
-                           :finish-reason "tool_calls"}]}}
-               {:ns 'agent.plugins.remote-registry}
-               {:ns 'agent.plugins.approval :config {:mode :ask}}
-               {:ns 'agent.plugins.policy
-                :config {:approval-tools ["danger"]}}
-               {:ns 'agent.plugins.runtime :config {:max-steps 2}}
-               {:ns 'agent.plugins.remote-api}
-               {:ns 'agent.plugins.tui-ink
-                :config {:command ["node" "-e" node-script]
-                         :interaction-timeout-ms 2000
-                         :shutdown-timeout-ms 1000}}]})]
-    (try
-      (let [tool-ctx (kernel/plugin-context ctx :test/approval-abort-tool)]
-        (kernel/register-tool!
-         tool-ctx
-         {:name "danger"
-          :description "approval-gated test tool"
-          :parameters {:type "object" :additionalProperties false}
-          :execute (fn [_ _]
-                     (reset! executed? true)
-                     {:unexpected true})})
-        (is (nil? ((:run! (kernel/require-service
-                            ctx :frontend/interactive)))))
-        (let [events ((:events (kernel/require-service ctx :session/store)))
-              results (filterv #(= "tool/result" (:type %)) events)]
-          (is (false? @executed?))
-          (is (= ["approval-call"]
-                 (mapv #(get-in % [:data :call-id]) results)))
-          (is (= [:canceled] (mapv #(get-in % [:data :status]) results)))
-          (is (some #(and (= "step/end" (:type %))
-                          (true? (get-in % [:data :aborted])))
-                    events))
-          (is (some #(= "agent/aborted" (:type %)) events))))
-      (finally (kernel/dispose-all! ctx)))))
+           (mapv :ns (:plugins (for-mode profile :rpc)))))))
 
 (deftest remote-model-command-results-are-json-safe
   (let [sanitize (var-get #'remote-api/public-command-result)
@@ -930,6 +665,69 @@
         (kernel/dispose-all! ctx)
         (delete-tree! directory)))))
 
+(deftest babashka-repl-replays-only-explicit-safe-cells
+  (let [directory (.toFile (java.nio.file.Files/createTempDirectory
+                            "bb-agent-repl-recovery-"
+                            (make-array java.nio.file.attribute.FileAttribute
+                                        0)))
+        session-path (str (io/file directory "session.jsonl"))
+        ctx (plugin/boot!
+             {:plugins
+              [{:ns 'agent.plugins.session :config {:path session-path}}
+               {:ns 'agent.plugins.durable-state
+                :config {:root (str directory) :agent-id "agent-recovery"}}
+               {:ns 'agent.plugins.bb-repl
+                :config {:root (str directory) :sandbox :none
+                         :agent-id "agent-recovery" :timeout-ms 5000}}]})]
+    (try
+      (let [repl (kernel/require-service ctx :execution/repl)
+            durable (kernel/require-service ctx :agent/durable-state)]
+        (is (:ok ((:eval! repl) {:code "(def answer 41)"
+                                 :replay-safe true})))
+        (is (:ok ((:eval! repl) "(def transient-value 99)")))
+        ((:put! durable) :plan {:remaining ["tests"]})
+        (is (= {:reset true
+                :namespace "dao.agent.agent-recovery"
+                :replayed-cells 1}
+               ((:reset! repl) {})))
+        (is (= "42" (:value ((:eval! repl) "(inc answer)"))))
+        (is (= "nil" (:value ((:eval! repl)
+                                "(resolve 'transient-value)"))))
+        (is (= "{:remaining [\"tests\"]}"
+               (:value ((:eval! repl) "(dao.state/get :plan)"))))
+        (is (= "repl/restarted" (:type (last ((:events
+                                                (kernel/require-service
+                                                 ctx :session/store))))))))
+      (finally
+        (kernel/dispose-all! ctx)
+        (delete-tree! directory)))))
+
+(deftest babashka-repl-agent-namespaces-are-isolated
+  (let [directory (.toFile (java.nio.file.Files/createTempDirectory
+                            "bb-agent-repl-isolation-"
+                            (make-array java.nio.file.attribute.FileAttribute
+                                        0)))
+        boot (fn [agent-id]
+               (plugin/boot!
+                {:plugins
+                 [{:ns 'agent.plugins.bb-repl
+                   :config {:root (str directory) :sandbox :none
+                            :agent-id agent-id :timeout-ms 5000}}]}))
+        first-ctx (boot "agent-one")
+        second-ctx (boot "agent-two")]
+    (try
+      (let [first-repl (kernel/require-service first-ctx :execution/repl)
+            second-repl (kernel/require-service second-ctx :execution/repl)]
+        (is (:ok ((:eval! first-repl) "(def local-value :first)")))
+        (is (:ok ((:eval! second-repl) "(def local-value :second)")))
+        (is (= ":first" (:value ((:eval! first-repl) "local-value"))))
+        (is (= ":second" (:value ((:eval! second-repl) "local-value"))))
+        (is (not= (:namespace first-repl) (:namespace second-repl))))
+      (finally
+        (kernel/dispose-all! first-ctx)
+        (kernel/dispose-all! second-ctx)
+        (delete-tree! directory)))))
+
 (deftest seatbelt-repl-denies-workspace-writes-and-outside-reads
   (when (= "Mac OS X" (System/getProperty "os.name"))
     (let [root (.getCanonicalFile (java.io.File. "."))
@@ -1497,6 +1295,11 @@
         :child-profile
         {:plugins
          [{:ns 'agent.plugins.session}
+          {:ns 'agent.plugins.durable-state
+           :config {:root (System/getProperty "java.io.tmpdir")}}
+          {:ns 'agent.plugins.bb-repl
+           :config {:root (System/getProperty "java.io.tmpdir")
+                    :sandbox :none :timeout-ms 5000}}
           {:ns 'agent.plugins.mock :config {:generate generate}}
           {:ns 'example.math}
           {:ns 'agent.plugins.runtime :config {:max-steps 3}}]}}}
@@ -1529,7 +1332,8 @@
         (is (str/includes? (:system-prompt request) "terse verifier"))
         (is (= ["calculate"]
                (mapv #(get-in % [:function :name]) (:tools request))))
-        (is (empty? ((:jobs runtime))))
+        (is (= [:completed] (mapv :status ((:jobs runtime)))))
+        (is (str/starts-with? (:id (first ((:jobs runtime)))) "agent-"))
         (is (= #{:spawn :fork}
                (set (map :id ((:providers runtime))))))
         (is (thrown-with-msg?
@@ -1590,6 +1394,7 @@
             list-agents (kernel/tool ctx "list_agents")
             interrupt (kernel/tool ctx "interrupt_agent")
             wait-agent (kernel/tool ctx "wait_agent")
+            delete-agent (kernel/tool ctx "delete_agent")
             job ((:execute delegate)
                  {:prompt "keep working" :run_in_background true}
                  {:cancel-token (cancellation/create-token)})
@@ -1602,8 +1407,106 @@
         (is (= :aborted
                (:stop-reason
                 ((:execute wait-agent) {:id run-id :timeout_ms 1000} {}))))
+        (is (= :completed
+               (:status (first (:agents ((:execute list-agents) {} {}))))))
+        (is (= run-id
+               (get-in ((:execute delete-agent) {:id run-id} {})
+                       [:tombstone :agent_id])))
         (is (empty? (:agents ((:execute list-agents) {} {})))))
       (finally (kernel/dispose-all! ctx)))))
+
+(deftest retained-subagent-accepts-follow-up-and-owns-an-isolated-repl
+  (let [ctx (subagent-test-context
+             (fn [request]
+               {:message {:role "assistant"
+                          :content (str "answered: "
+                                        (:content (last (:messages request))))}
+                :finish-reason "stop"}))]
+    (try
+      (let [runtime (kernel/require-service ctx :subagents/runtime)
+            delegate (kernel/tool ctx "delegate_task")
+            first-result ((:execute delegate) {:prompt "first"}
+                          {:cancel-token (cancellation/create-token)})
+            first-id (:id first-result)
+            _ (is (= :completed (:stop-reason first-result)))
+            accepted ((:send! runtime) first-id "second")
+            follow-up ((:wait! runtime) first-id 2000)
+            second-job ((:start! runtime)
+                        {:provider :spawn :prompt "sibling"
+                         :parent-depth 0 :parent-context ctx
+                         :cancel-token (cancellation/create-token)})
+            second-id (:id second-job)]
+        (is (:accepted accepted))
+        (is (= "answered: second" (:output follow-up)))
+        (is (= :completed (:stop-reason ((:wait! runtime) second-id 2000))))
+        (is (:ok ((:invoke! runtime) first-id "repl.eval"
+                  {:code "(def local-value :first)"})))
+        (is (:ok ((:invoke! runtime) second-id "repl.eval"
+                  {:code "(def local-value :second)"})))
+        (is (= ":first" (:value ((:invoke! runtime) first-id "repl.eval"
+                                  {:code "local-value"}))))
+        (is (= ":second" (:value ((:invoke! runtime) second-id "repl.eval"
+                                   {:code "local-value"}))))
+        (is (not= (:namespace ((:invoke! runtime) first-id "repl.status" {}))
+                  (:namespace ((:invoke! runtime) second-id "repl.status" {}))))
+        (is (= 2 (count ((:jobs runtime)))))
+        ((:delete! runtime) first-id)
+        ((:delete! runtime) second-id))
+      (finally (kernel/dispose-all! ctx)))))
+
+(deftest retained-subagent-roster-restores-routing-after-worker-context-restart
+  (let [directory (.toFile (java.nio.file.Files/createTempDirectory
+                            "bb-agent-child-roster-"
+                            (make-array java.nio.file.attribute.FileAttribute
+                                        0)))
+        session-path (str (io/file directory ".bb-agent" "sessions"
+                                   "root.jsonl"))
+        generate (fn [request]
+                   {:message {:role "assistant"
+                              :content (str "child: "
+                                            (:content (last (:messages request))))}
+                    :finish-reason "stop"})
+        profile
+        {:plugins
+         [{:ns 'agent.plugins.session :config {:path session-path}}
+          {:ns 'agent.plugins.subagent}
+          {:ns 'agent.plugins.subagent-in-process
+           :config
+           {:allowed-tools []
+            :child-profile
+            {:plugins
+             [{:ns 'agent.plugins.session}
+              {:ns 'agent.plugins.mock :config {:generate generate}}
+              {:ns 'agent.plugins.runtime :config {:max-steps 2}}]}}}]}
+        first-ctx (plugin/boot! profile)]
+    (try
+      (let [runtime (kernel/require-service first-ctx :subagents/runtime)
+            job ((:start! runtime)
+                 {:provider :spawn :prompt "initial" :parent-depth 0
+                  :parent-context first-ctx
+                  :cancel-token (cancellation/create-token)})
+            agent-id (:id job)]
+        (is (= :completed (:stop-reason ((:wait! runtime) agent-id 2000))))
+        (let [session-id (:session-id (kernel/require-service
+                                       first-ctx :session/store))
+              roster (io/file directory ".bb-agent" "artifacts"
+                              session-id "children.edn")]
+          (is (.isFile roster))
+          (is (str/includes? (slurp roster) agent-id)))
+        (kernel/dispose-all! first-ctx)
+        (let [second-ctx (plugin/boot! profile)]
+          (try
+            (let [restored (kernel/require-service second-ctx :subagents/runtime)]
+              (is (= [agent-id] (mapv :id ((:jobs restored)))))
+              (is (:accepted ((:send! restored) agent-id "after restore")))
+              (is (= "child: after restore"
+                     (:output ((:wait! restored) agent-id 2000))))
+              (is (= agent-id
+                     (:agent_id ((:delete! restored) agent-id)))))
+            (finally (kernel/dispose-all! second-ctx)))))
+      (finally
+        (kernel/dispose-all! first-ctx)
+        (delete-tree! directory)))))
 
 (deftest controllable-agent-session-steers-follows-up-and-aborts
   (testing "steering enters before the next model request and follow-up waits"

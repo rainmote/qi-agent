@@ -4,6 +4,46 @@ use std::collections::{BTreeMap, HashSet};
 
 pub type JsonObject = Map<String, Value>;
 
+#[derive(Clone, Copy, Debug, Default, Serialize, PartialEq, Eq)]
+pub struct Cursor {
+    #[serde(default)]
+    pub generation: u64,
+    #[serde(default)]
+    pub sequence: u64,
+}
+
+impl<'de> Deserialize<'de> for Cursor {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum CursorValue {
+            Sequence(u64),
+            Full {
+                #[serde(default)]
+                generation: u64,
+                #[serde(default)]
+                sequence: u64,
+            },
+        }
+        Ok(match CursorValue::deserialize(deserializer)? {
+            CursorValue::Sequence(sequence) => Self {
+                generation: 0,
+                sequence,
+            },
+            CursorValue::Full {
+                generation,
+                sequence,
+            } => Self {
+                generation,
+                sequence,
+            },
+        })
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 pub struct Snapshot {
     #[serde(default)]
@@ -11,7 +51,7 @@ pub struct Snapshot {
     #[serde(default)]
     pub path: String,
     #[serde(default)]
-    pub cursor: u64,
+    pub cursor: Cursor,
     #[serde(default)]
     pub events: Vec<DurableEvent>,
     #[serde(default)]
@@ -58,6 +98,10 @@ pub struct Envelope {
     pub run_id: Option<String>,
     #[serde(default)]
     pub seq: Option<u64>,
+    #[serde(default)]
+    pub generation: Option<u64>,
+    #[serde(default)]
+    pub cursor: Option<Cursor>,
     #[serde(default)]
     pub durable: Option<bool>,
     #[serde(default)]
@@ -215,7 +259,7 @@ pub struct Interaction {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct UiProjection {
     pub session_id: String,
-    pub cursor: u64,
+    pub cursor: Cursor,
     pub history: Vec<HistoryItem>,
     pub state: AgentState,
     pub queue: Vec<QueueItem>,

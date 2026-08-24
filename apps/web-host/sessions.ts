@@ -5,7 +5,7 @@ import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import type { SessionSummary, Workspace, WorkerMessage } from "./types.js";
 import type { WorkspaceRegistry } from "./workspaces.js";
-import { AgentWorker } from "./worker.js";
+import { AgentWorker, type DaemonEnvironment } from "./worker.js";
 
 interface SessionEvent {
   type?: string;
@@ -57,11 +57,14 @@ function defaultSessionName(path: string): string {
 export class SessionManager {
   readonly workspaces: WorkspaceRegistry;
   readonly repositoryRoot: string;
+  readonly daemonEnvironment: DaemonEnvironment;
   #open = new Map<string, OpenSession>();
 
-  constructor(workspaces: WorkspaceRegistry, repositoryRoot: string) {
+  constructor(workspaces: WorkspaceRegistry, repositoryRoot: string,
+    daemonEnvironment: DaemonEnvironment = {}) {
     this.workspaces = workspaces;
     this.repositoryRoot = repositoryRoot;
+    this.daemonEnvironment = daemonEnvironment;
   }
 
   async list(workspace: Workspace): Promise<SessionSummary[]> {
@@ -91,7 +94,8 @@ export class SessionManager {
     await mkdir(directory, { recursive: true, mode: 0o700 });
     const stamp = new Date().toISOString().replace(/[-:]/g, "").slice(0, 15);
     const path = join(directory, `${stamp}-${randomUUID().slice(0, 8)}.jsonl`);
-    const worker = new AgentWorker(workspace.path, path, this.repositoryRoot);
+    const worker = new AgentWorker(workspace.path, path, this.repositoryRoot,
+      this.daemonEnvironment);
     const ready = await worker.start() as WorkerMessage;
     const id = String(ready.session_id);
     if (name?.trim()) await worker.call("session.rename", { name: name.trim() });
@@ -110,7 +114,8 @@ export class SessionManager {
     const summary = (await this.listAll()).find((entry) => entry.id === id);
     if (!summary) throw new Error("Session was not found in an allowlisted workspace");
     const workspace = this.workspaces.get(summary.workspaceId);
-    const worker = new AgentWorker(workspace.path, summary.path, this.repositoryRoot);
+    const worker = new AgentWorker(workspace.path, summary.path, this.repositoryRoot,
+      this.daemonEnvironment);
     await worker.start();
     const snapshot = await worker.call("session.snapshot");
     const open = { summary, worker };
@@ -128,7 +133,8 @@ export class SessionManager {
       "session-id": string;
     };
     const workspace = this.workspaces.get(source.summary.workspaceId);
-    const worker = new AgentWorker(workspace.path, result.path, this.repositoryRoot);
+    const worker = new AgentWorker(workspace.path, result.path, this.repositoryRoot,
+      this.daemonEnvironment);
     await worker.start();
     if (name?.trim()) await worker.call("session.rename", { name: name.trim() });
     const snapshot = await worker.call("session.snapshot");
@@ -148,6 +154,16 @@ export class SessionManager {
   async closeAll(): Promise<void> {
     await Promise.allSettled([...this.#open.values()].map(({ worker }) => worker.close()));
     this.#open.clear();
+  }
+
+  async shutdownDaemon(): Promise<void> {
+    const worker = this.#open.values().next().value?.worker as AgentWorker | undefined;
+    if (!worker) return;
+    try {
+      await worker.call("daemon.shutdown", {}, 2_000);
+    } catch {
+      // The isolated daemon may already be stopping.
+    }
   }
 
   async closeWorkspace(workspaceId: string): Promise<void> {

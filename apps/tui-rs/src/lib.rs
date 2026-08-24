@@ -1,12 +1,18 @@
 pub mod app;
+pub mod client;
+pub mod daemon;
 pub mod editor;
 pub mod loading;
 pub mod markdown;
 pub mod model;
+pub mod paths;
 pub mod projection;
 pub mod sanitize;
+pub mod service;
 pub mod theme;
 pub mod ui;
+pub mod wire;
+pub mod worker_proxy;
 
 pub use app::{Action, App};
 pub use model::*;

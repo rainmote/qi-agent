@@ -1,5 +1,9 @@
 use anyhow::{Context, Result, bail};
-use bb_agent_tui::{Action, App, Envelope, ui};
+use bb_agent_tui::{
+    Action, App, Envelope,
+    client::{self, AttachedAgent},
+    daemon, service, ui, wire, worker_proxy,
+};
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
     event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyEventKind},
@@ -15,9 +19,11 @@ use ratatui::{
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
+    env,
     fs::{File, OpenOptions},
     io::{self, BufRead, BufReader, BufWriter, Write},
     os::fd::{AsRawFd, RawFd},
+    path::{Path, PathBuf},
     sync::mpsc::{self, Receiver},
     thread,
     time::{Duration, Instant},
@@ -29,6 +35,13 @@ enum HostMessage {
     Envelope(Box<Envelope>),
     Error(String),
     Eof,
+}
+
+#[derive(Clone)]
+struct PendingRequest {
+    method: String,
+    params: Value,
+    command_id: Option<String>,
 }
 
 struct TerminalGuard {
@@ -161,14 +174,46 @@ impl Drop for TerminalGuard {
     }
 }
 
-fn host_reader() -> Receiver<HostMessage> {
+fn host_reader(
+    mut reader: BufReader<std::os::unix::net::UnixStream>,
+    backlog: Vec<Value>,
+) -> Receiver<HostMessage> {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let stdin = io::stdin();
-        for line in BufReader::new(stdin.lock()).lines() {
+        for value in backlog {
+            match serde_json::from_value::<Envelope>(value) {
+                Ok(envelope) => {
+                    if tx.send(HostMessage::Envelope(Box::new(envelope))).is_err() {
+                        return;
+                    }
+                }
+                Err(error) => {
+                    let _ = tx.send(HostMessage::Error(format!(
+                        "invalid buffered daemon event: {error}"
+                    )));
+                    return;
+                }
+            }
+        }
+        let mut line = String::new();
+        loop {
+            line.clear();
+            let read = reader.read_line(&mut line);
+            if matches!(read, Ok(0)) {
+                break;
+            }
+            let line = match read {
+                Ok(_) => line.trim_end_matches(['\r', '\n']).to_owned(),
+                Err(error) => {
+                    let _ = tx.send(HostMessage::Error(format!(
+                        "daemon connection failed: {error}"
+                    )));
+                    return;
+                }
+            };
             match line {
-                Ok(line) if line.trim().is_empty() => continue,
-                Ok(line) => match serde_json::from_str::<Envelope>(&line) {
+                line if line.trim().is_empty() => continue,
+                line => match serde_json::from_str::<Envelope>(&line) {
                     Ok(envelope) => {
                         if tx.send(HostMessage::Envelope(Box::new(envelope))).is_err() {
                             return;
@@ -181,12 +226,6 @@ fn host_reader() -> Receiver<HostMessage> {
                         return;
                     }
                 },
-                Err(error) => {
-                    let _ = tx.send(HostMessage::Error(format!(
-                        "plugin host input failed: {error}"
-                    )));
-                    return;
-                }
             }
         }
         let _ = tx.send(HostMessage::Eof);
@@ -195,88 +234,141 @@ fn host_reader() -> Receiver<HostMessage> {
 }
 
 fn send_request(
-    output: &mut BufWriter<io::Stdout>,
-    pending: &mut HashMap<String, String>,
+    output: &mut BufWriter<std::os::unix::net::UnixStream>,
+    pending: &mut HashMap<String, PendingRequest>,
     counter: &mut u64,
+    client_id: &str,
+    agent_id: &str,
     method: &str,
     params: Value,
 ) -> Result<()> {
     *counter += 1;
     let id = format!("ratatui-{counter}");
+    let command_id = wire::mutation(method).then(|| format!("{client_id}-{counter}"));
     serde_json::to_writer(
         &mut *output,
-        &json!({
-            "type":"request", "id":id, "method":method, "params":params
-        }),
+        &wire::command(
+            id.clone(),
+            client_id.to_owned(),
+            command_id.clone(),
+            Some(agent_id.to_owned()),
+            method,
+            params.clone(),
+        ),
     )?;
     output.write_all(b"\n")?;
     output.flush()?;
-    pending.insert(id, method.to_owned());
+    pending.insert(
+        id,
+        PendingRequest {
+            method: method.to_owned(),
+            params,
+            command_id,
+        },
+    );
+    Ok(())
+}
+
+fn resend_pending(
+    output: &mut BufWriter<std::os::unix::net::UnixStream>,
+    pending: &mut HashMap<String, PendingRequest>,
+    counter: &mut u64,
+    client_id: &str,
+    agent_id: &str,
+) -> Result<()> {
+    let requests: Vec<_> = pending.drain().map(|(_, request)| request).collect();
+    for request in requests {
+        *counter += 1;
+        let id = format!("ratatui-{counter}");
+        serde_json::to_writer(
+            &mut *output,
+            &wire::command(
+                id.clone(),
+                client_id.to_owned(),
+                request.command_id.clone(),
+                Some(agent_id.to_owned()),
+                &request.method,
+                request.params.clone(),
+            ),
+        )?;
+        output.write_all(b"\n")?;
+        output.flush()?;
+        pending.insert(id, request);
+    }
     Ok(())
 }
 
 fn dispatch_action(
     action: Action,
-    output: &mut BufWriter<io::Stdout>,
-    pending: &mut HashMap<String, String>,
+    output: &mut BufWriter<std::os::unix::net::UnixStream>,
+    pending: &mut HashMap<String, PendingRequest>,
     counter: &mut u64,
+    client_id: &str,
+    agent_id: &str,
 ) -> Result<bool> {
     match action {
         Action::Rpc { method, params } => {
-            send_request(output, pending, counter, method, params)?;
+            send_request(
+                output, pending, counter, client_id, agent_id, method, params,
+            )?;
             Ok(false)
         }
         Action::Exit => Ok(true),
     }
 }
 
-fn run() -> Result<()> {
-    let rx = host_reader();
-    let mut output = BufWriter::new(io::stdout());
-    let mut pending = HashMap::<String, String>::new();
+fn run_tui(mut attached: AttachedAgent) -> Result<()> {
+    attached
+        .connection
+        .reader
+        .get_mut()
+        .set_read_timeout(None)?;
+    let agent_id = attached
+        .connection
+        .agent_id
+        .clone()
+        .context("attached connection has no agent id")?;
+    let mut client_id = attached.connection.client_id.clone();
+    let mut rx = host_reader(attached.connection.reader, attached.connection.backlog);
+    let mut output = attached.connection.writer;
+    let mut pending = HashMap::<String, PendingRequest>::new();
     let mut request_counter = 0u64;
-    let mut ready = false;
     let mut app = App {
         inline_mode: true,
         ..App::default()
     };
+    app.load_snapshot(attached.snapshot)?;
+    send_request(
+        &mut output,
+        &mut pending,
+        &mut request_counter,
+        &client_id,
+        &agent_id,
+        "command.list",
+        json!({}),
+    )?;
     let mut terminal = TerminalGuard::open()?;
     let mut last_tick = Instant::now();
     let tick_rate = Duration::from_millis(80);
     let mut dirty = true;
 
-    loop {
+    'ui: loop {
         if dirty {
             terminal.commit_ready_history(&mut app)?;
             terminal.draw(&app)?;
             dirty = false;
         }
 
+        let mut disconnected = None;
         while let Ok(message) = rx.try_recv() {
             dirty = true;
             match message {
-                HostMessage::Envelope(envelope) if envelope.kind == "ready" => {
-                    if !ready {
-                        ready = true;
-                        send_request(
-                            &mut output,
-                            &mut pending,
-                            &mut request_counter,
-                            "session.snapshot",
-                            json!({}),
-                        )?;
-                        send_request(
-                            &mut output,
-                            &mut pending,
-                            &mut request_counter,
-                            "command.list",
-                            json!({}),
-                        )?;
-                    }
-                }
                 HostMessage::Envelope(envelope) if envelope.kind == "response" => {
                     let id = envelope.id.as_deref().unwrap_or_default();
-                    let method = pending.remove(id).unwrap_or_else(|| "unknown".into());
+                    let method = pending
+                        .remove(id)
+                        .map(|request| request.method)
+                        .unwrap_or_else(|| "unknown".into());
                     if envelope.ok == Some(true) {
                         app.handle_rpc_result(&method, envelope.result.unwrap_or(Value::Null));
                         if method == "frontend.exit" {
@@ -293,10 +385,46 @@ fn run() -> Result<()> {
                     }
                 }
                 HostMessage::Envelope(envelope) => app.apply_envelope(&envelope),
-                HostMessage::Error(error) => bail!(error),
+                HostMessage::Error(error) => {
+                    disconnected = Some(error);
+                    break;
+                }
                 HostMessage::Eof if app.exiting => return Ok(()),
-                HostMessage::Eof => bail!("plugin host input reached EOF"),
+                HostMessage::Eof => {
+                    disconnected = Some("daemon connection reached EOF".into());
+                    break;
+                }
             }
+        }
+        if let Some(reason) = disconnected {
+            let cursor = app
+                .projection
+                .as_ref()
+                .map(|projection| projection.cursor)
+                .unwrap_or_default();
+            let mut replacement = reconnect_tui(&agent_id, cursor)
+                .with_context(|| format!("{reason}; automatic reattach failed"))?;
+            replacement
+                .connection
+                .reader
+                .get_mut()
+                .set_read_timeout(None)?;
+            app.load_snapshot(replacement.snapshot)?;
+            client_id = replacement.connection.client_id.clone();
+            rx = host_reader(
+                replacement.connection.reader,
+                replacement.connection.backlog,
+            );
+            output = replacement.connection.writer;
+            resend_pending(
+                &mut output,
+                &mut pending,
+                &mut request_counter,
+                &client_id,
+                &agent_id,
+            )?;
+            dirty = true;
+            continue 'ui;
         }
 
         if event::poll(Duration::from_millis(25))? {
@@ -304,8 +432,14 @@ fn run() -> Result<()> {
                 Event::Key(key) if !matches!(key.kind, KeyEventKind::Release) => {
                     dirty = true;
                     for action in app.handle_key(key) {
-                        if dispatch_action(action, &mut output, &mut pending, &mut request_counter)?
-                        {
+                        if dispatch_action(
+                            action,
+                            &mut output,
+                            &mut pending,
+                            &mut request_counter,
+                            &client_id,
+                            &agent_id,
+                        )? {
                             return Ok(());
                         }
                     }
@@ -333,9 +467,238 @@ fn run() -> Result<()> {
     }
 }
 
+fn reconnect_tui(agent_id: &str, cursor: bb_agent_tui::Cursor) -> Result<AttachedAgent> {
+    let started = Instant::now();
+    let mut last_error = None;
+    while started.elapsed() < Duration::from_secs(15) {
+        match client::attach_existing_with_cursor(agent_id, cursor, None, None) {
+            Ok(attached) => return Ok(attached),
+            Err(error) => last_error = Some(error),
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("reattach timed out")))
+}
+
 fn main() {
-    if let Err(error) = run() {
-        eprintln!("Ratatui frontend failed: {error:#}");
+    if let Err(error) = entrypoint() {
+        eprintln!("dao failed: {error:#}");
         std::process::exit(1);
     }
+}
+
+fn entrypoint() -> Result<()> {
+    let args: Vec<String> = env::args().skip(1).collect();
+    let repository_root = option_path(&args, "--repository-root");
+    let config_path = option_path(&args, "--config");
+    let (command, tail) = command_and_tail(&args);
+    match command {
+        Some("daemon") if tail.first().map(String::as_str) == Some("serve") => {
+            daemon::serve(repository_root.as_deref(), config_path.as_deref())
+        }
+        Some("daemon") if tail.first().map(String::as_str) == Some("status") => {
+            call_and_print("daemon.status", json!({}), repository_root, config_path)
+        }
+        Some("daemon") if tail.first().map(String::as_str) == Some("shutdown") => {
+            call_and_print("daemon.shutdown", json!({}), repository_root, config_path)
+        }
+        Some("worker") if tail.first().map(String::as_str) == Some("serve") => {
+            let descriptor = option_path(&args, "--descriptor")
+                .context("worker serve requires --descriptor PATH")?;
+            worker_proxy::serve(&descriptor)
+        }
+        Some("agents") => call_and_print("agent.list", json!({}), repository_root, config_path),
+        Some("status") => call_and_print("daemon.status", json!({}), repository_root, config_path),
+        Some("update") => call_and_print("daemon.update", json!({}), repository_root, config_path),
+        Some("doctor") => call_and_print(
+            "daemon.doctor",
+            json!({"fix": tail.iter().any(|value| value == "--fix")}),
+            repository_root,
+            config_path,
+        ),
+        Some("service") => {
+            let action = match tail.first().map(String::as_str).unwrap_or("print") {
+                "print" => service::ServiceAction::Print,
+                "install" => service::ServiceAction::Install,
+                "uninstall" => service::ServiceAction::Uninstall,
+                value => bail!("unknown service action: {value}"),
+            };
+            println!(
+                "{}",
+                service::manage(action, repository_root.as_deref(), config_path.as_deref())?
+            );
+            Ok(())
+        }
+        Some("shutdown") => {
+            call_and_print("daemon.shutdown", json!({}), repository_root, config_path)
+        }
+        Some("stop") => {
+            let agent_id = positional(tail, 0).context("stop requires an agent id")?;
+            let mut attached = client::attach_or_create(
+                Some(agent_id),
+                repository_root.as_deref(),
+                config_path.as_deref(),
+            )?;
+            let result = attached.connection.call("agent.stop", json!({}))?;
+            print_json(&result)
+        }
+        Some("run") => {
+            let prompt = value_after(tail, "--detach")
+                .or_else(|| positional(tail, 0))
+                .context("run requires --detach PROMPT")?;
+            let requested_agent = value_after(tail, "--agent");
+            let mut attached = client::attach_or_create(
+                requested_agent,
+                repository_root.as_deref(),
+                config_path.as_deref(),
+            )?;
+            let result = attached
+                .connection
+                .call("prompt.submit", json!({"message": prompt}))?;
+            let _ = attached.connection.call("agent.detach", json!({}));
+            print_json(&json!({
+                "agent_id": attached.connection.agent_id,
+                "detached": true,
+                "run": result
+            }))
+        }
+        Some("repl") => {
+            let agent_id = positional(tail, 0).context("repl requires an agent id")?;
+            run_repl(agent_id, repository_root.as_deref(), config_path.as_deref())
+        }
+        Some("attach") => {
+            let agent_id = positional(tail, 0).context("attach requires an agent id")?;
+            run_tui(client::attach_or_create(
+                Some(agent_id),
+                repository_root.as_deref(),
+                config_path.as_deref(),
+            )?)
+        }
+        Some("help" | "--help" | "-h") => {
+            println!("{USAGE}");
+            Ok(())
+        }
+        Some(value) if !value.starts_with('-') => bail!("unknown dao command: {value}"),
+        _ => run_tui(client::attach_or_create(
+            None,
+            repository_root.as_deref(),
+            config_path.as_deref(),
+        )?),
+    }
+}
+
+fn command_and_tail(args: &[String]) -> (Option<&str>, &[String]) {
+    let mut index = 0;
+    while index < args.len() {
+        if matches!(args[index].as_str(), "--config" | "--repository-root") {
+            index += 2;
+            continue;
+        }
+        if args[index].starts_with('-') {
+            index += 1;
+            continue;
+        }
+        return (Some(args[index].as_str()), &args[index + 1..]);
+    }
+    (None, &[])
+}
+
+const USAGE: &str = "Daemon-backed Clojure agent runtime
+
+  dao                              attach/create and open the Rust TUI
+  dao agents                       list saved and resident agents
+  dao attach AGENT_ID              attach the TUI to an agent
+  dao run --detach PROMPT          submit background work and return
+  dao repl AGENT_ID                open the agent's Clojure REPL
+  dao status                       show daemon and worker state
+  dao update                       recover missing workers and refresh leases
+  dao doctor                       run non-destructive diagnostics
+  dao doctor --fix                 purge only provably expired leases
+  dao service print|install|uninstall
+                                   manage the per-user OS daemon service
+  dao stop AGENT_ID                explicitly stop one root agent tree
+  dao shutdown                     stop all workers and the daemon
+  dao daemon serve                 run the supervisor in the foreground
+
+Options:
+  --config PATH                    worker profile (default: agent.edn)
+  --repository-root PATH           dao runtime source root";
+
+fn call_and_print(
+    method: &str,
+    parameters: Value,
+    repository_root: Option<PathBuf>,
+    config_path: Option<PathBuf>,
+) -> Result<()> {
+    let mut connection =
+        client::connect_or_launch(repository_root.as_deref(), config_path.as_deref())?;
+    let result = connection.call(method, parameters)?;
+    print_json(&result)
+}
+
+fn run_repl(
+    agent_id: &str,
+    repository_root: Option<&Path>,
+    config_path: Option<&Path>,
+) -> Result<()> {
+    let mut attached = client::attach_or_create(Some(agent_id), repository_root, config_path)?;
+    println!("Clojure REPL for {agent_id}. Ctrl-D exits without stopping the agent.");
+    let stdin = io::stdin();
+    loop {
+        print!("{agent_id}=> ");
+        io::stdout().flush()?;
+        let mut code = String::new();
+        if stdin.read_line(&mut code)? == 0 {
+            break;
+        }
+        if code.trim().is_empty() {
+            continue;
+        }
+        match attached
+            .connection
+            .call("repl.eval", json!({"code": code, "replay_safe": false}))
+        {
+            Ok(value) => print_json(&value)?,
+            Err(error) => eprintln!("{error:#}"),
+        }
+    }
+    let _ = attached.connection.call("agent.detach", json!({}));
+    Ok(())
+}
+
+fn print_json(value: &Value) -> Result<()> {
+    println!("{}", serde_json::to_string_pretty(value)?);
+    Ok(())
+}
+
+fn option_path(args: &[String], flag: &str) -> Option<PathBuf> {
+    value_after(args, flag).map(PathBuf::from)
+}
+
+fn value_after<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+    args.iter()
+        .position(|argument| argument == flag)
+        .and_then(|index| args.get(index + 1))
+        .map(String::as_str)
+}
+
+fn positional(args: &[String], index: usize) -> Option<&str> {
+    let mut skip_next = false;
+    args.iter()
+        .filter(|argument| {
+            if skip_next {
+                skip_next = false;
+                return false;
+            }
+            if matches!(
+                argument.as_str(),
+                "--config" | "--repository-root" | "--agent"
+            ) {
+                skip_next = true;
+                return false;
+            }
+            !argument.starts_with('-')
+        })
+        .nth(index)
+        .map(String::as_str)
 }

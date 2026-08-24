@@ -77,10 +77,10 @@ do not change the core Qwen interaction or hierarchy.
 
 ### Iteration 6 — Rust/Ratatui replacement
 
-- Migration: added `apps/tui-rs`, a Rust 2024/Ratatui frontend that reuses the existing JSONL bridge and leaves the Babashka runtime boundary unchanged. The default and offline mock profiles now launch its release binary; React/Ink remains an explicit compatibility fallback.
+- Migration: added `apps/tui-rs`, a Rust 2024/Ratatui frontend that reuses the existing JSONL bridge and leaves the Babashka runtime boundary unchanged. The default and offline mock profiles launch its release binary. The temporary React/Ink fallback was removed after parity validation.
 - Visual contract: Ratatui `TestBackend` renders deterministic 160 × 44 and 80-column buffers. Tests cover the wide wordmark/runtime panel, narrow breakpoint, Tips/history hierarchy, double-rule composer, software cursor, footer, dialog-exclusive control region, two-pane theme preview, semantic tool aggregation, multiline input, slash suggestions, queue and extension slots.
 - Interaction contract: state-machine tests cover grapheme editing/history, idle submit, busy steer, `Ctrl+Q` follow-up, abort/exit, model/session/tree/theme selection, approval navigation, required input/custom JSON validation, durable-event deduplication, streaming projection and monotonic tool completion.
-- Cross-implementation result: the legacy TypeScript baseline remains green at 109 TUI tests. The initial Rust replacement passed 23 projection/interaction/UI tests under strict `clippy -D warnings`, and the Babashka bridge suite remained green at 70 tests and 544 assertions, proving that switching the child command did not change host behavior.
+- Historical cross-implementation result: before removal, the TypeScript baseline was green at 109 TUI tests. The initial Rust replacement passed 23 projection/interaction/UI tests under strict `clippy -D warnings`, and the Babashka bridge suite remained green at 70 tests and 544 assertions, proving that switching the child command did not change host behavior.
 - Real terminal result: a 160 × 44 pseudo-terminal smoke run started the offline mock profile, loaded snapshot and commands, submitted a user turn, completed the mixed read/search/list tool batch, rendered the final assistant response, invoked `frontend.exit`, and restored the terminal cleanly.
 - Performance fix: the first PTY pass revealed unnecessary continuous redraw. Rendering is now dirty-state driven, with timed redraw only while an animated busy state is visible; the idle frontend no longer consumes a core.
 - Terminal-channel regression fix: fullscreen initialization no longer calls `Terminal::clear`, whose cursor-position query writes through process stdout (reserved for JSONL) and can spin forever when no terminal answers. The frontend now clears directly through its `/dev/tty` backend and enables Crossterm's `use-dev-tty` event source. A committed Expect smoke test verifies startup, a complete mock turn, and clean exit; an idle-process check measured 0.1% CPU instead of a saturated core.
@@ -106,7 +106,7 @@ do not change the core Qwen interaction or hierarchy.
 ## Upstream-only follow-up polish
 
 These are differences from newer upstream Qwen surfaces, not regressions against
-the TypeScript/Ink implementation being replaced in this repository.
+the historical TypeScript/Ink implementation that has since been removed from this repository.
 
 - P3: the checked-in Qwen source screenshot is from v0.19.2 and contains different session content. Current component source was used to resolve later token and layout behavior, but an upstream current-version idle screenshot would make future pixel diffs more exact.
 - P2: Qwen can show token/rate telemetry in the wide loading row. The current host protocol does not publish those values, so the Rust frontend cannot display them yet.

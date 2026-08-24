@@ -1,0 +1,19 @@
+{:plugins
+ [{:ns agent.plugins.session}
+  {:ns agent.plugins.mock
+   :config
+   {:responses
+    [{:message {:role "assistant" :content "goal step 1"} :finish-reason "stop"}
+     {:message {:role "assistant" :content "goal step 2"} :finish-reason "stop"}
+     {:message {:role "assistant" :content "goal step 3"} :finish-reason "stop"}
+     {:message {:role "assistant" :content "scheduled step 1"} :finish-reason "stop"}
+     {:message {:role "assistant" :content "scheduled step 2"} :finish-reason "stop"}
+     {:message {:role "assistant" :content "scheduled step 3"} :finish-reason "stop"}
+     {:message {:role "assistant" :content "scheduled step 4"} :finish-reason "stop"}
+     {:message {:role "assistant" :content "scheduled step 5"} :finish-reason "stop"}]}}
+  {:ns agent.plugins.durable-state :config {:root "."}}
+  {:ns agent.plugins.bb-repl
+   :config {:root "." :sandbox :none :timeout-ms 5000}}
+  {:ns agent.plugins.runtime :config {:max-steps 2}}
+  {:ns agent.plugins.remote-registry}
+  {:ns agent.plugins.remote-api}]}

@@ -101,7 +101,7 @@ mod tests {
     use std::collections::HashSet;
 
     #[test]
-    fn matches_the_ink_loading_phrase_catalog() {
+    fn matches_the_loading_phrase_catalog() {
         assert_eq!(PHRASES.len(), 74);
         assert_eq!(PHRASES.iter().copied().collect::<HashSet<_>>().len(), 74);
         assert_eq!(PHRASES[0], "正在努力搬砖，请稍候...");
@@ -110,7 +110,7 @@ mod tests {
     }
 
     #[test]
-    fn formats_elapsed_time_like_the_ink_baseline() {
+    fn formats_elapsed_time_consistently() {
         assert_eq!(format_elapsed(12), "12s");
         assert_eq!(format_elapsed(60), "1m");
         assert_eq!(format_elapsed(125), "2m 5s");

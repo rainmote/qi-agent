@@ -4,7 +4,9 @@
             [cheshire.core :as json]
             [clojure.java.io :as io]
             [clojure.string :as str])
-  (:import [java.nio.file CopyOption Files StandardCopyOption]
+  (:import [java.io FileOutputStream]
+           [java.nio.charset StandardCharsets]
+           [java.nio.file CopyOption Files StandardCopyOption]
            [java.time Instant]))
 
 (defn- valid-event? [event]
@@ -43,6 +45,25 @@
     (when-not (or (.isDirectory parent) (.mkdirs parent))
       (throw (ex-info "Could not create session directory"
                       {:path (str parent)})))))
+
+(defn- ensure-line-boundary! [path]
+  (let [target (io/file path)]
+    (when (and (.isFile target) (pos? (.length target)))
+      (with-open [file (java.io.RandomAccessFile. target "r")]
+        (.seek file (dec (.length file)))
+        (when-not (= 10 (.read file))
+          (with-open [output (FileOutputStream. target true)]
+            (.write output (.getBytes "\n" StandardCharsets/UTF_8))
+            (.flush output)
+            (.force (.getChannel output) true)))))))
+
+(defn- append-json-line! [output item fsync?]
+  (when output
+    (.write output
+            (.getBytes (str (json/generate-string item) "\n")
+                       StandardCharsets/UTF_8))
+    (.flush output)
+    (when fsync? (.force (.getChannel output) true))))
 
 (defn- event [type data parent-id sequence]
   (cond-> {:id (str (random-uuid))
@@ -122,18 +143,21 @@
    :description "Recoverable append-only session log with resume/fork/compaction."
    :provides #{:session/store}
    :start
-   (fn [ctx {:keys [path retain-messages max-summary-chars]
-             :or {retain-messages 12 max-summary-chars 8000}}]
+   (fn [ctx {:keys [path retain-messages max-summary-chars fsync?]
+             :or {retain-messages 12 max-summary-chars 8000 fsync? true}}]
      (when-not (and (pos-int? retain-messages) (pos-int? max-summary-chars))
        (throw (ex-info "Session compaction limits must be positive integers"
                        {:retain-messages retain-messages
                         :max-summary-chars max-summary-chars})))
-     (when path (ensure-parent! path))
+     (when path
+       (ensure-parent! path)
+       (ensure-line-boundary! path))
      (let [{loaded-events :events loaded-diagnostics :diagnostics}
            (load-events path)
            loaded-events (normalize-sequences loaded-events)
            events (atom loaded-events)
            diagnostics (atom loaded-diagnostics)
+           output (when path (FileOutputStream. (io/file path) true))
            listeners (atom {})
            lock (Object.)
            session-id (or (some #(when (= "session/fork" (:type %))
@@ -154,9 +178,7 @@
                               item (event type data parent-id
                                           (inc (count @events)))]
                           (when path
-                            (spit path
-                                  (str (json/generate-string item) "\n")
-                                  :append true))
+                            (append-json-line! output item fsync?))
                           (swap! events conj item)
                           (notify! item))))
                      ([type data parent-id]
@@ -164,9 +186,7 @@
                         (let [item (event type data parent-id
                                           (inc (count @events)))]
                           (when path
-                            (spit path
-                                  (str (json/generate-string item) "\n")
-                                  :append true))
+                            (append-json-line! output item fsync?))
                           (swap! events conj item)
                           (notify! item)))))
            messages #(effective-messages @events)
@@ -325,4 +345,8 @@
        (when-not (some #(= "session/start" (:type %)) loaded-events)
          (append! "session/start" {:session_id session-id}))
        (kernel/register-service! ctx :session/store store)
-       nil))})
+       (fn []
+         (when output
+           (try (.flush output) (catch Throwable _))
+           (try (.force (.getChannel output) true) (catch Throwable _))
+           (try (.close output) (catch Throwable _))))))})

@@ -62,12 +62,16 @@ test("web host authenticates, catalogs, creates a real worker, and invokes RPC",
       headers: { ...authorization, "Content-Type": "application/json", Origin: base },
       body: JSON.stringify({ workspaceId: bootstrap.result.activeWorkspaceId, name: "E2E" }),
     });
-    assert.equal(createResponse.status, 201);
     const created = await createResponse.json() as {
-      result: { session: { id: string; name: string }; snapshot: { cursor: number } };
+      result: {
+        session: { id: string; name: string };
+        snapshot: { cursor: { generation: number; sequence: number } };
+      };
     };
+    assert.equal(createResponse.status, 201, JSON.stringify(created));
     assert.equal(created.result.session.name, "E2E");
-    assert.equal(created.result.snapshot.cursor, 2);
+    assert.ok(created.result.snapshot.cursor.generation >= 1);
+    assert.ok(created.result.snapshot.cursor.sequence >= 0);
 
     const rpcResponse = await fetch(
       `${base}/api/sessions/${created.result.session.id}/rpc`, {
@@ -86,12 +90,15 @@ test("web host authenticates, catalogs, creates a real worker, and invokes RPC",
         body: JSON.stringify({ name: "E2E branch" }),
       });
     const forked = await forkResponse.json() as {
-      result: { session: { id: string; name: string }; snapshot: { cursor: number } };
+      result: {
+        session: { id: string; name: string };
+        snapshot: { cursor: { generation: number; sequence: number } };
+      };
     };
     assert.equal(forkResponse.status, 201);
     assert.notEqual(forked.result.session.id, created.result.session.id);
     assert.equal(forked.result.session.name, "E2E branch");
-    assert.ok(forked.result.snapshot.cursor > created.result.snapshot.cursor);
+    assert.ok(forked.result.snapshot.cursor.generation >= 1);
 
     const unsafeFork = await fetch(
       `${base}/api/sessions/${created.result.session.id}/rpc`, {

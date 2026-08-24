@@ -29,7 +29,6 @@ temp/
 *.log
 node_modules/
 apps/web/dist/
-apps/tui/dist/
 
 # Editor and operating-system files
 .DS_Store

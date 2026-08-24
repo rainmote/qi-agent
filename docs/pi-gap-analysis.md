@@ -247,7 +247,7 @@ partial assistant、tool update/end、scroll、多行编辑、历史、命令/�
 
 `agent.ui` 暴露可逆 message/entry/tool renderer、shortcut、status、widget 与 notification；
 `:ui/prompt` 提供 select/confirm/input/custom overlay，approval 在 TUI 中复用同一服务。工具
-`:render-model` 与 `:render-tui` 分离，旧 `:render` 保持模型文本兼容。详见 `docs/tui.md`。
+`:render-model` 与 `:render-tui` 分离，旧 `:render` 保持模型文本兼容。详见 `docs/tui-ratatui.md`。
 
 ## P2：生态与兼容性
 

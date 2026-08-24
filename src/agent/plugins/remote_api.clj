@@ -30,7 +30,10 @@
   (let [store (kernel/require-service ctx :session/store)
         session (kernel/require-service ctx :agent/session)
         models (kernel/service ctx :llm/registry)
-        interactions (kernel/service ctx :interaction/remote)]
+        interactions (kernel/service ctx :interaction/remote)
+        repl (kernel/service ctx :execution/repl)
+        subagents (kernel/service ctx :subagents/runtime)
+        durable-state (kernel/service ctx :agent/durable-state)]
     {:session_id (:session-id store)
      :path (:path store)
      :cursor (or (:seq (last ((:events store)))) 0)
@@ -39,7 +42,21 @@
      :models (when models
                {:current (public-provider ((:current models)))
                 :providers ((:providers models))})
-     :interactions (if interactions ((:pending interactions)) [])}))
+     :interactions (if interactions ((:pending interactions)) [])
+     :children (if subagents ((:jobs subagents)) [])
+     :repl (when repl
+             (if-let [status (:status repl)]
+               (status)
+               (select-keys repl [:backend :sandbox :available? :reason])))
+     :durable_state (when durable-state ((:snapshot durable-state)))}))
+
+(defn- received-message [store message-id]
+  (when message-id
+    (some (fn [event]
+            (when (and (= "agent/message/received" (:type event))
+                       (= message-id (get-in event [:data :message_id])))
+              event))
+          (reverse ((:events store))))))
 
 (def plugin
   {:id :remote/api
@@ -198,13 +215,161 @@
                           :prompt-count (count (:prompts snapshot))
                           :skill-count (count (:skills snapshot))
                           :project-trusted (:project-trusted snapshot)}))})))
+       (method! "repl.status" "Return this agent's logical Clojure REPL state."
+                empty-params {:type "object"}
+                (fn [_]
+                  (let [repl (kernel/require-service ctx :execution/repl)]
+                    (if-let [status (:status repl)]
+                      (status)
+                      (select-keys repl [:backend :sandbox :available? :reason])))))
+       (method! "repl.eval" "Evaluate code in this agent's persistent REPL."
+                (object-params
+                 {"code" {:type "string" :minLength 1}
+                  "replay_safe" {:type "boolean"}}
+                 "code")
+                {:type "object"}
+                (fn [{:keys [code replay_safe]}]
+                  (let [repl (kernel/require-service ctx :execution/repl)]
+                    (when (= false (:available? repl))
+                      (throw (ex-info (or (:reason repl) "REPL is unavailable")
+                                      {})))
+                    ((:eval! repl) {:code code :replay-safe replay_safe}))))
+       (method! "repl.interrupt" "Interrupt the active REPL evaluation."
+                (object-params {"eval_id" {:type "string"}})
+                {:type "object"}
+                (fn [{:keys [eval_id]}]
+                  (let [repl (kernel/require-service ctx :execution/repl)]
+                    {:interrupted (boolean ((:interrupt! repl) eval_id))})))
+       (method! "repl.reset" "Restart only this agent's REPL namespace."
+                empty-params {:type "object"}
+                (fn [_]
+                  ((:reset! (kernel/require-service ctx :execution/repl)) {})))
+       (method! "repl.describe" "Describe REPL backend and recovery semantics."
+                empty-params {:type "object"}
+                (fn [_]
+                  (let [repl (kernel/require-service ctx :execution/repl)]
+                    (if-let [describe (:describe repl)]
+                      (describe)
+                      (select-keys repl [:backend :sandbox :available? :reason])))))
+       (method! "state.snapshot" "Return this agent's explicit durable state."
+                empty-params {:type "object"}
+                (fn [_]
+                  ((:snapshot (kernel/require-service
+                               ctx :agent/durable-state)))))
+       (method! "state.get" "Read one key from explicit durable state."
+                (object-params {"key" {}} "key") {}
+                (fn [{:keys [key]}]
+                  {:key key
+                   :value ((:get (kernel/require-service
+                                  ctx :agent/durable-state)) key)}))
+       (method! "state.put" "Persist one key in explicit durable state."
+                (object-params {"key" {} "value" {}} "key" "value") {}
+                (fn [{:keys [key value]}]
+                  ((:put! (kernel/require-service ctx :agent/durable-state))
+                   key value)
+                  {:key key :value value :persisted true}))
+       (method! "state.delete" "Delete one key from explicit durable state."
+                (object-params {"key" {}} "key") {:type "object"}
+                (fn [{:keys [key]}]
+                  {:key key
+                   :deleted ((:delete! (kernel/require-service
+                                        ctx :agent/durable-state)) key)}))
        (method! "subagent.status" "List subagent providers and jobs."
                 empty-params {:type "object"}
                 (fn [_]
                   (if-let [subagents (kernel/service ctx :subagents/runtime)]
                     {:providers ((:providers subagents))
-                     :jobs ((:jobs subagents))}
+                     :jobs ((:jobs subagents))
+                     :tombstones ((:tombstones subagents))}
                     {:providers [] :jobs []})))
+       (method! "agent.message.send" "Send a durable message to a retained child."
+                (object-params {"to" {:type "string" :minLength 1}
+                                "message" {:type "string" :minLength 1}
+                                "from" {:type "string" :minLength 1}
+                                "message_id" {:type "string" :minLength 1}}
+                               "to" "message")
+                {:type "object"}
+                (fn [{:keys [to message] :as params}]
+                  ((:send! (kernel/require-service ctx :subagents/runtime))
+                   to (cond-> {:message message}
+                        (:from params) (assoc :from (:from params))
+                        (:message_id params) (assoc :message_id
+                                                    (:message_id params))))))
+       (method! "agent.message.receive"
+                "Persist a daemon-routed inbox message before dispatch."
+                (object-params {"from" {:type "string" :minLength 1}
+                                "message" {:type "string" :minLength 1}
+                                "message_id" {:type "string" :minLength 1}}
+                               "from" "message" "message_id")
+                {:type "object"}
+                (fn [{:keys [from message message_id]}]
+                  (if-let [event (received-message store message_id)]
+                    {:accepted true :duplicate true :message_id message_id
+                     :inbox_event_id (:id event)}
+                    (let [event ((:append! store) "agent/message/received"
+                                 {:from from :message message
+                                  :message_id message_id})
+                          phase (:phase ((:state session)))]
+                      (try
+                        (if (= :idle phase)
+                          (let [{:keys [task result]} ((:submit! session) message)]
+                            (swap! tasks conj task)
+                            (future
+                              (try @result
+                                   (finally (swap! tasks disj task))))
+                            {:accepted true :dispatched true
+                             :message_id message_id
+                             :inbox_event_id (:id event)})
+                          (do
+                            ((:follow-up! session) message)
+                            {:accepted true :queued true
+                             :message_id message_id
+                             :inbox_event_id (:id event)}))
+                        (catch Throwable error
+                          ((:append! store) "agent/message/dispatch-failed"
+                           {:from from :message_id message_id
+                            :error (ex-message error)})
+                          {:accepted true :dispatched false
+                           :message_id message_id
+                           :inbox_event_id (:id event)
+                           :error (ex-message error)}))))))
+       (method! "agent.message.record_sent"
+                "Record a daemon-routed message in the sender session."
+                (object-params {"to" {:type "string" :minLength 1}
+                                "message" {:type "string" :minLength 1}
+                                "message_id" {:type "string" :minLength 1}}
+                               "to" "message" "message_id")
+                {:type "object"}
+                (fn [{:keys [to message message_id]}]
+                  (let [event ((:append! store) "agent/message/sent"
+                               {:to to :message message
+                                :message_id message_id})]
+                    {:recorded true :message_id message_id
+                     :event_id (:id event)})))
+       (method! "subagent.stop" "Stop a retained child context."
+                (object-params {"agent_id" {:type "string" :minLength 1}}
+                               "agent_id")
+                {:type "object"}
+                (fn [{:keys [agent_id]}]
+                  {:agent_id agent_id
+                   :stopped ((:stop! (kernel/require-service
+                                      ctx :subagents/runtime)) agent_id)}))
+       (method! "subagent.delete" "Delete child routing and retain a tombstone."
+                (object-params {"agent_id" {:type "string" :minLength 1}}
+                               "agent_id")
+                {:type "object"}
+                (fn [{:keys [agent_id]}]
+                  {:tombstone ((:delete! (kernel/require-service
+                                          ctx :subagents/runtime)) agent_id)}))
+       (method! "subagent.invoke" "Invoke a scoped method on a retained child."
+                (object-params {"agent_id" {:type "string" :minLength 1}
+                                "method" {:type "string" :minLength 1}
+                                "params" {:type "object"}}
+                               "agent_id" "method")
+                {}
+                (fn [{:keys [agent_id method params]}]
+                  ((:invoke! (kernel/require-service ctx :subagents/runtime))
+                   agent_id method (or params {}))))
        (fn []
          ((:abort! session))
          (doseq [task @tasks] (deref task 1000 nil)))))})

@@ -2,7 +2,6 @@
   "User-local installer for the Babashka and Ratatui application."
   (:require [babashka.fs :as fs]
             [babashka.process :as process]
-            [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]))
 
@@ -60,19 +59,6 @@
                       {:root root :missing path}))))
   root)
 
-(defn installed-profile
-  "Point the installed profile at the final absolute Ratatui binary."
-  [profile install-dir]
-  (let [entrypoint (str (fs/path install-dir "apps" "tui-rs" "target"
-                                 "release" "bb-agent-tui"))]
-    (update profile :plugins
-            (fn [plugins]
-              (mapv (fn [spec]
-                      (if (= 'agent.plugins.tui-ink (:ns spec))
-                        (assoc-in spec [:config :command] [entrypoint])
-                        spec))
-                    plugins)))))
-
 (defn- shell-quote [value]
   (str "'" (str/replace (str value) "'" "'\"'\"'") "'"))
 
@@ -83,9 +69,8 @@
        managed-marker "\n"
        "set -eu\n"
        "INSTALL_DIR=" (shell-quote install-dir) "\n"
-       "export BB_AGENT_COMMAND=dao\n"
-       "exec bb --config \"$INSTALL_DIR/bb.edn\" "
-       "--deps-root \"$INSTALL_DIR\" agent "
+       "exec \"$INSTALL_DIR/apps/tui-rs/target/release/dao\" "
+       "--repository-root \"$INSTALL_DIR\" "
        "--config \"$INSTALL_DIR/agent.edn\" \"$@\"\n"))
 
 (defn path-entry?
@@ -116,14 +101,11 @@
   (doseq [name ["bb.edn" "agent.edn" "package.json" "package-lock.json"]]
     (fs/copy (fs/path source name) (fs/path stage name))))
 
-(defn- build-stage! [stage install-dir]
+(defn- build-stage! [stage]
   (println "Building Rust/Ratatui TUI...")
   (process/shell {:dir (str stage)}
                  "cargo" "build" "--release"
-                 "--manifest-path" "apps/tui-rs/Cargo.toml")
-  (let [profile (edn/read-string (slurp (str (fs/path stage "agent.edn"))))]
-    (spit (str (fs/path stage "agent.edn"))
-          (str (pr-str (installed-profile profile install-dir)) "\n"))))
+                 "--manifest-path" "apps/tui-rs/Cargo.toml"))
 
 (defn- activate-stage! [stage install-dir]
   (let [install-path (fs/path install-dir)
@@ -171,7 +153,7 @@
                                      :prefix ".dao-install-"})]
       (try
         (copy-source! source-root stage)
-        (build-stage! stage install-dir)
+        (build-stage! stage)
         (activate-stage! stage install-dir)
         (install-launcher! launcher install-dir)
         (finally

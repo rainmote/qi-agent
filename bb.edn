@@ -13,8 +13,6 @@
                     (shell "cargo test --manifest-path apps/tui-rs/Cargo.toml")
                     (shell "cargo build --release --manifest-path apps/tui-rs/Cargo.toml")
                     (shell "expect apps/tui-rs/tests/pty-smoke.exp"))}
-  tui-ink-build {:doc "Build the legacy TypeScript/Ink frontend"
-                 :task (shell "npm run tui:build")}
   test {:doc "Run the test suite"
         :extra-paths ["test"]
         :requires ([agent.test-runner :as test-runner])

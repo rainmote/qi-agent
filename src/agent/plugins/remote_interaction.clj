@@ -11,21 +11,35 @@
    :provides #{:ui/prompt :interaction/remote}
    :start
    (fn [ctx {:keys [timeout-ms] :or {timeout-ms 300000}}]
+     (when-not (or (nil? timeout-ms)
+                   (and (int? timeout-ms) (pos? timeout-ms)))
+       (throw (ex-info "Remote interaction timeout must be nil or positive"
+                       {:timeout-ms timeout-ms})))
      (let [pending (atom {})
+           store (kernel/service ctx :session/store)
+           durable! (fn [type data]
+                      (when store ((:append! store) type data)))
            select!
            (fn [{:keys [default] :as prompt}]
              (let [id (str (random-uuid))
                    completion (promise)
-                   request (assoc prompt :id id :created-at
+                   request (assoc (dissoc prompt :cancel-token)
+                                  :id id :created-at
                                   (str (java.time.Instant/now)))]
                (swap! pending assoc id {:request request
                                         :completion completion})
+               (durable! "interaction/request" request)
                (kernel/emit! ctx :interaction/request request)
-               (let [decision (deref completion timeout-ms ::timeout)
+               (let [decision (if timeout-ms
+                                (deref completion timeout-ms ::timeout)
+                                @completion)
                      result (if (= ::timeout decision)
                               (or default :deny)
                               decision)]
                  (swap! pending dissoc id)
+                 (durable! "interaction/resolved"
+                           {:id id :decision result
+                            :timed-out (= ::timeout decision)})
                  (kernel/emit! ctx :interaction/resolved
                                {:id id :decision result
                                 :timed-out (= ::timeout decision)})

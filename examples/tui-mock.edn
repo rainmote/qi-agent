@@ -14,11 +14,11 @@
         {:id "mock-search"
          :type "function"
          :function {:name "grep"
-                    :arguments "{\"path\":\"apps/tui\",\"query\":\"ToolGroup\",\"limit\":4}"}}
+                    :arguments "{\"path\":\"apps/tui-rs\",\"query\":\"ToolGroup\",\"limit\":4}"}}
         {:id "mock-list"
          :type "function"
          :function {:name "ls"
-                    :arguments "{\"path\":\"apps/tui/components\",\"limit\":8}"}}]}
+                    :arguments "{\"path\":\"apps/tui-rs/src\",\"limit\":8}"}}]}
       :finish-reason "tool_calls"
       :usage {:total_tokens 24}}
      {:message {:role "assistant"
@@ -33,8 +33,8 @@
    :config {:max-steps 3
             :system-prompt "Use the supplied discovery tools, then reply briefly."}}
   {:ns agent.plugins.remote-registry}
-  {:ns agent.plugins.remote-api}
-  {:ns agent.plugins.tui-ink
-   :config {:command ["apps/tui-rs/target/release/bb-agent-tui"]
-            :theme "Qwen Dark"
-            :shutdown-timeout-ms 1500}}]}
+  {:ns agent.plugins.durable-state
+   :config {:root "."}}
+  {:ns agent.plugins.bb-repl
+   :config {:root "." :sandbox :none :timeout-ms 5000}}
+  {:ns agent.plugins.remote-api}]}

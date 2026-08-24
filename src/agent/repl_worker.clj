@@ -1,7 +1,89 @@
 (ns agent.repl-worker
   "Line-oriented EDN worker used by the Babashka REPL execution provider."
-  (:require [clojure.edn :as edn])
-  (:import [java.io StringWriter]))
+  (:require [clojure.edn :as edn]
+            [clojure.java.io :as io]
+            [clojure.string :as str])
+  (:import [java.io StringWriter]
+           [java.nio.file CopyOption Files StandardCopyOption]))
+
+(defn- read-state [path]
+  (if-not (and path (.isFile (io/file path)))
+    {}
+    (let [value (edn/read-string (slurp path))]
+      (if (map? value) value {}))))
+
+(defn- atomic-spit! [path value]
+  (let [target (.getCanonicalFile (io/file path))
+        parent (.getParentFile target)]
+    (.mkdirs parent)
+    (let [temporary (java.io.File/createTempFile ".dao-repl-" ".tmp" parent)]
+      (try
+        (spit temporary value)
+        (try
+          (Files/move (.toPath temporary) (.toPath target)
+                      (into-array CopyOption
+                                  [StandardCopyOption/ATOMIC_MOVE
+                                   StandardCopyOption/REPLACE_EXISTING]))
+          (catch Throwable error
+            (if (.exists temporary)
+              (Files/move (.toPath temporary) (.toPath target)
+                          (into-array CopyOption
+                                      [StandardCopyOption/REPLACE_EXISTING]))
+              (throw error))))
+        (finally
+          (when (.exists temporary) (.delete temporary)))))))
+
+(defn- inside-artifact [artifact-root relative]
+  (let [root (.getCanonicalFile (io/file artifact-root))
+        target (.getCanonicalFile (io/file root relative))]
+    (when-not (or (= root target)
+                  (str/starts-with? (.getPath target)
+                                    (str (.getPath root) java.io.File/separator)))
+      (throw (ex-info "Artifact path escapes this agent's directory"
+                      {:path relative})))
+    target))
+
+(defn- install-host-bridge! []
+  (let [agent-id (or (System/getenv "DAO_AGENT_ID") "user")
+        artifact-root (System/getenv "DAO_AGENT_ARTIFACT_ROOT")
+        state-path (System/getenv "DAO_AGENT_STATE_PATH")
+        outbox-path (System/getenv "DAO_AGENT_OUTBOX_PATH")
+        state-lock (Object.)
+        state-ns (create-ns 'dao.state)
+        artifact-ns (create-ns 'dao.artifact)
+        agent-ns (create-ns 'dao.agent)
+        task-ns (create-ns 'dao.task)]
+    (intern state-ns 'snapshot (fn [] (locking state-lock (read-state state-path))))
+    (intern state-ns 'get (fn [key] (clojure.core/get (read-state state-path) key)))
+    (intern state-ns 'put!
+            (fn [key value]
+              (locking state-lock
+                (atomic-spit! state-path
+                              (str (pr-str (assoc (read-state state-path) key value))
+                                   "\n")))
+              value))
+    (intern artifact-ns 'write!
+            (fn [relative value]
+              (let [target (inside-artifact artifact-root relative)]
+                (.mkdirs (.getParentFile target))
+                (spit target (if (string? value) value (pr-str value)))
+                {:path (.getPath target)
+                 :bytes (.length target)})))
+    (let [enqueue!
+          (fn [operation request]
+            (let [entry {:id (str (random-uuid))
+                         :agent-id agent-id
+                         :operation operation
+                         :request request
+                         :at (str (java.time.Instant/now))}]
+              (.mkdirs (.getParentFile (io/file outbox-path)))
+              (spit outbox-path (str (pr-str entry) "\n") :append true)
+              (select-keys entry [:id :agent-id :operation])))]
+      (intern agent-ns 'spawn! #(enqueue! :spawn %))
+      (intern agent-ns 'send! #(enqueue! :send %)))
+    (intern task-ns 'status
+            (fn [] {:agent-id agent-id
+                    :durable-state (read-state state-path)}))))
 
 (defn- limited [value limit]
   (let [text (str value)
@@ -61,8 +143,11 @@
     {:ok false :error (str "Unknown REPL operation: " (:op request))}))
 
 (defn -main [& _]
-  (let [repl-ns (create-ns 'agent.repl.user)
+  (let [agent-id (or (System/getenv "DAO_AGENT_ID") "user")
+        safe-id (str/replace agent-id #"[^A-Za-z0-9_-]" "-")
+        repl-ns (create-ns (symbol (str "dao.agent." safe-id)))
         protocol-out *out*]
+    (install-host-bridge!)
     (loop []
       (when-let [line (read-line)]
         (let [request (try

@@ -124,14 +124,14 @@ API key。认证缓存位置是官方文档支持的，但订阅后端协议并�
 取消不会重试。可通过 `:http-version`、`:connect-timeout-ms`、`:transport-retries` 与
 `:retry-delay-ms` 调整。连接层重试耗尽后不会再由 runtime 成倍重放同一个请求。
 
-不带 `--once` 会进入多轮交互模式，并自动把 session 保存到
-`.bb-agent/sessions/<时间>-<ID>.jsonl`；在 session 插件设置 `:ephemeral true` 可明确关闭
-自动保存。默认模型、端点、工具和插件顺序都在 `agent.edn` 中配置。OpenAI-compatible
+`dao` 会连接常驻 supervisor，选择已有 agent 或创建新的持久 session；关闭终端只会 detach，
+不会停止后台 run、子 agent 或 REPL。`bb agent` 仍保留为 headless/embedding 入口。
+默认模型、端点、工具和插件顺序都在 `agent.edn` 中配置。OpenAI-compatible
 插件也可以连接其他兼容 `/chat/completions` 的服务。Codex Responses 和 DeepSeek Chat
 Completions 都会把文本 delta 立即写到终端，不再等待完整响应下载结束。
 
-交互模式默认通过 `agent.plugins.tui-ink` 的兼容 bridge 启动 Rust/Ratatui 前端：Babashka
-继续持有 session、agent loop、工具与审批，Rust 子进程只负责终端界面。当前界面按
+唯一终端入口是 Rust/Ratatui 实现的 `dao` 客户端。Rust daemon 持有任务接纳、路由、worker
+监督与恢复；resident Babashka worker 持有 session、agent loop、工具与审批。当前界面按
 Qwen Code 的默认暗色、
 欢迎 banner、消息符号、双横线输入区与弹窗布局呈现，并包含带代码/diff 分栏预览、可即时切换的 Qwen
 内置主题、session 恢复、流式
@@ -140,25 +140,25 @@ Markdown/reasoning、紧凑工具状态、多行 Unicode 输入、命令补全�
 
 ```bash
 bb tui-build
-bb agent --config examples/tui-mock.edn --mode tui
+apps/tui-rs/target/release/dao --repository-root . --config examples/tui-mock.edn
 ```
 
-Ratatui 直接打开 controlling TTY，stdin/stdout 仍只承载逐行 JSON 协议。完成的消息和工具框会
+Ratatui 直接打开 controlling TTY，并通过 owner-only Unix socket 使用 daemon JSONL 协议。完成的消息和工具框会
 写入 terminal scrollback，只有流式内容、运行中工具与输入区继续重绘，因此终端滚动条和滚轮可直接
-查看历史；程序不启用 alternate screen 或鼠标捕获，异常退出会恢复 raw mode 和光标。旧版 React/Ink
-源码保留在 `apps/tui/`，可运行
-`bb tui-ink-build` 后在自定义 profile 中显式覆盖 `:command` 回退诊断。
+查看历史；程序不启用 alternate screen 或鼠标捕获，异常退出会恢复 raw mode 和光标。旧版
+TypeScript/React/Ink 前端已经删除，终端 UI 只维护 Rust/Ratatui 实现。
 
 同一次模型响应里的 read/search/list 工具会聚合成一条 Qwen 风格语义摘要，例如
-`Searching ToolGroup, reading README.md, listing apps/tui…`；运行中的状态图标和底部短语会动态
+`Searching ToolGroup, reading README.md, listing apps/tui-rs…`；运行中的状态图标和底部短语会动态
 变化，完成后整句自动切换为过去时。命令、编辑等动作型工具仍逐条保留，`Ctrl+O` 可展开完整细节。
 
 `Enter` 在空闲时提交、运行中 steer；`Ctrl+Q` 在运行中排入 follow-up；`Alt+Enter`、
 `Ctrl+N`、`Ctrl+Enter` 或 `Shift+Enter` 插入换行；`Esc`/`Ctrl+C` 中止当前运行，
 `Ctrl+O` 展开或折叠 reasoning 与工具详情，`Tab` 补全 slash command，
 使用终端滚动条、鼠标滚轮或终端自身的历史快捷键查看已完成内容。`/model`、
-`/sessions` 和 `/theme` 打开对应选择器。完整安装、按键、命令、TTY/JSONL 架构与旧版
-Clojure/Ink TUI 兼容方式见 [Ratatui TUI 文档](docs/tui-ratatui.md)。
+`/sessions` 和 `/theme` 打开对应选择器。完整安装、按键、命令与当前 TTY/JSONL 过渡架构见
+[Ratatui TUI 文档](docs/tui-ratatui.md)。后台 daemon、worker 与 per-agent REPL 的目标架构及
+实施阶段见 [Daemon-backed Agent 架构](docs/daemon-agent-architecture.md)。
 
 默认 profile 会显示实际发生的工具调用：
 
@@ -251,7 +251,7 @@ trust store 示例（路径应使用 canonical absolute path）：
          "/absolute/path/to/projects/untrusted" :deny}}
 ```
 
-新项目默认不可信，Bash、写入和 `bb_repl` 会保持禁用。当前 Ink TUI 不会在启动时自动
+新项目默认不可信，Bash、写入和 `bb_repl` 会保持禁用。当前 Rust TUI 不会在启动时自动
 弹出项目信任向导；用 `/trust` 查看状态，确认路径无误后用 `/trust allow` 信任，或用
 `/trust deny` 明确保持受限。决定会原子写入上述用户 trust store，并立即刷新项目资源。
 非交互的 `--once`、JSON/RPC 模式同样不会自行弹出确认。需要逐次确认工具时，把
@@ -317,14 +317,14 @@ ChatGPT Responses 与 OpenAI-compatible adapter 会转换成各自的多模态�
 
 注册 service、tool、observer、interceptor 和自定义 disposer 都会形成 effect。插件卸载时，effect 按注册的逆序撤销，不会留下旧工具或事件监听器。
 
-TUI 也是普通插件。默认 Ratatui 子进程复用 `agent.plugins.tui-ink` 的 frontend-neutral
-Remote API bridge 和 `agent.ui` prompt 边界，不把 Rust UI 状态塞进 agent loop。当前界面处理
+TUI 是 daemon 的可替换客户端，不再是由 Babashka 启动的插件。worker 通过 frontend-neutral
+Remote API 和 `agent.ui` prompt 边界暴露能力，不把 Rust UI 状态塞进 agent loop。当前界面处理
 approval、select、confirm、input 和 custom prompt，也会投影 JSON-safe status、widget 和
 notification，并通过 Remote API 调用注册在 host 的 shortcut handler。Clojure
 message/entry/tool renderer 函数不能跨进程变成 Ratatui widget，函数值字段只显示不可用占位符；
-需要原生 renderer 时仍可使用兼容的 `agent.plugins.tui`。
+需要原生 renderer 时仍可使用 `agent.plugins.tui`。
 工具仍可分别声明 `:render-model` 和 `:render-tui`，避免模型上下文文本与终端表现互相绑死；
-旧 TUI 扩展示例见 `plugins/example/ui_demo.clj`。
+TUI 扩展示例见 `plugins/example/ui_demo.clj`。
 
 ## 设计要点
 
@@ -345,7 +345,8 @@ message/entry/tool renderer 函数不能跨进程变成 Ratatui widget，函数�
   应审计插件来源，并在其他操作系统接入容器或远程 provider。
 
 架构来源与插件化实践见 [调研报告](docs/research.md)；当前与 Pi 的逐项能力差距、优先级和
-落地验收标准见 [Pi 差距分析](docs/pi-gap-analysis.md)。
+落地验收标准见 [Pi 差距分析](docs/pi-gap-analysis.md)；后台连续执行的目标进程模型、协议、
+恢复语义和迁移计划见 [Daemon-backed Agent 架构](docs/daemon-agent-architecture.md)。
 
 ## 目录
 
@@ -375,9 +376,7 @@ src/agent/protocol.clj          version 1 JSON event 与 stdin/stdout RPC
 src/agent/api.clj               稳定的公开 Clojure embedding API
 src/agent/command.clj           line/TUI 共用的 slash command dispatcher
 src/agent/ui.clj                可逆 UI extension 与 prompt API
-src/agent/plugins/tui_ink.clj   Ratatui/Ink 共用的 TTY/JSONL bridge 与 prompt adapter
-apps/tui-rs/                    默认 Rust/Ratatui UI、projection、编辑器与 UI 测试
-apps/tui/                       兼容的 React/Ink UI 与原有基线测试
+apps/tui-rs/                    dao daemon/client、Ratatui UI、worker proxy 与故障测试
 src/agent/plugins/tui.clj       兼容的 JLine/Clojure 全屏 TUI
 src/agent/plugins/*.clj         tools、trust、approval、policy、stream、trace、mock
 plugins/example/math.clj        仓库外置插件示例

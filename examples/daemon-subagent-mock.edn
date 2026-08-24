@@ -1,0 +1,41 @@
+{:plugins
+ [{:ns agent.plugins.session}
+  {:ns agent.plugins.mock
+   :config
+   {:responses
+    [{:message
+      {:role "assistant"
+       :content nil
+       :tool_calls
+       [{:id "spawn-child"
+         :type "function"
+         :function {:name "delegate_task"
+                    :arguments "{\"prompt\":\"initial child work\"}"}}]}
+      :finish-reason "tool_calls"}
+     {:message {:role "assistant" :content "root completed"}
+      :finish-reason "stop"}]}}
+  {:ns agent.plugins.subagent}
+  {:ns agent.plugins.subagent-in-process
+   :config
+   {:allowed-tools []
+    :child-profile
+    {:plugins
+     [{:ns agent.plugins.session}
+      {:ns agent.plugins.mock
+       :config
+       {:responses
+        [{:message {:role "assistant" :content "child completed"}
+          :finish-reason "stop"}
+         {:message {:role "assistant" :content "child follow-up completed"}
+          :finish-reason "stop"}]}}
+      {:ns agent.plugins.durable-state :config {:root "."}}
+      {:ns agent.plugins.bb-repl
+       :config {:root "." :sandbox :none :timeout-ms 5000}}
+      {:ns agent.plugins.runtime :config {:max-steps 2}}]}}}
+  {:ns agent.plugins.subagent-tools}
+  {:ns agent.plugins.durable-state :config {:root "."}}
+  {:ns agent.plugins.bb-repl
+   :config {:root "." :sandbox :none :timeout-ms 5000}}
+  {:ns agent.plugins.runtime :config {:max-steps 3}}
+  {:ns agent.plugins.remote-registry}
+  {:ns agent.plugins.remote-api}]}

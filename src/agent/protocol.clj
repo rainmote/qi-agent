@@ -16,29 +16,31 @@
     (println (json/generate-string (assoc value :version protocol-version)))
     (flush)))
 
-(defn- write-event! [session-id event data]
-  (if (= :session/event event)
-    (write-json!
-     {:type "event"
-      :session_id session-id
-      :seq (:seq data)
-      :event_id (:id data)
-      :run_id (or (:run-id data)
-                  (:run_id data)
-                  (get-in data [:data :run-id])
-                  (get-in data [:data :run_id]))
-      :event (event-name (:type data))
-      :durable true
-      :at (:at data)
-      :data (:data data)})
-    (write-json!
-     {:type "event"
-      :session_id session-id
-      :run_id (or (:run-id data) (:run_id data))
-      :event (event-name event)
-      :durable false
-      :at (str (java.time.Instant/now))
-      :data (if (= event (:type data)) (dissoc data :type) data)})))
+(defn- write-event!
+  ([session-id event data] (write-event! session-id nil event data))
+  ([session-id agent-id event data]
+   (let [envelope
+         (if (= :session/event event)
+           {:type "event"
+            :session_id session-id
+            :seq (:seq data)
+            :event_id (:id data)
+            :run_id (or (:run-id data)
+                        (:run_id data)
+                        (get-in data [:data :run-id])
+                        (get-in data [:data :run_id]))
+            :event (event-name (:type data))
+            :durable true
+            :at (:at data)
+            :data (:data data)}
+           {:type "event"
+            :session_id session-id
+            :run_id (or (:run-id data) (:run_id data))
+            :event (event-name event)
+            :durable false
+            :at (str (java.time.Instant/now))
+            :data (if (= event (:type data)) (dissoc data :type) data)})]
+     (write-json! (cond-> envelope agent-id (assoc :agent_id agent-id))))))
 
 (defn subscribe-json! [ctx]
   (let [plugin-ctx (kernel/plugin-context ctx :protocol/json)
@@ -56,11 +58,15 @@
                    :context/compaction-fallback
                    :interaction/request :interaction/resolved
                    :remote/run-result :llm/model-selected
+                   :repl/restarted
                    :subagent/provider-added :subagent/provider-removed
-                   :subagent/start :subagent/end]]
+                   :subagent/start :subagent/end :subagent/event]]
       (kernel/on! plugin-ctx event
                   (fn [_ data]
-                    (write-event! session-id event data))))
+                    (if (= :subagent/event event)
+                      (write-event! (:session-id data) (:agent-id data)
+                                    (:event data) (:data data))
+                      (write-event! session-id event data)))))
     (fn []
       (dispose-session)
       (kernel/dispose-plugin! ctx :protocol/json))))
@@ -117,7 +123,19 @@
                           ((:abort! session)))
 
                         (and registry ((:method registry) method))
-                        (rpc-response! id ((:invoke! registry) method params))
+                        (if (= "repl.eval" method)
+                          (let [task
+                                (future
+                                  (try
+                                    (rpc-response!
+                                     id ((:invoke! registry) method params))
+                                    (catch Throwable error
+                                      (rpc-error! id error))))]
+                            (swap! tasks conj task)
+                            (future
+                              @task
+                              (swap! tasks disj task)))
+                          (rpc-response! id ((:invoke! registry) method params)))
 
                         (= "prompt" method)
                         (let [{:keys [task result]}

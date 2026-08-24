@@ -111,6 +111,14 @@
                 :max-output-chars 50000}}
       {:ns agent.plugins.tools
        :config {:max-read-chars 50000}}
+      {:ns agent.plugins.durable-state
+       :config {:root "."}}
+      {:ns agent.plugins.bb-repl
+       :config {:root "."
+                :sandbox :auto
+                :timeout-ms 10000
+                :max-output-chars 20000}}
+      {:ns agent.plugins.clojure-repl}
       {:ns agent.plugins.context-manager
        :config {:context-window 128000
                 :reserve-tokens 16384
@@ -121,6 +129,9 @@
                 "You are an isolated research subagent. Complete the delegated task with the available read-only tools, report concrete evidence, and do not claim to have changed files."}}]}}}
 
   {:ns agent.plugins.subagent-tools}
+
+  {:ns agent.plugins.durable-state
+   :config {:root "."}}
 
   {:ns agent.plugins.bb-repl
    :config {:root "."
@@ -162,12 +173,4 @@
    :config {:max-steps 12
             :system-prompt-template :omp}}
 
-  {:ns agent.plugins.remote-api}
-
-  {:ns agent.plugins.tui-ink
-   ;; The bridge namespace is retained for protocol compatibility; the default
-   ;; child is now the Rust/Ratatui implementation. Override :command with the
-   ;; old Node entrypoint only when diagnosing the legacy Ink frontend.
-   :config {:command ["apps/tui-rs/target/release/bb-agent-tui"]
-            :theme "Qwen Dark"
-            :shutdown-timeout-ms 1500}}]}
+  {:ns agent.plugins.remote-api}]}

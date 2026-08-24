@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { access, readFile, stat } from "node:fs/promises";
+import { access, readFile, rm, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { dirname, extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -114,7 +114,14 @@ export async function startWebHost(options: WebHostOptions = {}) {
   const staticRoot = options.staticRoot || defaultStaticRoot;
   const workspaces = new WorkspaceRegistry(options.stateDirectory);
   await workspaces.load(options.workspace || process.cwd());
-  const sessions = new SessionManager(workspaces, repositoryRoot);
+  const ownedDaemonEnvironment = options.stateDirectory ? {
+    // Unix socket paths are short on macOS. Keep the ephemeral runtime path
+    // out of deeply nested test/application state directories.
+    runtimeDirectory: join("/tmp", `dao-web-${process.pid}-${randomBytes(6).toString("hex")}`),
+    stateDirectory: join(options.stateDirectory, "daemon-state"),
+  } : null;
+  const sessions = new SessionManager(workspaces, repositoryRoot,
+    ownedDaemonEnvironment || {});
 
   const server = createServer(async (request, response) => {
     const url = new URL(request.url || "/", `http://${request.headers.host || `${host}:${port}`}`);
@@ -267,11 +274,15 @@ export async function startWebHost(options: WebHostOptions = {}) {
     workspaces,
     sessions,
     close: async () => {
+      if (options.stateDirectory) await sessions.shutdownDaemon();
       await sessions.closeAll();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-        server.closeAllConnections();
-      });
+      const closed = new Promise<void>((resolve) => server.close(() => resolve()));
+      server.closeAllConnections();
+      await closed;
+      if (ownedDaemonEnvironment) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        await rm(ownedDaemonEnvironment.runtimeDirectory, { recursive: true, force: true });
+      }
     },
   };
 }
