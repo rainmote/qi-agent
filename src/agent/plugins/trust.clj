@@ -1,6 +1,7 @@
 (ns agent.plugins.trust
   "User-controlled canonical project trust store with parent inheritance."
   (:require [agent.kernel :as kernel]
+            [agent.secure-files :as secure]
             [clojure.edn :as edn]
             [clojure.java.io :as io])
   (:import [java.nio.file CopyOption Files StandardCopyOption]))
@@ -24,10 +25,12 @@
     (Files/createDirectories parent
                              (make-array java.nio.file.attribute.FileAttribute
                                          0))
+    (secure/protect-managed-parents! parent)
     (let [temporary (Files/createTempFile
                      parent ".bb-agent-trust-" ".edn"
                      (make-array java.nio.file.attribute.FileAttribute 0))]
       (try
+        (secure/protect-file! temporary)
         (spit (str temporary) (str (pr-str store) "\n"))
         (try
           (Files/move temporary target
@@ -44,6 +47,7 @@
               (throw error))))
         (finally
           (Files/deleteIfExists temporary))))
+    (secure/protect-file! target)
     (str target)))
 
 (defn- normalize-decision [decision]

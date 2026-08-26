@@ -1,6 +1,7 @@
 (ns agent.plugins.subagent
   "Provider-neutral subagent registry and run lifecycle."
   (:require [agent.kernel :as kernel]
+            [agent.secure-files :as secure]
             [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]))
@@ -16,6 +17,7 @@
 
 (defn- public-job [job]
   (-> job
+      (assoc :resident (boolean (:handle job)))
       (dissoc :handle :completion :parent-context)
       (update :provider provider-id)))
 
@@ -41,8 +43,10 @@
     (let [target (io/file path)
           parent (.getParentFile target)]
       (.mkdirs parent)
+      (secure/protect-managed-parents! parent)
       (let [temporary (java.io.File/createTempFile ".children-" ".edn" parent)]
         (try
+          (secure/protect-file! temporary)
           (spit temporary
                 (str (pr-str {:version 1
                               :children (mapv public-job (vals jobs))
@@ -52,6 +56,7 @@
            (.toPath temporary) (.toPath target)
            (into-array java.nio.file.CopyOption
                        [java.nio.file.StandardCopyOption/REPLACE_EXISTING]))
+          (secure/protect-file! target)
           (finally
             (when (.exists temporary) (.delete temporary))))))))
 
@@ -165,7 +170,7 @@
                  (doseq [[agent-id job] @jobs
                          :when (and (= id (:provider job))
                                     (nil? (:handle job))
-                                    (not (contains? #{:stopped :deleted}
+                                    (not (contains? #{:stopped :deleted :inactive}
                                                     (:status job))))]
                    (try
                      (let [handle (restore (public-job job))]
@@ -240,6 +245,44 @@
                  (if (= ::timeout result)
                    {:id agent-id :agent_id agent-id :status (:status job)}
                    result))))
+           hydrate!
+           (fn [agent-id]
+             (locking jobs
+               (let [job (get @jobs agent-id)]
+                 (when-not job
+                   (throw (ex-info "Subagent was not found"
+                                   {:agent-id agent-id})))
+                 (when (contains? #{:stopped :deleted} (:status job))
+                   (throw (ex-info "Subagent is not currently routable"
+                                   {:agent-id agent-id :status (:status job)})))
+                 (if (:handle job)
+                   job
+                   (let [provider (get @providers (:provider job))
+                         restore (:restore provider)]
+                     (when-not (fn? restore)
+                       (throw (ex-info "Subagent cannot be hydrated"
+                                       {:agent-id agent-id
+                                        :provider (:provider job)})))
+                     (let [handle (restore
+                                   (-> (public-job job)
+                                       (assoc :status
+                                              (or (:passive-status job)
+                                                  :completed))))]
+                       (swap! jobs update agent-id
+                              #(-> %
+                                   (assoc :handle handle
+                                          :status (or (:passive-status %)
+                                                      :completed)
+                                          :session-id (or (:session-id handle)
+                                                          (:session-id %))
+                                          :hydrated-at
+                                          (System/currentTimeMillis))
+                                   (dissoc :passive-status :passivated-at)))
+                       (persist!)
+                       (let [hydrated (get @jobs agent-id)]
+                         (kernel/emit! ctx :subagent/hydrated
+                                       (public-job hydrated))
+                         hydrated)))))))
            interrupt!
            (fn [agent-id]
              (if-let [job (get @jobs agent-id)]
@@ -250,20 +293,16 @@
                                {:agent-id agent-id}))))
            invoke!
            (fn [agent-id method params]
-             (let [job (get @jobs agent-id)
+             (let [job (hydrate! agent-id)
                    invoke (get-in job [:handle :invoke!])]
-               (when-not job
-                 (throw (ex-info "Subagent was not found" {:agent-id agent-id})))
                (when-not (fn? invoke)
                  (throw (ex-info "Subagent is not currently routable"
                                  {:agent-id agent-id :status (:status job)})))
                (invoke method params)))
            send!
            (fn [agent-id message]
-             (let [job (get @jobs agent-id)
+             (let [job (hydrate! agent-id)
                    message! (get-in job [:handle :message!])]
-               (when-not job
-                 (throw (ex-info "Subagent was not found" {:agent-id agent-id})))
                (when-not (fn? message!)
                  (throw (ex-info "Subagent is not currently routable"
                                  {:agent-id agent-id :status (:status job)})))
@@ -288,6 +327,26 @@
                  (merge {:id agent-id :agent_id agent-id :run_id run-id
                          :accepted true}
                         (dissoc accepted :result :task)))))
+           passivate!
+           (fn [agent-id]
+             (locking jobs
+               (when-let [job (get @jobs agent-id)]
+                 (when (= :running (:status job))
+                   (throw (ex-info "Running subagent cannot be passivated"
+                                   {:agent-id agent-id})))
+                 (when-let [dispose! (get-in job [:handle :dispose!])]
+                   (dispose!)
+                   (swap! jobs update agent-id
+                          #(-> %
+                               (assoc :passive-status (:status %)
+                                      :status :inactive
+                                      :handle nil
+                                      :passivated-at
+                                      (System/currentTimeMillis))))
+                   (persist!)
+                   (kernel/emit! ctx :subagent/passivated
+                                 (public-job (get @jobs agent-id)))
+                   true))))
            stop!
            (fn [agent-id]
              (when-let [job (get @jobs agent-id)]
@@ -322,6 +381,8 @@
             :interrupt! interrupt!
             :invoke! invoke!
             :send! send!
+            :hydrate! hydrate!
+            :passivate! passivate!
             :stop! stop!
             :delete! delete!
             :release! delete!

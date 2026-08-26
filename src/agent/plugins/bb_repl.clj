@@ -1,6 +1,7 @@
 (ns agent.plugins.bb-repl
-  "Persistent external Babashka process exposed as an execution service."
+  "Persistent external Clojure-family process exposed as an execution service."
   (:require [agent.kernel :as kernel]
+            [agent.secure-files :as secure]
             [agent.sandbox :as sandbox]
             [babashka.fs :as fs]
             [babashka.process :as process]
@@ -32,12 +33,17 @@
        "  (subpath \"/Library\")\n"
        "  (subpath \"/private\")\n"
        "  (subpath \"/dev\")\n"
+       "  (subpath (param \"REPL_COMMAND\"))\n"
+       "  (subpath (param \"REPL_RUNTIME\"))\n"
+       "  (subpath (param \"JAVA_RUNTIME\"))\n"
+       "  (subpath (param \"M2_REPOSITORY\"))\n"
+       "  (subpath (param \"GITLIBS\"))\n"
        "  (subpath (param \"WORKSPACE\")))\n"
        "(allow file-write*\n"
        "  (subpath (param \"WRITABLE\"))\n"
        "  (subpath (param \"ARTIFACT\")))\n"))
 
-(defn- absolute-classpath []
+(defn- absolute-classpath-entries []
   (let [separator (System/getProperty "path.separator")
         cwd (fs/path (System/getProperty "user.dir"))]
     (->> (str/split (System/getProperty "java.class.path")
@@ -46,32 +52,144 @@
                  (str (if (fs/absolute? path)
                         path
                         (fs/absolutize (fs/path cwd path))))))
-         (str/join separator))))
+         vec)))
 
-(defn- worker-command [{:keys [command root sandbox writable-root artifact-root]}]
-  (let [base [(str command) "-cp" (absolute-classpath)
-              "-m" "agent.repl-worker"]]
+(defn- absolute-classpath []
+  (str/join (System/getProperty "path.separator")
+            (absolute-classpath-entries)))
+
+(def ^:private deps-path-keys
+  #{:paths :extra-paths :replace-paths})
+
+(defn- absolute-project-path [root value]
+  (if (and (string? value) (not (fs/absolute? (fs/path value))))
+    (str (fs/absolutize (fs/path root value)))
+    value))
+
+(defn- absolutize-project-deps [root value]
+  (cond
+    (map? value)
+    (reduce-kv
+     (fn [result key nested]
+       (assoc result key
+              (cond
+                (= :local/root key)
+                (absolute-project-path root nested)
+
+                (and (contains? deps-path-keys key) (vector? nested))
+                (mapv #(absolute-project-path root %) nested)
+
+                :else
+                (absolutize-project-deps root nested))))
+     (empty value)
+     value)
+
+    (vector? value) (mapv #(absolutize-project-deps root %) value)
+    (set? value) (set (map #(absolutize-project-deps root %) value))
+    (seq? value) (doall (map #(absolutize-project-deps root %) value))
+    :else value))
+
+(defn- prepare-jvm-project! [{:keys [root writable-root project-deps]}]
+  (let [source (io/file (str (fs/path root "deps.edn")))
+        project (if (and (not= false project-deps) (.isFile source))
+                  (edn/read-string (slurp source))
+                  {})
+        project (absolutize-project-deps root project)
+        paths (->> (concat (:paths project) (absolute-classpath-entries))
+                   (remove str/blank?)
+                   distinct
+                   vec)
+        target (io/file (str (fs/path writable-root "deps.edn")))]
+    (secure/ensure-owner-file! target)
+    (spit target (str (pr-str (assoc project :paths paths)) "\n"))
+    target))
+
+(defn- backend-label [backend]
+  (case backend
+    :babashka "Babashka"
+    :jvm-clojure "JVM Clojure"))
+
+(defn- wire-backend [backend]
+  (case backend
+    :babashka "bb-repl"
+    :jvm-clojure "jvm-clojure-repl"))
+
+(defn- resolve-backend [plugin-config backend environment]
+  (if (contains? plugin-config :backend)
+    backend
+    (or (some-> environment keyword) backend)))
+
+(defn- runtime-root [command]
+  (let [real (fs/real-path command)]
+    (str (or (some-> real fs/parent fs/parent) (fs/parent real)))))
+
+(defn- java-runtime-root [fallback]
+  (or (some-> (System/getenv "JAVA_HOME") fs/path fs/absolutize str)
+      (some-> (fs/which "java") fs/real-path fs/parent fs/parent str)
+      (str fallback)))
+
+(defn- alias-argument [aliases]
+  (str "-M"
+       (apply str
+              (map #(str ":" (if (keyword? %) (subs (str %) 1) %)) aliases))))
+
+(defn- worker-command
+  [{:keys [backend command root sandbox writable-root artifact-root
+           aliases jvm-opts repl-command repl-runtime java-runtime
+           m2-repository gitlibs]}]
+  (let [base (case backend
+               :babashka
+               [(str command) "-cp" (absolute-classpath)
+                "-m" "agent.repl-worker"]
+
+               :jvm-clojure
+               (into [(str command) "-Srepro"]
+                     (concat (map #(if (str/starts-with? % "-J")
+                                     %
+                                     (str "-J" %))
+                                  jvm-opts)
+                             [(alias-argument aliases)
+                              "-m" "agent.repl-worker"])))]
     (case sandbox
       :none base
       :seatbelt (into ["/usr/bin/sandbox-exec"
                        "-D" (str "WORKSPACE=" root)
                        "-D" (str "WRITABLE=" writable-root)
                        "-D" (str "ARTIFACT=" artifact-root)
+                       "-D" (str "REPL_COMMAND=" repl-command)
+                       "-D" (str "REPL_RUNTIME=" repl-runtime)
+                       "-D" (str "JAVA_RUNTIME=" java-runtime)
+                       "-D" (str "M2_REPOSITORY=" m2-repository)
+                       "-D" (str "GITLIBS=" gitlibs)
                        "-p" seatbelt-profile]
                       base))))
 
-(defn- start-worker! [{:keys [root writable-root artifact-root agent-id
-                              state-path outbox-path]
+(defn- start-worker! [{:keys [backend root writable-root artifact-root agent-id
+                              state-path outbox-path gitlibs]
                        :as config}]
   (fs/create-dirs writable-root)
   (fs/create-dirs artifact-root)
+  (secure/protect-managed-parents! writable-root)
+  (secure/protect-managed-parents! artifact-root)
+  (secure/protect-tree! writable-root)
+  (secure/protect-tree! artifact-root)
+  (when (= :jvm-clojure backend)
+    (prepare-jvm-project! config)
+    (fs/create-dirs (fs/path writable-root ".clojure"))
+    (fs/create-dirs (fs/path writable-root ".cpcache-user")))
   (let [child (process/process
                {:cmd (worker-command config)
-                :dir (str root)
-                :extra-env {"DAO_AGENT_ID" agent-id
-                            "DAO_AGENT_ARTIFACT_ROOT" (str artifact-root)
-                            "DAO_AGENT_STATE_PATH" (str state-path)
-                            "DAO_AGENT_OUTBOX_PATH" (str outbox-path)}
+                :dir (str (if (= :jvm-clojure backend) writable-root root))
+                :extra-env
+                (cond-> {"DAO_AGENT_ID" agent-id
+                         "DAO_AGENT_ARTIFACT_ROOT" (str artifact-root)
+                         "DAO_AGENT_STATE_PATH" (str state-path)
+                         "DAO_AGENT_OUTBOX_PATH" (str outbox-path)
+                         "DAO_REPL_BACKEND" (wire-backend backend)}
+                  (= :jvm-clojure backend)
+                  (assoc "CLJ_CONFIG" (str (fs/path writable-root ".clojure"))
+                         "CLJ_CACHE" (str (fs/path writable-root ".cpcache-user"))
+                         "GITLIBS" (str gitlibs)))
                 :err :inherit})]
     {:process child
      :writer (io/writer (:in child))
@@ -90,9 +208,9 @@
 (defn- repl-namespace [agent-id]
   (str "dao.agent." (str/replace agent-id #"[^A-Za-z0-9_-]" "-")))
 
-(defn- failed-result [agent-id message]
+(defn- failed-result [backend agent-id message]
   {:ok false
-   :backend "bb-repl"
+   :backend (wire-backend backend)
    :namespace (repl-namespace agent-id)
    :stdout ""
    :stderr ""
@@ -125,13 +243,15 @@
         (throw (ex-info "REPL evaluation timed out" {:repl-timeout true})))
 
       (nil? line)
-      (throw (ex-info "Babashka REPL process exited unexpectedly"
+      (throw (ex-info (str (backend-label (:backend config))
+                           " REPL process exited unexpectedly")
                       {:repl-exited true}))
 
       :else
       (let [response (edn/read-string line)]
         (when-not (= (:id request) (:id response))
-          (throw (ex-info "Babashka REPL response id did not match" {})))
+          (throw (ex-info (str (backend-label (:backend config))
+                               " REPL response id did not match") {})))
         (dissoc response :id)))))
 
 (defn- start-and-replay! [state lifecycle config]
@@ -199,6 +319,7 @@
                                    :timeout :crash)
                  :last-error (ex-message error))
           (failed-result
+           (:backend config)
            (:agent-id config)
            (if (:repl-timeout (ex-data error))
              (str "Evaluation timed out after " (:timeout-ms config)
@@ -220,27 +341,54 @@
    :description "Persistent, restartable Babashka REPL execution backend."
    :provides #{:execution/repl}
    :start
-   (fn [ctx {:keys [root command sandbox writable-dir timeout-ms max-code-chars
-                    max-output-chars print-length print-level agent-id]
+   (fn [ctx {:keys [backend root command sandbox writable-dir timeout-ms
+                    max-code-chars max-output-chars print-length print-level
+                    agent-id project-deps aliases jvm-opts]
+             :as plugin-config
              :or {root "."
-                  command "bb"
+                  backend :babashka
                   sandbox :auto
                   writable-dir ".bb-agent/sandbox"
                   timeout-ms 10000
                   max-code-chars 50000
                   max-output-chars 20000
                   print-length 200
-                  print-level 20}}]
+                  print-level 20
+                  project-deps true
+                  aliases []
+                  jvm-opts []}}]
+     (let [backend (resolve-backend plugin-config backend
+                                    (System/getenv "DAO_REPL_BACKEND"))]
+      (when-not (contains? #{:babashka :jvm-clojure} backend)
+       (throw (ex-info "Unsupported Clojure REPL backend"
+                       {:backend backend
+                        :supported [:babashka :jvm-clojure]})))
      (when-not (and (pos-int? timeout-ms)
                     (pos-int? max-code-chars)
                     (pos-int? max-output-chars)
                     (pos-int? print-length)
                     (pos-int? print-level))
-       (throw (ex-info "Babashka REPL numeric limits must be positive integers"
+       (throw (ex-info (str (backend-label backend)
+                            " REPL numeric limits must be positive integers")
                        {:timeout-ms timeout-ms
                         :max-code-chars max-code-chars
                         :max-output-chars max-output-chars})))
-     (let [workspace-root (fs/real-path root)
+     (when-not (boolean? project-deps)
+       (throw (ex-info "JVM Clojure :project-deps must be boolean"
+                       {:project-deps project-deps})))
+     (when-not (and (vector? aliases)
+                    (every? #(or (keyword? %)
+                                 (and (string? %) (re-matches #"[A-Za-z0-9._/-]+" %)))
+                            aliases))
+       (throw (ex-info "JVM Clojure :aliases must be a vector of keywords or names"
+                       {:aliases aliases})))
+     (when-not (and (vector? jvm-opts) (every? string? jvm-opts))
+       (throw (ex-info "JVM Clojure :jvm-opts must be a vector of strings"
+                       {:jvm-opts jvm-opts})))
+     (let [command (or command (case backend
+                                 :babashka "bb"
+                                 :jvm-clojure "clojure"))
+           workspace-root (fs/real-path root)
            mode (sandbox/resolve-mode sandbox)]
        (if (= :unavailable mode)
          (do
@@ -249,12 +397,14 @@
             {:backend :unavailable
              :sandbox :unavailable
              :available? false
-             :reason "No safe Babashka sandbox is available on this OS."})
+             :reason (str "No safe " (backend-label backend)
+                          " sandbox is available on this OS.")})
            nil)
          (let [command-path
                (or (fs/which command)
-                   (throw (ex-info "Babashka command was not found"
-                                   {:command command})))
+                   (throw (ex-info (str (backend-label backend)
+                                        " command was not found")
+                                   {:backend backend :command command})))
                store (kernel/service ctx :session/store)
                session-id (or (:session-id store) (System/getenv "DAO_AGENT_ID")
                               "ephemeral")
@@ -277,6 +427,13 @@
                                 :replayed-cells 0})
                artifact-root (fs/path workspace-root ".bb-agent" "artifacts"
                                       session-id "agents" agent-id "repl")
+               home-root (fs/path (System/getProperty "user.home"))
+               m2-repository (fs/absolutize
+                              (fs/path home-root ".m2"))
+               gitlibs (fs/absolutize (fs/path home-root ".gitlibs"))
+               repl-command (str (fs/parent (fs/absolutize command-path)))
+               repl-runtime (runtime-root command-path)
+               java-runtime (java-runtime-root repl-runtime)
                cells-path (str (fs/path artifact-root "cells.jsonl"))
                state-service (kernel/service ctx :agent/durable-state)
                state-path (or (:path state-service)
@@ -289,11 +446,20 @@
                    (when store
                      ((:append! store) "repl/restarted" data))
                    (kernel/emit! ctx :repl/restarted data)))
-               config {:root workspace-root
+               config {:backend backend
+                       :root workspace-root
                        :command command-path
                        :sandbox mode
                        :writable-root writable-root
                        :artifact-root artifact-root
+                       :aliases aliases
+                       :jvm-opts jvm-opts
+                       :project-deps project-deps
+                       :repl-command repl-command
+                       :repl-runtime repl-runtime
+                       :java-runtime java-runtime
+                       :m2-repository m2-repository
+                       :gitlibs gitlibs
                        :state-path state-path
                        :outbox-path outbox-path
                        :cells-path cells-path
@@ -370,21 +536,25 @@
                           :current-eval nil)
                    {:closed true}))
                service
-               {:backend :babashka
+               {:backend backend
                 :sandbox mode
                 :available? true
                 :writable-root (str writable-root)
                 :namespace (repl-namespace agent-id)
                 :status (fn [] (assoc @lifecycle
-                                      :backend :babashka
+                                      :backend backend
                                       :namespace (repl-namespace agent-id)))
                 :eval! eval!
                 :interrupt! interrupt!
                 :reset! reset-repl!
-                :describe (fn [] {:backend :babashka
+                :describe (fn [] {:backend backend
                                   :agent-id agent-id
                                   :namespace (repl-namespace agent-id)
                                   :sandbox mode
+                                  :command (str command-path)
+                                  :project-deps (and (= :jvm-clojure backend)
+                                                     project-deps)
+                                  :aliases (when (= :jvm-clojure backend) aliases)
                                   :state-path state-path
                                   :cells-path cells-path
                                   :recovery :durable-state-and-replay-safe-cells})
@@ -394,4 +564,4 @@
               (stop-worker! @state)
               (reset! state nil)
               (swap! lifecycle assoc :status :closed :pid nil
-                     :current-eval nil))))))})
+                     :current-eval nil)))))))})

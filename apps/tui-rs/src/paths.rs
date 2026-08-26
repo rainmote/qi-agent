@@ -3,6 +3,7 @@ use std::{
     env, fs,
     path::{Path, PathBuf},
 };
+use uuid::Uuid;
 
 #[derive(Clone, Debug)]
 pub struct RuntimePaths {
@@ -61,7 +62,15 @@ impl RuntimePaths {
     }
 
     pub fn worker_socket(&self, worker_id: &str) -> PathBuf {
-        self.runtime_dir.join(format!("worker-{worker_id}.sock"))
+        // macOS limits Unix-domain socket paths to roughly 104 bytes. Its
+        // default per-user temporary directory is already long, so embedding
+        // the full worker UUID makes an otherwise normal installation fail.
+        // The descriptor and registration still carry the full worker ID;
+        // this stable 80-bit name is only a compact filesystem endpoint.
+        let digest = Uuid::new_v5(&Uuid::NAMESPACE_OID, worker_id.as_bytes())
+            .simple()
+            .to_string();
+        self.runtime_dir.join(format!("w-{}.sock", &digest[..20]))
     }
 
     pub fn worker_descriptor(&self, worker_id: &str) -> PathBuf {
@@ -129,4 +138,44 @@ pub fn set_owner_only_dir(_path: &Path) -> Result<()> {
 #[cfg(not(unix))]
 pub fn set_owner_only_file(_path: &Path) -> Result<()> {
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::ffi::OsStrExt;
+
+    fn paths(runtime_dir: PathBuf) -> RuntimePaths {
+        RuntimePaths {
+            public_socket: runtime_dir.join("daemon.sock"),
+            daemon_lock: runtime_dir.join("daemon.lock"),
+            database: runtime_dir.join("state/supervisor.sqlite"),
+            workers_dir: runtime_dir.join("state/workers"),
+            logs_dir: runtime_dir.join("state/logs"),
+            client_id: runtime_dir.join("state/client-id"),
+            state_dir: runtime_dir.join("state"),
+            runtime_dir,
+        }
+    }
+
+    #[test]
+    fn worker_socket_stays_below_the_macos_sun_len_limit() {
+        let runtime = PathBuf::from("/var/folders/fg/v9z1bzlj0g96pcgpmg2ht3b80000gn/T/dao-501");
+        let socket = paths(runtime).worker_socket("worker-e8e646b7-3451-4c9d-97b6-8cecf266ca11");
+        assert!(socket.as_os_str().as_bytes().len() < 104, "{socket:?}");
+    }
+
+    #[test]
+    fn worker_socket_names_are_stable_and_distinct() {
+        let paths = paths(PathBuf::from("/tmp/dao-501"));
+        let first = paths.worker_socket("worker-00000000-0000-0000-0000-000000000001");
+        assert_eq!(
+            first,
+            paths.worker_socket("worker-00000000-0000-0000-0000-000000000001")
+        );
+        assert_ne!(
+            first,
+            paths.worker_socket("worker-00000000-0000-0000-0000-000000000002")
+        );
+    }
 }

@@ -24,6 +24,7 @@ struct Harness {
     socket: PathBuf,
     repository: PathBuf,
     config: PathBuf,
+    extra_env: Vec<(String, String)>,
 }
 
 impl Harness {
@@ -32,6 +33,10 @@ impl Harness {
     }
 
     fn start_with_config(config: &str) -> Self {
+        Self::start_with_env(config, &[])
+    }
+
+    fn start_with_env(config: &str, extra_env: &[(&str, &str)]) -> Self {
         let serial = FAULT_TEST_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -50,7 +55,12 @@ impl Harness {
         fs::create_dir_all(&workspace).unwrap();
         let socket = runtime.join("daemon.sock");
         let config = repository.join(config);
-        let mut child = Command::new(env!("CARGO_BIN_EXE_dao"))
+        let extra_env: Vec<_> = extra_env
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_dao"));
+        command
             .arg("daemon")
             .arg("serve")
             .arg("--repository-root")
@@ -63,9 +73,11 @@ impl Harness {
             .env("DAO_REPOSITORY_ROOT", &repository)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .unwrap();
+            .stderr(Stdio::inherit());
+        for (key, value) in &extra_env {
+            command.env(key, value);
+        }
+        let mut child = command.spawn().unwrap();
         let started = Instant::now();
         while !socket.exists() {
             if let Some(status) = child.try_wait().unwrap() {
@@ -84,6 +96,7 @@ impl Harness {
             socket,
             repository,
             config,
+            extra_env,
         }
     }
 
@@ -94,7 +107,8 @@ impl Harness {
     fn kill_and_restart_daemon(&mut self) {
         self.child.kill().unwrap();
         self.child.wait().unwrap();
-        self.child = Command::new(env!("CARGO_BIN_EXE_dao"))
+        let mut command = Command::new(env!("CARGO_BIN_EXE_dao"));
+        command
             .arg("daemon")
             .arg("serve")
             .arg("--repository-root")
@@ -107,9 +121,11 @@ impl Harness {
             .env("DAO_REPOSITORY_ROOT", &self.repository)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .unwrap();
+            .stderr(Stdio::inherit());
+        for (key, value) in &self.extra_env {
+            command.env(key, value);
+        }
+        self.child = command.spawn().unwrap();
         let started = Instant::now();
         loop {
             if UnixStream::connect(&self.socket).is_ok() {
@@ -135,6 +151,43 @@ impl Drop for Harness {
         let _ = self.child.wait();
         let _ = fs::remove_dir_all(&self.root);
     }
+}
+
+#[test]
+fn agent_create_can_select_a_config_independent_of_the_daemon_default() {
+    let harness = Harness::start();
+    let alternate_config = harness.repository.join("examples/daemon-goal-mock.edn");
+    let mut client = TestClient::connect(&harness.socket, "per-agent-config-client").unwrap();
+    let created = client
+        .call(
+            None,
+            "agent.create",
+            json!({
+                "workspace": harness.workspace(),
+                "config_path": alternate_config,
+                "repl_backend": "babashka",
+            }),
+            Some("create-with-alternate-config"),
+        )
+        .unwrap();
+
+    assert_eq!(
+        created
+            .pointer("/agent/config_path")
+            .and_then(Value::as_str),
+        Some(alternate_config.to_string_lossy().as_ref())
+    );
+    assert_eq!(
+        created
+            .pointer("/agent/repl_backend")
+            .and_then(Value::as_str),
+        Some("babashka")
+    );
+    let agents = client.call(None, "agent.list", json!({}), None).unwrap();
+    assert!(agents.as_array().unwrap().iter().any(|agent| {
+        agent.get("config_path").and_then(Value::as_str)
+            == Some(alternate_config.to_string_lossy().as_ref())
+    }));
 }
 
 struct TestClient {
@@ -202,6 +255,158 @@ impl TestClient {
             }
         }
     }
+}
+
+#[test]
+fn idle_worker_is_passivated_without_deleting_session_and_hydrates_on_attach() {
+    let harness = Harness::start_with_env(
+        "examples/tui-mock.edn",
+        &[("DAO_IDLE_EVICTION_MINUTES", "0.001")],
+    );
+    let mut client = TestClient::connect(&harness.socket, "idle-lifecycle-client").unwrap();
+    let created = client
+        .call(
+            None,
+            "agent.create",
+            json!({"workspace": harness.workspace()}),
+            Some("create-idle-agent"),
+        )
+        .unwrap();
+    let agent_id = created
+        .pointer("/agent/agent_id")
+        .and_then(Value::as_str)
+        .unwrap()
+        .to_owned();
+    let session_id = created
+        .pointer("/snapshot/session_id")
+        .and_then(Value::as_str)
+        .unwrap()
+        .to_owned();
+    let session_path = PathBuf::from(
+        created
+            .pointer("/agent/session_path")
+            .and_then(Value::as_str)
+            .unwrap(),
+    );
+    let generation = created
+        .pointer("/snapshot/generation")
+        .and_then(Value::as_u64)
+        .unwrap();
+
+    thread::sleep(Duration::from_millis(150));
+    let update = client
+        .call(None, "daemon.update", json!({}), Some("sweep-idle-agent"))
+        .unwrap();
+    assert!(
+        update
+            .get("idle_sweep")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|entry| entry.get("evicted") == Some(&Value::Bool(true)))
+    );
+    assert!(session_path.is_file(), "idle eviction deleted the session");
+    let agents = client.call(None, "agent.list", json!({}), None).unwrap();
+    let inactive = agents
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|agent| agent.get("agent_id").and_then(Value::as_str) == Some(&agent_id))
+        .unwrap();
+    assert_eq!(inactive.get("status"), Some(&json!("inactive")));
+    assert_eq!(inactive.get("residency"), Some(&json!("inactive")));
+
+    let attached = client
+        .call(
+            Some(&agent_id),
+            "agent.attach",
+            json!({"agent_id": agent_id}),
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        attached.pointer("/snapshot/session_id"),
+        Some(&json!(session_id))
+    );
+    assert!(
+        attached
+            .pointer("/snapshot/generation")
+            .and_then(Value::as_u64)
+            .is_some_and(|value| value > generation)
+    );
+    assert_eq!(
+        attached.pointer("/agent/residency"),
+        Some(&json!("resident"))
+    );
+}
+
+#[test]
+fn active_schedule_pins_otherwise_idle_worker() {
+    let harness = Harness::start_with_env(
+        "examples/daemon-goal-mock.edn",
+        &[("DAO_IDLE_EVICTION_MINUTES", "0.001")],
+    );
+    let mut client = TestClient::connect(&harness.socket, "schedule-pin-client").unwrap();
+    let created = client
+        .call(
+            None,
+            "agent.create",
+            json!({"workspace": harness.workspace()}),
+            Some("create-schedule-pin-agent"),
+        )
+        .unwrap();
+    let agent_id = created
+        .pointer("/agent/agent_id")
+        .and_then(Value::as_str)
+        .unwrap()
+        .to_owned();
+    client
+        .call(
+            Some(&agent_id),
+            "agent.attach",
+            json!({"agent_id": agent_id}),
+            None,
+        )
+        .unwrap();
+    client
+        .call(
+            Some(&agent_id),
+            "schedule.add",
+            json!({"prompt": "run much later", "delay_ms": 60_000}),
+            Some("add-schedule-pin"),
+        )
+        .unwrap();
+    client
+        .call(Some(&agent_id), "agent.detach", json!({}), None)
+        .unwrap();
+    thread::sleep(Duration::from_millis(150));
+    let update = client
+        .call(None, "daemon.update", json!({}), Some("sweep-schedule-pin"))
+        .unwrap();
+    let outcome = update
+        .get("idle_sweep")
+        .and_then(Value::as_array)
+        .and_then(|items| items.first())
+        .unwrap();
+    assert_eq!(outcome.get("evicted"), Some(&Value::Bool(false)));
+    assert!(
+        outcome
+            .get("idle_pin_reasons")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|reason| reason
+                .as_str()
+                .is_some_and(|value| value.starts_with("schedule:")))
+    );
+    let agents = client.call(None, "agent.list", json!({}), None).unwrap();
+    let agent = agents
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|agent| agent.get("agent_id").and_then(Value::as_str) == Some(&agent_id))
+        .unwrap();
+    assert_eq!(agent.get("residency"), Some(&json!("resident")));
 }
 
 #[test]
@@ -437,6 +642,115 @@ fn retained_child_is_listed_attachable_and_has_its_own_repl() {
             Some("shutdown-child-test"),
         )
         .unwrap();
+}
+
+#[test]
+fn idle_retained_child_passivates_and_hydrates_on_demand() {
+    let harness = Harness::start_with_env(
+        "examples/daemon-subagent-mock.edn",
+        &[("DAO_IDLE_EVICTION_MINUTES", "0.001")],
+    );
+    let mut client = TestClient::connect(&harness.socket, "child-idle-client").unwrap();
+    let created = client
+        .call(
+            None,
+            "agent.create",
+            json!({"workspace": harness.workspace()}),
+            Some("create-child-idle-root"),
+        )
+        .unwrap();
+    let root_id = created
+        .pointer("/agent/agent_id")
+        .and_then(Value::as_str)
+        .unwrap()
+        .to_owned();
+    client
+        .call(
+            Some(&root_id),
+            "agent.attach",
+            json!({"agent_id": root_id}),
+            None,
+        )
+        .unwrap();
+    client
+        .call(
+            Some(&root_id),
+            "turn.submit",
+            json!({"message": "spawn the child"}),
+            Some("spawn-idle-child"),
+        )
+        .unwrap();
+    let started = Instant::now();
+    let child_id = loop {
+        let agents = client.call(None, "agent.list", json!({}), None).unwrap();
+        if let Some(child) = agents.as_array().unwrap().iter().find(|agent| {
+            agent.get("is_child") == Some(&Value::Bool(true))
+                && agent.get("status") == Some(&json!("completed"))
+        }) {
+            break child
+                .get("agent_id")
+                .and_then(Value::as_str)
+                .unwrap()
+                .to_owned();
+        }
+        assert!(started.elapsed() < PROCESS_TIMEOUT);
+        thread::sleep(Duration::from_millis(50));
+    };
+
+    thread::sleep(Duration::from_millis(150));
+    let update = client
+        .call(
+            None,
+            "daemon.update",
+            json!({}),
+            Some("passivate-idle-child"),
+        )
+        .unwrap();
+    assert!(
+        update
+            .get("idle_sweep")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .flat_map(|entry| {
+                entry
+                    .get("child_passivations")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+            })
+            .any(|entry| entry.get("agent_id").and_then(Value::as_str) == Some(&child_id))
+    );
+    let agents = client.call(None, "agent.list", json!({}), None).unwrap();
+    let passive = agents
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|agent| agent.get("agent_id").and_then(Value::as_str) == Some(&child_id))
+        .unwrap();
+    assert_eq!(passive.get("status"), Some(&json!("inactive")));
+    assert_eq!(passive.get("residency"), Some(&json!("inactive")));
+
+    let attached = client
+        .call(
+            Some(&child_id),
+            "agent.attach",
+            json!({"agent_id": child_id}),
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        attached.pointer("/snapshot/agent_id"),
+        Some(&json!(child_id))
+    );
+    let agents = client.call(None, "agent.list", json!({}), None).unwrap();
+    let hydrated = agents
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|agent| agent.get("agent_id").and_then(Value::as_str) == Some(&child_id))
+        .unwrap();
+    assert_eq!(hydrated.get("residency"), Some(&json!("resident")));
 }
 
 #[test]

@@ -205,7 +205,7 @@
                 :required ["command"]
                 :properties {"command" {:type "string"}
                              "cwd" {:type "string"}
-                             "timeout_ms" {:type "integer"}}
+                             "timeout_ms" {:type "integer" :minimum 1}}
                 :additionalProperties false}
    :approval-target
    (fn [{:keys [command cwd]}]

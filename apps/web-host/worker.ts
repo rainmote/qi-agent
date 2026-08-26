@@ -27,7 +27,8 @@ const mutationMethods = new Set([
   "ui.shortcut.invoke", "model.select", "command.execute", "repl.eval",
   "repl.interrupt", "repl.reset", "state.put", "state.delete", "agent.message.send",
   "subagent.stop", "subagent.delete", "schedule.add", "schedule.cancel", "goal.set",
-  "goal.cancel", "goal.complete", "daemon.shutdown",
+  "goal.cancel", "goal.complete", "goal.resume", "daemon.update", "daemon.backup",
+  "daemon.shutdown",
 ]);
 
 export class AgentWorker extends EventEmitter {

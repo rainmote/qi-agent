@@ -6,7 +6,8 @@
             [agent.schema :as schema]
             [cheshire.core :as json]
             [clojure.java.io :as io]
-            [clojure.string :as str]))
+            [clojure.string :as str])
+  (:import [java.time Instant]))
 
 (def ^:private default-allowed-tools
   #{"current_time" "read" "read_file" "ls" "find" "grep" "load_skill"})
@@ -178,6 +179,9 @@
             agent.plugins.bb-repl
             (assoc-in spec [:config :agent-id] agent-id)
 
+            agent.plugins.jvm-clojure-repl
+            (assoc-in spec [:config :agent-id] agent-id)
+
             spec))
         plugins (mapv configure (:plugins profile))
         namespaces (set (map :ns plugins))
@@ -186,7 +190,9 @@
                   (conj {:ns 'agent.plugins.durable-state
                          :config {:root "." :agent-id agent-id}})
 
-                  (not (contains? namespaces 'agent.plugins.bb-repl))
+                  (not (or (contains? namespaces 'agent.plugins.bb-repl)
+                           (contains? namespaces
+                                      'agent.plugins.jvm-clojure-repl)))
                   (conj {:ns 'agent.plugins.bb-repl
                          :config {:root "." :sandbox :auto
                                   :agent-id agent-id}}))]
@@ -215,6 +221,30 @@
                        (= message-id (get-in event [:data :message_id])))
               event))
           (reverse ((:events store))))))
+
+(defn- event-time-ms [event]
+  (try
+    (some-> (:at event) str Instant/parse .toEpochMilli)
+    (catch Throwable _ nil)))
+
+(defn- child-session-summary [child]
+  (let [store (kernel/require-service child :session/store)
+        session (kernel/require-service child :agent/session)
+        events ((:events store))]
+    {:session_id (:session-id store)
+     :path (:path store)
+     :cursor (or (:seq (last events)) 0)
+     :lifecycle (if (some #(contains? #{"message" :message} (:type %))
+                           events)
+                  :live
+                  :draft)
+     :activity (if (= :idle (:phase ((:state session)))) :idle :working)
+     :last_activity_at_ms
+     (or (when-let [timestamps (seq (keep event-time-ms events))]
+           (apply max timestamps))
+         (when-let [path (:path store)]
+           (let [file (io/file path)]
+             (when (.isFile file) (.lastModified file)))))}))
 
 (defn- receive-child-message! [child agent-id payload]
   (let [{:keys [from message message_id]}
@@ -369,6 +399,8 @@
               :state ((:state session))
               :repl ((:status (kernel/require-service
                                child :execution/repl)))})
+           "session.summary"
+           (child-session-summary child)
            (throw (ex-info "Unsupported retained child method"
                            {:agent-id agent-id :method method})))))
      :message!

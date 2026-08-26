@@ -13,6 +13,8 @@
             [agent.plugins.chatgpt]
             [agent.plugins.omp]
             [agent.plugins.openai]
+            [agent.plugins.openai-responses]
+            [agent.plugins.bb-repl :as process-repl]
             [agent.plugins.remote-api :as remote-api]
             [agent.plugins.subagent]
             [agent.plugins.subagent-in-process]
@@ -44,6 +46,44 @@
     (is (not (str/includes? launcher "cd ")))
     (is (install/path-entry? "/usr/bin:/opt/tools" "/opt/tools"))
     (is (not (install/path-entry? "/usr/bin:/opt/toolsmith" "/opt/tools")))))
+
+(deftest installer-stages-only-runtime-sources-and-one-release-binary
+  (let [root (.toFile (java.nio.file.Files/createTempDirectory
+                       "dao-install-stage-"
+                       (make-array java.nio.file.attribute.FileAttribute 0)))
+        source (io/file root "source")
+        stage (io/file root "stage")
+        copy-source! (var-get (ns-resolve 'agent.install 'copy-source!))
+        prune-build-stage! (var-get (ns-resolve 'agent.install
+                                                'prune-build-stage!))]
+    (try
+      (doseq [directory ["src/agent" "plugins/example" "apps/tui-rs/src"
+                         "apps/tui-rs/target/debug" "apps/web/src"]]
+        (.mkdirs (io/file source directory)))
+      (doseq [[path value]
+              [["src/agent/cli.clj" "runtime"]
+               ["plugins/example/tool.clj" "plugin"]
+               ["apps/tui-rs/src/main.rs" "fn main() {}"]
+               ["apps/tui-rs/Cargo.toml" "[package]"]
+               ["apps/tui-rs/Cargo.lock" "# lock"]
+               ["apps/tui-rs/target/debug/cache" "large-cache"]
+               ["apps/web/src/App.tsx" "web-source"]
+               ["bb.edn" "{}"] ["agent.edn" "{}"]
+               ["LICENSE" "MIT"] ["README.md" "dao"]]]
+        (spit (io/file source path) value))
+      (copy-source! source stage)
+      (is (.isFile (io/file stage "src/agent/cli.clj")))
+      (is (.isFile (io/file stage "apps/tui-rs/src/main.rs")))
+      (is (not (.exists (io/file stage "apps/tui-rs/target"))))
+      (is (not (.exists (io/file stage "apps/web"))))
+      (let [release (io/file stage "apps/tui-rs/target/release")]
+        (.mkdirs release)
+        (spit (io/file release "dao") "binary")
+        (spit (io/file release "intermediate") "cache")
+        (prune-build-stage! stage)
+        (is (= ["dao"]
+               (->> (.listFiles release) (map #(.getName %)) sort vec))))
+      (finally (delete-tree! root)))))
 
 (deftest reversible-kernel-effects
   (let [ctx (kernel/create-context)
@@ -665,6 +705,143 @@
         (kernel/dispose-all! ctx)
         (delete-tree! directory)))))
 
+(deftest jvm-clojure-repl-builds-an-isolated-project-classpath
+  (let [directory (.toFile (java.nio.file.Files/createTempDirectory
+                            "dao-jvm-repl-project-"
+                            (make-array java.nio.file.attribute.FileAttribute
+                                        0)))
+        writable (io/file directory ".bb-agent" "sandbox" "agent-jvm")
+        prepare! (ns-resolve 'agent.plugins.bb-repl 'prepare-jvm-project!)
+        command-for (ns-resolve 'agent.plugins.bb-repl 'worker-command)]
+    (try
+      (.mkdirs (io/file directory "src"))
+      (.mkdirs (io/file directory "test"))
+      (.mkdirs writable)
+      (spit (io/file directory "deps.edn")
+            (pr-str {:paths ["src"]
+                     :deps {'example/local {:local/root "../shared"}}
+                     :aliases {:test {:extra-paths ["test"]}}}))
+      (prepare! {:root (.getCanonicalPath directory)
+                 :writable-root (.getCanonicalPath writable)})
+      (let [generated (edn/read-string (slurp (io/file writable "deps.edn")))
+            root (.getCanonicalPath directory)]
+        (is (some #{(str (io/file root "src"))} (:paths generated)))
+        (is (= (str (io/file root ".." "shared"))
+               (get-in generated [:deps 'example/local :local/root])))
+        (is (= [(str (io/file root "test"))]
+               (get-in generated [:aliases :test :extra-paths]))))
+      (is (= ["/opt/bin/clojure" "-Srepro" "-M" "-m"
+              "agent.repl-worker"]
+             (command-for {:backend :jvm-clojure
+                           :command "/opt/bin/clojure"
+                           :sandbox :none})))
+      (finally
+        (delete-tree! directory)))))
+
+(deftest per-agent-backend-selection-preserves-explicit-child-overrides
+  (let [resolve-backend (ns-resolve 'agent.plugins.bb-repl 'resolve-backend)]
+    (is (= :jvm-clojure
+           (resolve-backend {} :babashka "jvm-clojure")))
+    (is (= :babashka
+           (resolve-backend {:backend :babashka}
+                            :babashka
+                            "jvm-clojure")))))
+
+(deftest jvm-clojure-repl-reports-a-missing-runtime
+  (let [directory (.toFile (java.nio.file.Files/createTempDirectory
+                            "dao-jvm-repl-missing-"
+                            (make-array java.nio.file.attribute.FileAttribute
+                                        0)))]
+    (try
+      (try
+        (plugin/boot!
+         {:plugins
+          [{:ns 'agent.plugins.jvm-clojure-repl
+            :config {:root (str directory)
+                     :command "dao-test-missing-clojure-runtime"
+                     :sandbox :none}}]})
+        (is false "missing JVM Clojure runtime should reject the profile")
+        (catch clojure.lang.ExceptionInfo error
+          (is (str/includes? (ex-message error)
+                             "JVM Clojure command was not found"))
+          (is (= :jvm-clojure (:backend (ex-data error))))))
+      (finally
+        (delete-tree! directory)))))
+
+(deftest jvm-clojure-repl-provider-speaks-the-shared-worker-protocol
+  (let [directory (.toFile (java.nio.file.Files/createTempDirectory
+                            "dao-jvm-repl-protocol-"
+                            (make-array java.nio.file.attribute.FileAttribute
+                                        0)))
+        launcher (io/file directory "test-clojure-launcher")
+        shell-quote (fn [value]
+                      (str "'" (str/replace (str value) "'" "'\"'\"'") "'"))
+        classpath (->> (str/split (System/getProperty "java.class.path")
+                                  (re-pattern
+                                   (java.util.regex.Pattern/quote
+                                    (System/getProperty "path.separator"))))
+                       (map #(str (fs/absolutize %)))
+                       (str/join (System/getProperty "path.separator")))]
+    (try
+      (spit launcher
+            (str "#!/bin/sh\nexec " (shell-quote (fs/which "bb"))
+                 " -cp " (shell-quote classpath)
+                 " -m agent.repl-worker\n"))
+      (.setExecutable launcher true)
+      (let [ctx (plugin/boot!
+                 {:plugins
+                  [{:ns 'agent.plugins.jvm-clojure-repl
+                    :config {:root (str directory)
+                             :command (.getCanonicalPath launcher)
+                             :sandbox :none
+                             :aliases [:dev]
+                             :timeout-ms 5000}}]})]
+        (try
+          (let [repl (kernel/require-service ctx :execution/repl)]
+            (is (:ok ((:eval! repl) "(def answer 41)")))
+            (is (= "42" (:value ((:eval! repl) "(inc answer)"))))
+            (is (= "jvm-clojure-repl"
+                   (:backend ((:eval! repl) "answer"))))
+            (is (= :jvm-clojure (:backend ((:describe repl)))))
+            (is (= [:dev] (:aliases ((:describe repl)))))
+            (is (.isFile (io/file directory ".bb-agent" "sandbox"
+                                  "ephemeral" "deps.edn"))))
+          (finally
+            (kernel/dispose-all! ctx))))
+      (finally
+        (delete-tree! directory)))))
+
+(deftest jvm-clojure-repl-backend-is-persistent-when-installed
+  (if-let [clojure-command (fs/which "clojure")]
+    (let [directory (.toFile (java.nio.file.Files/createTempDirectory
+                              "dao-jvm-repl-"
+                              (make-array java.nio.file.attribute.FileAttribute
+                                          0)))
+          ctx (plugin/boot!
+               {:plugins
+                [{:ns 'agent.plugins.jvm-clojure-repl
+                  :config {:root (str directory)
+                           :command (str clojure-command)
+                           :sandbox :none
+                           :timeout-ms 30000}}
+                 {:ns 'agent.plugins.clojure-repl}]})]
+      (try
+        (let [repl (kernel/require-service ctx :execution/repl)
+              define-result ((:eval! repl) "(def answer 41)")
+              use-result ((:eval! repl)
+                          "(do (println (System/getProperty \"java.vm.name\")) (inc answer))")
+              tool (kernel/tool ctx "bb_repl")]
+          (is (:ok define-result))
+          (is (= "42" (:value use-result)))
+          (is (str/includes? (:stdout use-result) "VM"))
+          (is (= "jvm-clojure-repl" (:backend use-result)))
+          (is (= :jvm-clojure (:backend repl)))
+          (is (str/includes? (:description tool) "native JVM Clojure")))
+        (finally
+          (kernel/dispose-all! ctx)
+          (delete-tree! directory))))
+    (is true "native JVM integration test requires the clojure CLI")))
+
 (deftest babashka-repl-replays-only-explicit-safe-cells
   (let [directory (.toFile (java.nio.file.Files/createTempDirectory
                             "bb-agent-repl-recovery-"
@@ -1050,6 +1227,121 @@
                    ;; completed items in output_item.done events.
                    :response (assoc response :output [])})
        "\n\n"))
+
+(deftest official-openai-responses-request-retry-and-replay
+  (let [captured (atom [])
+        stream-events (atom [])
+        replies (atom
+                 [{:status 429 :body "retry later"}
+                  {:status 200
+                   :body (completed-event
+                          {:id "response-tool"
+                           :status "completed"
+                           :model "gpt-5.6-sol"
+                           :output
+                           [{:id "reason-1" :type "reasoning" :summary []}
+                            {:id "function-1"
+                             :type "function_call"
+                             :call_id "call-1"
+                             :name "demo"
+                             :arguments "{\"value\":1}"}]})}
+                  {:status 200
+                   :body (completed-event
+                          {:id "response-final"
+                           :status "completed"
+                           :model "gpt-5.6-sol"
+                           :output
+                           [{:id "message-1"
+                             :type "message"
+                             :role "assistant"
+                             :content [{:type "output_text" :text "done"}]}]
+                           :usage {:input_tokens 12 :output_tokens 2
+                                   :total_tokens 14}})}])]
+    (with-redefs [http/post
+                  (fn [url options]
+                    (swap! captured conj [url options])
+                    (let [reply (first @replies)]
+                      (swap! replies subvec 1)
+                      reply))]
+      (let [ctx (plugin/boot!
+                 {:plugins
+                  [{:ns 'agent.plugins.openai-responses
+                    :config {:model "gpt-5.6-sol"
+                             :api-key "test-key"
+                             :max-retries 1
+                             :retry-delay-ms 1}}]})]
+        (try
+          (kernel/on! (kernel/plugin-context ctx :test/openai-stream)
+                      :llm/stream
+                      (fn [_ event] (swap! stream-events conj event)))
+          (let [generate (kernel/require-service ctx :llm/generate)
+                tool-response
+                (generate
+                 {:system-prompt "system"
+                  :messages [{:role "user"
+                              :content [{:type :text :text "hello"}
+                                        {:type :image
+                                         :url "data:image/png;base64,AA=="
+                                         :detail "low"}]}]
+                  :tools [{:type "function"
+                           :function {:name "demo"
+                                      :description "demo"
+                                      :parameters {:type "object"}}}]})
+                assistant (:message tool-response)
+                final-response
+                (generate
+                 {:system-prompt "system"
+                  :messages [{:role "user" :content "hello"}
+                             assistant
+                             {:role "tool"
+                              :tool_call_id "call-1"
+                              :content {:ok true}}]
+                  :tools []})
+                [[first-url] [url first-options] [_ second-options]] @captured
+                first-body (json/parse-string (:body first-options) true)
+                second-body (json/parse-string (:body second-options) true)]
+            (is (= 3 (count @captured)))
+            (is (= first-url url))
+            (is (= "https://api.openai.com/v1/responses" url))
+            (is (= "Bearer test-key"
+                   (get-in first-options [:headers "authorization"])))
+            (is (nil? (get-in first-options
+                              [:headers "chatgpt-account-id"])))
+            (is (true? (:stream first-body)))
+            (is (false? (:store first-body)))
+            (is (= "system" (:instructions first-body)))
+            (is (= "demo" (get-in first-body [:tools 0 :name])))
+            (is (nil? (get-in first-body [:tools 0 :function])))
+            (is (= "input_image"
+                   (get-in first-body [:input 0 :content 1 :type])))
+            (is (= "tool_calls" (:finish-reason tool-response)))
+            (is (= "call-1" (get-in assistant [:tool_calls 0 :id])))
+            (is (= "reasoning" (get-in second-body [:input 1 :type])))
+            (is (= "function_call"
+                   (get-in second-body [:input 2 :type])))
+            (is (= "function_call_output"
+                   (get-in second-body [:input 3 :type])))
+            (is (= "{\"ok\":true}"
+                   (get-in second-body [:input 3 :output])))
+            (is (= "done" (get-in final-response [:message :content])))
+            (is (= "stop" (:finish-reason final-response)))
+            (is (= [:openai]
+                   (->> @stream-events
+                        (filter #(= :text/delta (:type %)))
+                        (mapv :provider)))))
+          (finally
+            (kernel/dispose-all! ctx)))))))
+
+(deftest official-openai-responses-refuses-key-exfiltration
+  (is (thrown-with-msg?
+       clojure.lang.ExceptionInfo
+       #"Refusing to send an OpenAI API key"
+       (plugin/boot!
+        {:plugins
+         [{:ns 'agent.plugins.openai-responses
+           :config {:base-url "https://example.com/v1"
+                    :model "gpt-5.6-sol"
+                    :api-key "must-not-leak"}}]}))))
 
 (deftest chatgpt-subscription-request-and-replay
   (let [auth-file (java.io.File/createTempFile "bb-agent-auth-" ".json")
@@ -2056,6 +2348,174 @@
                          (make-array java.nio.file.FileVisitOption 0))]
         (doseq [path (reverse (vec (iterator-seq (.iterator paths))))]
           (java.nio.file.Files/deleteIfExists path))))))
+
+(defn- posix-mode [file]
+  (try
+    (java.nio.file.attribute.PosixFilePermissions/toString
+     (java.nio.file.Files/getPosixFilePermissions
+      (.toPath (io/file file))
+      (make-array java.nio.file.LinkOption 0)))
+    (catch UnsupportedOperationException _ nil)))
+
+(defn- process-alive? [pid]
+  (let [handle (java.lang.ProcessHandle/of (long pid))]
+    (and (.isPresent handle) (.isAlive (.get handle)))))
+
+(deftest generated-agent-state-is-owner-only-and-migrates-old-files
+  (let [directory (.toFile (java.nio.file.Files/createTempDirectory
+                            "bb-agent-private-state-"
+                            (make-array java.nio.file.attribute.FileAttribute 0)))
+        state-root (io/file directory ".bb-agent")
+        sessions (io/file state-root "sessions")
+        active (io/file sessions "active.jsonl")
+        sibling (io/file sessions "old.jsonl")]
+    (try
+      (.mkdirs sessions)
+      (spit active "")
+      (spit sibling "")
+      (when (posix-mode sessions)
+        (java.nio.file.Files/setPosixFilePermissions
+         (.toPath sessions)
+         (java.nio.file.attribute.PosixFilePermissions/fromString "rwxrwxrwx"))
+        (doseq [file [active sibling]]
+          (java.nio.file.Files/setPosixFilePermissions
+           (.toPath file)
+           (java.nio.file.attribute.PosixFilePermissions/fromString "rw-rw-rw-"))))
+      (let [ctx (plugin/boot!
+                 {:plugins
+                  [{:ns 'agent.plugins.session :config {:path (str active)}}
+                   {:ns 'agent.plugins.durable-state
+                    :config {:root (str directory)}}]})]
+        (try
+          ((:put! (kernel/require-service ctx :agent/durable-state))
+           :secret "private")
+          (let [state-path (:path (kernel/require-service ctx
+                                                          :agent/durable-state))]
+            (when (posix-mode sessions)
+              (is (= "rwx------" (posix-mode state-root)))
+              (is (= "rwx------" (posix-mode sessions)))
+              (is (= "rw-------" (posix-mode active)))
+              (is (= "rw-------" (posix-mode sibling)))
+              (is (= "rw-------" (posix-mode state-path)))
+              (is (= "rwx------"
+                     (posix-mode (.getParentFile (io/file state-path)))))))
+          (finally (kernel/dispose-all! ctx))))
+      (let [output-directory (io/file state-root "tool-output")]
+        (.mkdirs output-directory)
+        (dotimes [_ 4]
+          (spit (io/file output-directory (str (random-uuid) ".log")) "old")))
+      (let [ctx (plugin/boot!
+                 {:plugins
+                  [{:ns 'agent.plugins.execution-world
+                    :config {:root (str directory)
+                             :sandbox :none
+                             :max-output-chars 4
+                             :max-output-file-chars 1000
+                             :max-output-files 2}}]})]
+        (try
+          (let [world (kernel/require-service ctx :execution/world)
+                retained (count
+                          (filter #(str/ends-with? (.getName %) ".log")
+                                  (file-seq (io/file state-root "tool-output"))))
+                result ((:spawn! world) {:command "printf 123456789"})
+                output (:full-output-path result)]
+            (is (= 2 retained))
+            (is (= "1234" (:stdout result)))
+            (is (:truncated result))
+            (is (str/includes? (slurp output) "123456789"))
+            (is (= 2
+                   (count
+                    (filter #(str/ends-with? (.getName %) ".log")
+                            (file-seq (io/file state-root "tool-output"))))))
+            (when (posix-mode output)
+              (is (= "rw-------" (posix-mode output)))
+              (is (= "rwx------" (posix-mode (.getParentFile (io/file output)))))))
+          (finally (kernel/dispose-all! ctx))))
+      (finally (delete-tree! directory)))))
+
+(deftest execution-world-enforces-resource-and-process-tree-limits
+  (let [directory (.toFile (java.nio.file.Files/createTempDirectory
+                            "bb-agent-resource-limits-"
+                            (make-array java.nio.file.attribute.FileAttribute 0)))
+        large (io/file directory "large.txt")
+        small (io/file directory "small.txt")
+        child-pid-file (io/file directory "child.pid")]
+    (try
+      (spit large "0123456789")
+      (spit small "ok")
+      (let [ctx (plugin/boot!
+                 {:plugins
+                  [{:ns 'agent.plugins.execution-world
+                    :config {:root (str directory)
+                             :sandbox :none
+                             :timeout-ms 100
+                             :max-timeout-ms 200
+                             :max-output-chars 4
+                             :max-output-file-chars 8
+                             :max-file-bytes 8
+                             :max-write-bytes 8
+                             :max-walk-entries 20}}]})]
+        (try
+          (let [world (kernel/require-service ctx :execution/world)]
+            (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                                  #"safe read limit"
+                                  ((:read! world) {:path "large.txt"})))
+            (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                                  #"safe size limit"
+                                  ((:write! world) {:path "new.txt"
+                                                    :content "123456789"})))
+            (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                                  #"Append would exceed"
+                                  ((:write! world) {:path "small.txt"
+                                                    :content "1234567"
+                                                    :append true})))
+            (let [search ((:search! world) {:query "ok"})]
+              (is (= 1 (:skipped-files search)))
+              (is (= ["small.txt"] (mapv :path (:items search)))))
+            (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                                  #"disk limit"
+                                  ((:spawn! world)
+                                   {:command "printf 123456789"})))
+            (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                                  #"safe range"
+                                  ((:spawn! world)
+                                   {:command "printf never"
+                                    :timeout-ms 201})))
+            (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                                  #"timed out"
+                                  ((:spawn! world)
+                                   {:command
+                                    "sleep 30 & echo $! > child.pid; wait"
+                                    :timeout-ms 100})))
+            (let [pid (Long/parseLong (str/trim (slurp child-pid-file)))]
+              (loop [attempt 0]
+                (when (and (< attempt 20) (process-alive? pid))
+                  (Thread/sleep 10)
+                  (recur (inc attempt))))
+              (is (false? (process-alive? pid))))
+            (let [temporary-files (->> (file-seq (io/file directory
+                                                          ".bb-agent"
+                                                          "tool-output"))
+                                       (filter #(.isFile %))
+                                       (filter #(str/ends-with? (.getName %) ".tmp")))]
+              (is (empty? temporary-files))))
+          (finally (kernel/dispose-all! ctx))))
+      (let [ctx (plugin/boot!
+                 {:plugins
+                  [{:ns 'agent.plugins.execution-world
+                    :config {:root (str directory)
+                             :sandbox :none
+                             :max-walk-entries 2}}]})]
+        (try
+          (is (thrown-with-msg?
+               clojure.lang.ExceptionInfo #"traversal"
+               ((:find! (kernel/require-service ctx :execution/world))
+                {:pattern "*"})))
+          (is (thrown-with-msg?
+               clojure.lang.ExceptionInfo #"Directory listing"
+               ((:list! (kernel/require-service ctx :execution/world)) {})))
+          (finally (kernel/dispose-all! ctx))))
+      (finally (delete-tree! directory)))))
 
 (deftest execution-world-contract-and-coding-tools
   (let [directory (.toFile (java.nio.file.Files/createTempDirectory

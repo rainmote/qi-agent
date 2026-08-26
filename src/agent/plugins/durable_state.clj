@@ -2,6 +2,7 @@
   "Small, session-scoped durable state stored outside the REPL heap."
   (:refer-clojure :exclude [get])
   (:require [agent.kernel :as kernel]
+            [agent.secure-files :as secure]
             [clojure.edn :as edn]
             [clojure.java.io :as io])
   (:import [java.nio.file CopyOption Files StandardCopyOption]))
@@ -20,8 +21,10 @@
     (when-not (or (.isDirectory parent) (.mkdirs parent))
       (throw (ex-info "Could not create durable state directory"
                       {:path (str parent)})))
+    (secure/protect-managed-parents! parent)
     (let [temporary (java.io.File/createTempFile ".state-" ".edn" parent)]
       (try
+        (secure/protect-file! temporary)
         (spit temporary (str (pr-str value) "\n"))
         (try
           (Files/move (.toPath temporary) (.toPath target)
@@ -36,6 +39,7 @@
               (throw error))))
         (finally
           (when (.exists temporary) (.delete temporary)))))
+    (secure/protect-file! target)
     value))
 
 (def plugin

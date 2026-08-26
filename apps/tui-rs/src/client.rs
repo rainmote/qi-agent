@@ -194,9 +194,25 @@ pub fn attach_or_create(
     requested_agent: Option<&str>,
     repository_root: Option<&Path>,
     config_path: Option<&Path>,
+    repl_backend: Option<&str>,
 ) -> Result<AttachedAgent> {
+    let requested_config = config_path.map(canonical).transpose()?;
     let mut connection = connect_or_launch(repository_root, config_path)?;
-    connection.call("daemon.hello", json!({}))?;
+    let hello = connection.call("daemon.hello", json!({}))?;
+    if repl_backend.is_some()
+        && !hello
+            .get("capabilities")
+            .and_then(Value::as_array)
+            .is_some_and(|capabilities| {
+                capabilities
+                    .iter()
+                    .any(|value| value.as_str() == Some("repl.backend-selection.v1"))
+            })
+    {
+        bail!(
+            "the running dao daemon does not support per-agent REPL selection; restart it when current background tasks are safe to stop"
+        )
+    }
     let workspace = canonical(std::env::current_dir()?)?;
     let agent_id = if let Some(agent_id) = requested_agent {
         agent_id.to_owned()
@@ -206,6 +222,13 @@ pub fn attach_or_create(
             values.iter().find(|agent| {
                 agent.get("workspace_path").and_then(Value::as_str)
                     == Some(workspace.to_string_lossy().as_ref())
+                    && requested_config.as_ref().is_none_or(|config| {
+                        agent.get("config_path").and_then(Value::as_str)
+                            == Some(config.to_string_lossy().as_ref())
+                    })
+                    && repl_backend.is_none_or(|backend| {
+                        agent.get("repl_backend").and_then(Value::as_str) == Some(backend)
+                    })
                     && !matches!(
                         agent.get("status").and_then(Value::as_str),
                         Some("stopped" | "failed")
@@ -221,7 +244,12 @@ pub fn attach_or_create(
         } else {
             let created = connection.call(
                 "agent.create",
-                json!({"workspace": workspace, "name": workspace.file_name()}),
+                json!({
+                    "workspace": workspace,
+                    "name": workspace.file_name(),
+                    "config_path": requested_config,
+                    "repl_backend": repl_backend,
+                }),
             )?;
             created
                 .pointer("/agent/agent_id")
@@ -236,7 +264,12 @@ pub fn attach_or_create(
         Err(error) if requested_agent.is_none() => {
             let created = connection.call(
                 "agent.create",
-                json!({"workspace": workspace, "name": workspace.file_name()}),
+                json!({
+                    "workspace": workspace,
+                    "name": workspace.file_name(),
+                    "config_path": requested_config,
+                    "repl_backend": repl_backend,
+                }),
             )?;
             let fresh = created
                 .pointer("/agent/agent_id")

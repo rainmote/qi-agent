@@ -24,6 +24,7 @@ flowchart LR
 release TUI：
 
 ```bash
+export OPENAI_API_KEY="..."
 bb tui-build
 ```
 
@@ -72,10 +73,9 @@ WebUI 默认只监听 `127.0.0.1:3080`，启动后打开终端打印的鉴权 UR
 的会话由独立 Babashka Worker 执行，TUI 与 WebUI 共享同一份插件和 append-only session。
 架构、协议、安全边界与开发命令见 [WebUI 文档](docs/webui.md)。
 
-默认使用 Codex/ChatGPT 订阅登录：
+默认使用官方 OpenAI Responses API：
 
 ```bash
-codex login status
 bb agent --once "读取 README.md 并总结这个项目"
 ```
 
@@ -110,14 +110,18 @@ export DEEPSEEK_API_KEY="..."
 bb agent --config examples/deepseek.edn --once "读取 README.md 并总结这个项目"
 ```
 
-默认 `agent.edn` 使用独立的 `agent.plugins.chatgpt` Responses adapter。它在每次请求前读取
+默认 `agent.edn` 使用 `agent.plugins.openai-responses`，从 `OPENAI_API_KEY` 动态取 key，
+只向 `https://api.openai.com/v1/responses` 发送凭据。请求默认 `store=false`，支持 SSE、图片、
+并行 function call、完整 Responses output item 回放，以及对 408/409/429/5xx 的有界退避。
+
+`agent.plugins.chatgpt` 仍作为可选 adapter 保留。`examples/chatgpt.edn` 会在每次请求前读取
 `$CODEX_HOME/auth.json`（未设置时为 `~/.codex/auth.json`），只取 access token 与
 account id，不缓存或记录 refresh token。登录失效后运行 `codex login`，无需修改
 agent 配置。为防止凭据外发，adapter 只接受 ChatGPT/Codex 官方订阅后端。
 
 此方式复用的是 Codex 的 ChatGPT 订阅登录与内部传输协议，不是按量计费的 OpenAI
 API key。认证缓存位置是官方文档支持的，但订阅后端协议并不是稳定的公开 API，因而
-这个 adapter 标记为 experimental；若上游协议变化，改动被隔离在该插件内。
+这个 adapter 标记为 experimental，不作为生产默认值；若上游协议变化，改动被隔离在该插件内。
 
 订阅 adapter 默认使用 HTTP/1.1，并为 ChatGPT 单独维护连接客户端。TLS 握手、连接建立、
 连接重置等传输错误会丢弃旧连接状态，以 400ms 起步的指数退避重试 4 次；业务错误和
@@ -127,8 +131,29 @@ API key。认证缓存位置是官方文档支持的，但订阅后端协议并�
 `dao` 会连接常驻 supervisor，选择已有 agent 或创建新的持久 session；关闭终端只会 detach，
 不会停止后台 run、子 agent 或 REPL。`bb agent` 仍保留为 headless/embedding 入口。
 默认模型、端点、工具和插件顺序都在 `agent.edn` 中配置。OpenAI-compatible
-插件也可以连接其他兼容 `/chat/completions` 的服务。Codex Responses 和 DeepSeek Chat
+插件也可以连接其他兼容 `/chat/completions` 的服务。OpenAI Responses 和 DeepSeek Chat
 Completions 都会把文本 delta 立即写到终端，不再等待完整响应下载结束。
+
+每个 agent 的 REPL 默认使用 Babashka，也可以在创建 agent 时切换到原生 JVM Clojure：
+
+```bash
+java --version
+clojure -Sdescribe
+clojure -P
+dao --repl-backend jvm-clojure
+```
+
+JVM 模式要求系统已有 JDK 和官方 Clojure CLI；macOS 的 Clojure CLI 安装方式见
+[官方安装指南](https://clojure.org/guides/install_clojure)。首次使用含 Maven 或 git
+依赖的项目时，应先在 sandbox 外运行 `clojure -P` 下载依赖，因为 REPL sandbox 默认禁止网络。
+该 backend 会复制当前项目的 `deps.edn` 到 agent 专属可写目录，绝对化项目路径，再以
+`clojure -Srepro -M -m agent.repl-worker` 启动；`.cpcache` 不会写进项目根目录。
+
+`--repl-backend` 只影响新建 agent。Babashka 与 JVM Clojure agent 可以由同一个 daemon
+同时监督，`dao agents` 的 `repl_backend` 字段可确认选择。模型侧工具名暂时仍叫
+`bb_repl`，这是为了保持会话和 policy 兼容；在 JVM agent 中它实际执行原生 JVM Clojure。
+也可以在自定义 profile 中把 `agent.plugins.bb-repl` 替换为
+`agent.plugins.jvm-clojure-repl`，并配置 `:project-deps`、`:aliases` 和 `:jvm-opts`。
 
 唯一终端入口是 Rust/Ratatui 实现的 `dao` 客户端。Rust daemon 持有任务接纳、路由、worker
 监督与恢复；resident Babashka worker 持有 session、agent loop、工具与审批。当前界面按
@@ -137,6 +162,17 @@ Qwen Code 的默认暗色、
 内置主题、session 恢复、流式
 Markdown/reasoning、紧凑工具状态、多行 Unicode 输入、命令补全、输入历史和原生终端历史滚动，
 以及 model、session、theme 和审批选择器。离线体验：
+
+闲置 worker 默认在最后持久活动达到 90 分钟后释放运行资源，但 session JSONL 与 artifact 会保留，
+再次 attach 时自动恢复。`DAO_IDLE_EVICTION_MINUTES` 可设为正分钟数，或设为 `off` 关闭；有客户端、
+运行任务或 active/claimed/paused schedule 的 session 不会被回收。`dao status`/`dao doctor` 会显示
+回收阈值与扫描状态，`dao update` 可立即触发一次安全扫描。inactive、archived 与 deleted 是不同状态。
+
+Supervisor SQLite 使用显式 schema revision；升级前会在 owner-only 的 `backups/` 下创建一致性
+快照并保留最近 5 份，遇到更新版本的 schema 会拒绝启动。`dao backup` 可随时创建手工快照，
+`dao doctor` 会运行 SQLite quick check。worker 日志默认单文件 10 MiB、3 份轮转、总数 100，
+可用 `DAO_LOG_MAX_BYTES`、`DAO_LOG_BACKUPS`、`DAO_MAX_WORKER_LOGS` 调整。完整上线检查、恢复和
+发布校验见 [生产运行手册](docs/production-readiness.md)。
 
 ```bash
 bb tui-build
@@ -334,8 +370,10 @@ TUI 扩展示例见 `plugins/example/ui_demo.clj`。
 - 工具返回 canonical JSON value，渲染成模型文本是另一层职责，避免让下游解析随意 prose。
 - `:tool/pre-execute`、`:tool/execute`、`:tool/post-execute` 和 `:llm/request` 是有序 waterfall；策略无需修改 agent loop。
 - `bb_repl` 工具和执行后端分离：`agent.plugins.clojure-repl` 只依赖
-  `:execution/repl` service，默认 provider 是一个通过单行 EDN 协议通信的持久化
-  Babashka 子进程。REPL 中的 `def` 可跨调用复用；超时后子进程会被终止并按需重建。
+  `:execution/repl` service。默认 provider 是持久化 Babashka 子进程，也可选择隔离的
+  原生 JVM Clojure 进程；二者共用单行 EDN 协议、interrupt/reset/status、持久定义与
+  replay-safe cell 恢复语义。REPL 中的 `def` 可跨调用复用；超时后只重启该 agent 的
+  REPL，不终止 resident worker。
 - `agent.cancellation` 的 token 会传到 adapter；取消会关闭 SSE transport 并记录
   `agent/aborted`。运行时同时提供 `:agent/cancel` service，供 TUI、HTTP server 或
   上层调度器调用。
@@ -370,6 +408,7 @@ src/agent/plugins/bb_repl.clj   持久化 Babashka 子进程 provider
 src/agent/plugins/clojure_repl.clj 模型侧 bb_repl 工具
 src/agent/repl_worker.clj       REPL 子进程的 EDN worker
 src/agent/plugins/openai.clj    DeepSeek/OpenAI-compatible adapter
+src/agent/plugins/openai_responses.clj 官方 OpenAI Responses adapter
 src/agent/plugins/chatgpt.clj   ChatGPT subscription/Codex auth adapter
 src/agent/plugins/session.clj   可恢复、可 fork/compact 的 append-only session
 src/agent/protocol.clj          version 1 JSON event 与 stdin/stdout RPC

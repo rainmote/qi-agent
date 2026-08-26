@@ -1,6 +1,7 @@
 (ns agent.repl-worker
-  "Line-oriented EDN worker used by the Babashka REPL execution provider."
+  "Line-oriented EDN worker shared by Babashka and JVM Clojure REPL providers."
   (:require [clojure.edn :as edn]
+            [agent.secure-files :as secure]
             [clojure.java.io :as io]
             [clojure.string :as str])
   (:import [java.io StringWriter]
@@ -16,8 +17,10 @@
   (let [target (.getCanonicalFile (io/file path))
         parent (.getParentFile target)]
     (.mkdirs parent)
+    (secure/protect-managed-parents! parent)
     (let [temporary (java.io.File/createTempFile ".dao-repl-" ".tmp" parent)]
       (try
+        (secure/protect-file! temporary)
         (spit temporary value)
         (try
           (Files/move (.toPath temporary) (.toPath target)
@@ -31,7 +34,8 @@
                                       [StandardCopyOption/REPLACE_EXISTING]))
               (throw error))))
         (finally
-          (when (.exists temporary) (.delete temporary)))))))
+          (when (.exists temporary) (.delete temporary)))))
+    (secure/protect-file! target)))
 
 (defn- inside-artifact [artifact-root relative]
   (let [root (.getCanonicalFile (io/file artifact-root))
@@ -66,6 +70,8 @@
             (fn [relative value]
               (let [target (inside-artifact artifact-root relative)]
                 (.mkdirs (.getParentFile target))
+                (secure/protect-managed-parents! (.getParentFile target))
+                (secure/ensure-owner-file! target)
                 (spit target (if (string? value) value (pr-str value)))
                 {:path (.getPath target)
                  :bytes (.length target)})))
@@ -77,6 +83,8 @@
                          :request request
                          :at (str (java.time.Instant/now))}]
               (.mkdirs (.getParentFile (io/file outbox-path)))
+              (secure/protect-managed-parents! (.getParentFile (io/file outbox-path)))
+              (secure/ensure-owner-file! outbox-path)
               (spit outbox-path (str (pr-str entry) "\n") :append true)
               (select-keys entry [:id :agent-id :operation])))]
       (intern agent-ns 'spawn! #(enqueue! :spawn %))
@@ -101,7 +109,7 @@
   (let [stdout (StringWriter.)
         stderr (StringWriter.)
         started (System/nanoTime)
-        base {:backend "bb-repl"
+        base {:backend (or (System/getenv "DAO_REPL_BACKEND") "bb-repl")
               :namespace (str (ns-name repl-ns))}]
     (try
       (let [value (binding [*ns* repl-ns
@@ -139,7 +147,8 @@
 (defn- response [repl-ns request]
   (case (:op request)
     :eval (evaluate repl-ns request)
-    :ping {:ok true :backend "bb-repl"}
+    :ping {:ok true :backend (or (System/getenv "DAO_REPL_BACKEND")
+                                 "bb-repl")}
     {:ok false :error (str "Unknown REPL operation: " (:op request))}))
 
 (defn -main [& _]
@@ -147,6 +156,8 @@
         safe-id (str/replace agent-id #"[^A-Za-z0-9_-]" "-")
         repl-ns (create-ns (symbol (str "dao.agent." safe-id)))
         protocol-out *out*]
+    (binding [*ns* repl-ns]
+      (clojure.core/refer 'clojure.core))
     (install-host-bridge!)
     (loop []
       (when-let [line (read-line)]

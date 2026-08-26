@@ -2,7 +2,7 @@
 
 状态：Implemented  
 首次整理：2026-08-23  
-最后更新：2026-08-24
+最后更新：2026-08-25
 
 实施结果：阶段 0–6 已落地。Rust `dao` 是唯一 TUI 与 supervisor 入口；WebUI 和 headless client
 使用同一 public socket；resident worker、per-agent REPL、retained child、durable messaging、
@@ -99,6 +99,7 @@ dao repl <agent-id>              打开或代理该 agent 的 REPL
 dao status                       查看 daemon 和 worker 状态
 dao doctor                       检查 socket、描述文件、租约和孤儿进程
 dao doctor --fix                 只清理可证明已过期的 lease
+dao backup                       创建一致的 supervisor SQLite 快照
 dao update                       收养 live worker、恢复缺失 worker、刷新 lease
 dao service print|install|uninstall
                                  管理 launchd/systemd 用户服务
@@ -174,6 +175,40 @@ session catalog 的目录扫描不应阻塞 daemon 或 active worker。初版可
 历史 bridge 在 TUI 退出和 RPC EOF 时调用 `abort!`；该 bridge 已删除。当前 transport closure 只关闭
 attachment；终止执行必须通过 `turn.abort`/`run.abort` 或 `agent.stop` 等具名 mutation 命令。
 
+### 5.1 Session 生命周期与闲置回收
+
+session 现在沿三条互不替代的轴公开状态：
+
+| 轴 | 值 | 含义 |
+| --- | --- | --- |
+| `lifecycle` | `draft / live / archived` | 持久会话是否已完成过一轮，或是否被显式停止 |
+| `activity` | `working / idle` | 当前 agent loop 是否仍在执行 |
+| `residency` | `resident / inactive / stopped` | worker/child runtime 是否还驻留内存 |
+
+正常闲置回收只把 `resident` 变为 `inactive`。它不会归档或删除 session JSONL、artifact、durable state
+与 retained-child roster。后续 attach、agent message、schedule tick 或其他需要 runtime 的命令会从原 session
+惰性恢复；`session_id` 保持不变，worker `generation` 递增。显式 `dao stop`/`dao shutdown` 才把 lifecycle
+推进到 `archived`。
+
+默认阈值为 90 分钟，可通过 daemon 环境变量配置：
+
+```text
+DAO_IDLE_EVICTION_MINUTES=90     # 任意正有限分钟数
+DAO_IDLE_EVICTION_MINUTES=off    # 关闭（none 也兼容）
+```
+
+扫描间隔为 `max(1 分钟, min(5 分钟, threshold / 3))`。`dao update` 也会立即执行一次扫描，结果在
+`idle_sweep` 中返回；`dao status` 与 `dao doctor` 暴露阈值、上次/下次扫描时间。
+
+整棵 root tree 只有在以下条件全部成立时才会 graceful shutdown：root 与所有 resident child 都为 idle、
+最后持久事件达到阈值、没有 attachment、没有 running task、没有 active/claimed/paused schedule、worker
+连接健康且活动时间有效。候选在 worker lifecycle fence 内再次刷新并完整判定，避免与新 turn/attach 竞态。
+时间无效时 fail closed，不回收并报告 `invalid-activity-time`。
+
+当 root tree 因 attachment、活动任务或近期 root 活动而不能整体回收时，最多按最老优先 passivate 两个
+符合相同条件的 resident child。passive child 保留 roster 和 JSONL；attach、消息或子 agent RPC 会 hydrate。
+普通 schedule 会钉住对应 session；当前没有冷调度后到点拉起的机制。
+
 ## 6. Task 和 Run 状态机
 
 ```mermaid
@@ -227,7 +262,7 @@ stateDiagram-v2
 
 ```text
 daemon.hello              capability negotiation
-daemon.status/doctor/update/shutdown
+daemon.status/doctor/backup/update/shutdown
 agent.list/create/attach/detach/take_control/stop
 prompt.submit/steer/follow_up（映射到 turn.*）
 turn.submit/steer/follow-up/abort/state
@@ -305,10 +340,11 @@ REPL 不负责 provider 调用、agent loop、child 生命周期、budget 或 tr
 
 ### 9.2 Backend 接口
 
-现有 `:execution/repl` service 扩展为：
+`agent.plugins.bb-repl` 和 `agent.plugins.jvm-clojure-repl` 都实现统一的
+`:execution/repl` service：
 
 ```clojure
-{:backend    :babashka
+{:backend    :babashka | :jvm-clojure
  :status     (fn [] ...)
  :eval!      (fn [request] ...)
  :interrupt! (fn [eval-id] ...)
@@ -331,11 +367,39 @@ cold → starting → ready → busy → ready
         failed ← restarting
 ```
 
+默认 backend 是 Babashka。新建 agent 时可通过
+`dao --repl-backend jvm-clojure` 选择原生 JVM Clojure；选择值写入 owner-only worker
+descriptor 并由 worker proxy 传给 resident worker。daemon 的 `agent.list` 同时返回
+`config_path` 和 `repl_backend`，客户端只复用 workspace、profile 和显式 backend 均匹配的
+agent，因此同一 daemon 下两种 backend 可以并存。已有 agent 不会因后续命令行选项而换 backend。
+
+也可在 profile 中显式加载：
+
+```clojure
+{:ns agent.plugins.jvm-clojure-repl
+ :config {:root "."
+          :sandbox :auto
+          :project-deps true
+          :aliases [:dev]
+          :jvm-opts ["-Xmx2g"]
+          :timeout-ms 10000
+          :max-output-chars 20000}}
+
+{:ns agent.plugins.clojure-repl}
+```
+
+JVM provider 使用官方 Clojure CLI 和 JDK。它在 agent 专属 sandbox 目录生成 `deps.edn`：
+保留项目 deps/aliases，把相对 classpath 与 `:local/root` 转成绝对路径，并加入 DAO runtime
+源码路径。启动命令使用 `-Srepro`，工作目录和 `CLJ_CONFIG`/`CLJ_CACHE`/`GITLIBS` 均指向
+agent 专属可写区域，所以不会污染项目根目录。Seatbelt 允许读取 JDK、Clojure CLI、
+`~/.m2`、`~/.gitlibs` 和 workspace，但仍禁止网络；依赖必须提前用 `clojure -P` 获取。
+外置 `:local/root` 依赖仍受 workspace sandbox 边界限制。
+
 ### 9.3 当前协议与可选演进
 
-当前复用单行 EDN REPL worker，并已增加 request ID、interrupt、reset、status 和 lifecycle event。后续可选增加
-nREPL backend；nREPL 的 persistent session、multi-response 和 interrupt 适合人工 IDE attach；
-Babashka 也原生提供 nREPL server。外部 nREPL 不能默认暴露到 `0.0.0.0`，应由 daemon 代理或使用不可公开的
+Babashka 与 JVM Clojure 当前复用同一个单行 EDN REPL worker，并已增加 request ID、interrupt、reset、
+status 和 lifecycle event。后续可选增加 nREPL backend；nREPL 的 persistent session、multi-response
+和 interrupt 适合人工 IDE attach。外部 nREPL 不能默认暴露到 `0.0.0.0`，应由 daemon 代理或使用不可公开的
 loopback/Unix-socket endpoint。
 
 无论使用 EDN worker 还是 nREPL，host request 都必须走独立控制通道，避免正在执行的 cell 因等待同一串行
@@ -478,7 +542,7 @@ workspace/session leases
 bounded stderr tail
 ```
 
-`dao doctor` 只做安全诊断；当前 `--fix` 也只清理可由过期时间证明失效的 lease，不会删除 socket/descriptor 或
+`dao doctor` 只做安全诊断，并检查 schema revision 与 SQLite quick check；当前 `--fix` 也只清理可由过期时间证明失效的 lease，不会删除 socket/descriptor 或
 杀进程。进程修复不能仅凭 PID 存在与否判断，必须同时验证 descriptor token、进程启动时间和 worker identity。
 
 ## 14. 实施计划
@@ -522,6 +586,8 @@ bounded stderr tail
 - 增加 eval ID、interrupt、reset、status、生命周期事件和 bootstrap。
 - 加入 durable state、cell journal 和 `:replay-safe` 语义。
 - 增加 daemon `repl.*` API；之后可选 nREPL adapter/IDE attach。
+- 增加可与 Babashka 并存的原生 JVM Clojure provider、per-agent backend 选择和隔离的
+  Clojure CLI/deps cache 目录。
 
 验收：root 与两个 child 的定义互不泄漏；TUI 重连后定义仍在；杀死某个 REPL 只重启该 REPL，并明确报告状态丢失范围。
 
@@ -549,6 +615,8 @@ bounded stderr tail
 - provider、token、CPU、worker 数量和 workspace write lease 配额；
 - macOS launchd、Linux systemd user service；
 - 完整 `status/doctor/update/shutdown` 生命周期。
+- 显式 SQLite schema revision、事务迁移、迁移前自动快照与 `dao backup` 手工快照；
+- worker 日志大小/份数/总数配额，以及 owner-only 状态文件迁移。
 
 具体配置：`DAO_MAX_WORKERS` 限制 resident worker 数量；`DAO_ALLOWED_PROVIDERS` 提供 provider
 allowlist；`DAO_MAX_TOKENS_PER_RUN` 拒绝显式超过上限的 `max_tokens/max_output_tokens`；
@@ -569,7 +637,8 @@ allowlist；`DAO_MAX_TOKENS_PER_RUN` 拒绝显式超过上限的 `max_tokens/max
 | `apps/web-host/worker.ts` | 已改为 public daemon socket client，不再 spawn Babashka |
 | `apps/web-host/sessions.ts` | 保留只读 catalog；create/open/attach/RPC 经 daemon 完成 |
 | `agent.plugins.session` | 继续作为 transcript 事实源，强化 writer lease 和 durability |
-| `agent.plugins.bb-repl` | 扩展成 per-agent `ReplBackend` |
+| `agent.plugins.bb-repl` | 默认 Babashka per-agent `ReplBackend`；共享进程协议实现 |
+| `agent.plugins.jvm-clojure-repl` | 可选原生 JVM Clojure `ReplBackend` |
 | `agent.repl-worker` | 增加异步协议、interrupt、reset、status 或替换为 nREPL adapter |
 | `agent.plugins.subagent-in-process` | 从 one-shot child 演进为 retained child provider |
 | `agent.plugins.stdio-session` | 继续提供受 execution-world 约束的持久外部进程能力 |

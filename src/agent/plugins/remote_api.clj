@@ -1,7 +1,9 @@
 (ns agent.plugins.remote-api
   "Frontend-neutral remote methods exposed by the agent worker."
   (:require [agent.command :as command]
-            [agent.kernel :as kernel]))
+            [agent.kernel :as kernel]
+            [clojure.java.io :as io])
+  (:import [java.time Instant]))
 
 (def ^:private empty-params
   {:type "object" :additionalProperties false})
@@ -25,6 +27,42 @@
                     (update :current public-provider)
                     (update :providers #(mapv public-provider %)))
                 (public-provider output))))))
+
+(defn- event-time-ms [event]
+  (try
+    (some-> (:at event) str Instant/parse .toEpochMilli)
+    (catch Throwable _ nil)))
+
+(defn- session-lifecycle [events]
+  (cond
+    (some #(contains? #{"session/archive" :session/archive} (:type %))
+          events)
+    :archived
+
+    (some #(and (contains? #{"message" :message} (:type %))
+                (= "assistant" (some-> % :data :message :role name)))
+          events)
+    :live
+
+    :else :draft))
+
+(defn- session-last-activity-ms [store events]
+  (or (when-let [timestamps (seq (keep event-time-ms events))]
+        (apply max timestamps))
+      (when-let [path (:path store)]
+        (let [file (io/file path)]
+          (when (.isFile file) (.lastModified file))))))
+
+(defn- session-summary [ctx]
+  (let [store (kernel/require-service ctx :session/store)
+        session (kernel/require-service ctx :agent/session)
+        events ((:events store))]
+    {:session_id (:session-id store)
+     :path (:path store)
+     :cursor (or (:seq (last events)) 0)
+     :lifecycle (session-lifecycle events)
+     :activity (if (= :idle (:phase ((:state session)))) :idle :working)
+     :last_activity_at_ms (session-last-activity-ms store events)}))
 
 (defn- session-snapshot [ctx]
   (let [store (kernel/require-service ctx :session/store)
@@ -84,6 +122,9 @@
        (method! "session.snapshot" "Return a replayable session snapshot."
                 empty-params {:type "object"}
                 (fn [_] (session-snapshot ctx)))
+       (method! "session.summary" "Return compact lifecycle and activity metadata."
+                empty-params {:type "object"}
+                (fn [_] (session-summary ctx)))
        (method! "session.events" "Return durable events after a cursor."
                 (object-params {"after" {:type "integer" :minimum 0}})
                 {:type "object"}
@@ -354,6 +395,15 @@
                   {:agent_id agent_id
                    :stopped ((:stop! (kernel/require-service
                                       ctx :subagents/runtime)) agent_id)}))
+       (method! "subagent.passivate" "Release an idle retained child runtime."
+                (object-params {"agent_id" {:type "string" :minLength 1}}
+                               "agent_id")
+                {:type "object"}
+                (fn [{:keys [agent_id]}]
+                  {:agent_id agent_id
+                   :passivated ((:passivate! (kernel/require-service
+                                              ctx :subagents/runtime))
+                                 agent_id)}))
        (method! "subagent.delete" "Delete child routing and retain a tombstone."
                 (object-params {"agent_id" {:type "string" :minLength 1}}
                                "agent_id")

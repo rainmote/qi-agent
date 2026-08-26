@@ -1,5 +1,5 @@
 use crate::{
-    app::{App, SelectorKind},
+    app::{App, InlineStreamCommit, SelectorKind},
     markdown,
     model::{HistoryItem, ToolCall, ToolStatus},
     sanitize,
@@ -24,6 +24,20 @@ const LOGO: [&str; 6] = [
     "                                     ",
     "                                     ",
 ];
+
+const INPUT_VIEWPORT_ROWS: usize = 10;
+const STREAMING_TRANSCRIPT_RESERVE_ROWS: u16 = 3;
+
+#[derive(Clone, Debug)]
+struct InputVisualLine {
+    start: usize,
+    end: usize,
+}
+
+pub struct StreamingCommitCandidate {
+    pub lines: Vec<Line<'static>>,
+    pub state: InlineStreamCommit,
+}
 
 pub fn draw(frame: &mut Frame<'_>, app: &App) {
     let area = frame.area();
@@ -53,9 +67,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
             .is_some_and(|interaction| interaction.kind == "approval");
         let confirmation_rows = u16::from(waiting_for_confirmation);
         let available = area.height.saturating_sub(3 + confirmation_rows);
-        let dialog_height = (area.height.saturating_mul(55) / 100)
-            .max(available.min(6))
-            .min(available);
+        let dialog_height = dialog_rows(app, area.width).min(available);
         let chunks = Layout::vertical([
             Constraint::Min(3),
             Constraint::Length(confirmation_rows),
@@ -68,31 +80,13 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
         }
         render_dialog(frame, app, chunks[2]);
     } else {
-        let busy_rows = if app.busy() {
-            if area.width <= 30 || area.width >= 80 {
-                1
-            } else {
-                2
-            }
-        } else {
-            0
-        };
+        let busy_rows = busy_rows(app, area.width);
         let above_rows = extension_rows(app, "above-editor", 3);
         let below_rows = extension_rows(app, "below-editor", 2);
-        let suggestion_rows = app.command_suggestions().len().min(8) as u16;
-        let input_rows = if app.editor.is_empty() {
-            1
-        } else {
-            app.editor.text().split('\n').count() as u16
-        };
+        let suggestion_rows = suggestion_rows(app);
+        let input_rows = input_rows(app, area.width);
         let composer_rows = 2 + input_rows + suggestion_rows;
-        let queue_rows = app.projection.as_ref().map_or(0, |p| {
-            if p.queue.is_empty() {
-                0
-            } else {
-                (p.queue.len() as u16).min(3) + u16::from(p.queue.len() > 3) + 1
-            }
-        });
+        let queue_rows = queue_rows(app);
         let status_rows = u16::from(app.error.is_some() || app.notice.is_some());
         let chunks = Layout::vertical([
             Constraint::Min(3),
@@ -116,6 +110,215 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     }
 }
 
+/// Returns the number of rows currently needed by the redrawable portion of
+/// the inline UI. The terminal layer caps this value against the available
+/// screen space, so long streaming output still leaves native scrollback
+/// usable while short idle/composer states do not reserve empty rows.
+pub fn inline_content_height(app: &App, width: u16) -> u16 {
+    if app.projection.is_none() {
+        return 3;
+    }
+
+    let transcript_rows = inline_transcript_rows(app, width);
+    if app.has_dialog() {
+        return transcript_rows
+            .max(3)
+            .saturating_add(u16::from(
+                app.active_interaction()
+                    .is_some_and(|interaction| interaction.kind == "approval"),
+            ))
+            .saturating_add(dialog_rows(app, width));
+    }
+
+    let transcript_rows = if transcript_rows == 0 {
+        0
+    } else {
+        transcript_rows.max(3)
+    };
+    transcript_rows.saturating_add(inline_chrome_rows(app, width))
+}
+
+fn inline_chrome_rows(app: &App, width: u16) -> u16 {
+    u16::from(app.error.is_some() || app.notice.is_some())
+        .saturating_add(extension_rows(app, "above-editor", 3))
+        .saturating_add(busy_rows(app, width))
+        .saturating_add(queue_rows(app))
+        .saturating_add(2 + input_rows(app, width) + suggestion_rows(app))
+        .saturating_add(extension_rows(app, "below-editor", 2))
+        .saturating_add(1)
+}
+
+fn inline_transcript_rows(app: &App, width: u16) -> u16 {
+    inline_transcript_rows_with_commit(app, width, app.inline_stream_commit.as_ref())
+}
+
+fn inline_transcript_rows_with_commit(
+    app: &App,
+    width: u16,
+    stream_commit: Option<&InlineStreamCommit>,
+) -> u16 {
+    let Some(projection) = app.projection.as_ref() else {
+        return 0;
+    };
+    let start = if app.inline_mode {
+        app.committed_history_count.min(projection.history.len())
+    } else {
+        0
+    };
+    let mut lines = if start == 0 && (!app.inline_mode || !app.header_committed) {
+        header_lines(app, width)
+    } else {
+        Vec::new()
+    };
+    for (offset, item) in projection.history[start..].iter().enumerate() {
+        if !lines.is_empty() {
+            lines.push(Line::raw(""));
+        }
+        lines.extend(history_lines_with_stream_commit(
+            app,
+            stream_commit,
+            start + offset,
+            item,
+            app.details_expanded || app.expanded_tool_groups.contains(item.id()),
+            width.saturating_sub(6) as usize,
+            false,
+        ));
+    }
+    rendered_rows(&lines, width as usize)
+        .min(u16::MAX as usize)
+        .try_into()
+        .unwrap_or(u16::MAX)
+}
+
+fn busy_rows(app: &App, width: u16) -> u16 {
+    if !app.busy() {
+        0
+    } else if width <= 30 || width >= 80 {
+        1
+    } else {
+        2
+    }
+}
+
+fn input_rows(app: &App, width: u16) -> u16 {
+    input_visual_layout(app, width)
+        .0
+        .len()
+        .min(INPUT_VIEWPORT_ROWS) as u16
+}
+
+fn input_visual_layout(app: &App, width: u16) -> (Vec<InputVisualLine>, usize) {
+    let text = app.editor.text();
+    let content_width = width.saturating_sub(2).max(1) as usize;
+    let mut lines = Vec::new();
+    let mut logical_start = 0usize;
+    loop {
+        let logical_end = text[logical_start..]
+            .find('\n')
+            .map_or(text.len(), |offset| logical_start + offset);
+        if logical_start == logical_end {
+            lines.push(InputVisualLine {
+                start: logical_start,
+                end: logical_end,
+            });
+        } else {
+            let mut visual_start = logical_start;
+            let mut visual_width = 0usize;
+            for (relative, grapheme) in text[logical_start..logical_end].grapheme_indices(true) {
+                let grapheme_start = logical_start + relative;
+                let grapheme_width = grapheme.width();
+                if visual_width > 0 && visual_width.saturating_add(grapheme_width) > content_width {
+                    lines.push(InputVisualLine {
+                        start: visual_start,
+                        end: grapheme_start,
+                    });
+                    visual_start = grapheme_start;
+                    visual_width = 0;
+                }
+                visual_width = visual_width.saturating_add(grapheme_width);
+            }
+            lines.push(InputVisualLine {
+                start: visual_start,
+                end: logical_end,
+            });
+        }
+        if logical_end == text.len() {
+            break;
+        }
+        logical_start = logical_end + 1;
+    }
+
+    let cursor = app.editor.cursor();
+    let cursor_line = lines
+        .iter()
+        .enumerate()
+        .position(|(index, line)| {
+            cursor >= line.start
+                && (cursor < line.end
+                    || (cursor == line.end
+                        && lines.get(index + 1).is_none_or(|next| next.start != cursor)))
+        })
+        .unwrap_or_else(|| lines.len().saturating_sub(1));
+    (lines, cursor_line)
+}
+
+fn suggestion_rows(app: &App) -> u16 {
+    app.command_suggestions().len().min(8) as u16
+}
+
+fn queue_rows(app: &App) -> u16 {
+    app.projection.as_ref().map_or(0, |projection| {
+        if projection.queue.is_empty() {
+            0
+        } else {
+            (projection.queue.len() as u16).min(3) + u16::from(projection.queue.len() > 3) + 1
+        }
+    })
+}
+
+fn dialog_rows(app: &App, width: u16) -> u16 {
+    if let Some(selector) = app.selector.as_ref() {
+        let list_rows = selector
+            .options
+            .len()
+            .saturating_add(4)
+            .min(u16::MAX as usize) as u16;
+        let preview_rows = u16::from(selector.kind == SelectorKind::Theme && width >= 74) * 9;
+        return list_rows.max(preview_rows).max(6);
+    }
+    let Some(interaction) = app.active_interaction() else {
+        return 0;
+    };
+    let body_width = width.saturating_sub(6).max(1) as usize;
+    let message_rows = plain_text_rows(&sanitize::text(&interaction.message), body_width);
+    let editor_rows = if matches!(interaction.kind.as_str(), "input" | "custom") {
+        plain_text_rows(
+            if app.dialog_editor.is_empty() {
+                interaction.placeholder.as_deref().unwrap_or("Type a value")
+            } else {
+                app.dialog_editor.text()
+            },
+            body_width.saturating_sub(2).max(1),
+        )
+    } else {
+        0
+    };
+    message_rows
+        .saturating_add(editor_rows)
+        .saturating_add(interaction.items.len().min(u16::MAX as usize) as u16)
+        .saturating_add(6)
+        .max(6)
+}
+
+fn plain_text_rows(value: &str, width: usize) -> u16 {
+    let width = width.max(1);
+    value
+        .split('\n')
+        .map(|line| line.width().max(1).div_ceil(width))
+        .sum::<usize>()
+        .min(u16::MAX as usize) as u16
+}
+
 fn render_transcript(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let Some(projection) = app.projection.as_ref() else {
         return;
@@ -136,12 +339,12 @@ fn render_transcript(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let mut logical_rows = 0usize;
     for index in (history_base..end).rev() {
         let item = &history[index];
-        let lines = history_lines(
+        let lines = history_lines_for_app(
+            app,
+            index,
             item,
-            &app.theme,
             app.details_expanded || app.expanded_tool_groups.contains(item.id()),
             area.width.saturating_sub(6) as usize,
-            app.spinner_frame,
             app.focused_tool_group == Some(index),
         );
         logical_rows += rendered_rows(&lines, area.width.saturating_sub(6) as usize)
@@ -207,7 +410,12 @@ pub fn committed_lines(
     let start = start.min(projection.history.len());
     let end = end.clamp(start, projection.history.len());
     let mut lines = Vec::new();
-    if leading_separator && (include_header || start < end) {
+    let continues_partial_item = !include_header
+        && app
+            .inline_stream_commit
+            .as_ref()
+            .is_some_and(|commit| commit.history_index == start);
+    if leading_separator && (include_header || start < end) && !continues_partial_item {
         lines.push(Line::raw(""));
     }
     if include_header {
@@ -218,12 +426,12 @@ pub fn committed_lines(
             lines.push(Line::raw(""));
         }
         let global_index = start + index;
-        lines.extend(history_lines(
+        lines.extend(history_lines_for_app(
+            app,
+            global_index,
             item,
-            &app.theme,
             app.details_expanded || app.expanded_tool_groups.contains(item.id()),
             width.saturating_sub(6) as usize,
-            app.spinner_frame,
             app.focused_tool_group == Some(global_index),
         ));
     }
@@ -234,6 +442,164 @@ pub fn committed_height(lines: &[Line<'_>], width: u16) -> u16 {
     rendered_rows(lines, width as usize)
         .min(u16::MAX as usize)
         .max(1) as u16
+}
+
+/// Returns one complete Markdown prefix that can leave the redrawable inline
+/// viewport without changing the order or final contents of the assistant
+/// message. Fenced blocks remain live until their closing fence arrives.
+pub fn streaming_commit_candidate(
+    app: &App,
+    width: u16,
+    terminal_rows: u16,
+) -> Option<StreamingCommitCandidate> {
+    if !app.inline_mode || app.has_dialog() {
+        return None;
+    }
+    let projection = app.projection.as_ref()?;
+    let history_index = app.committed_history_count;
+    let HistoryItem::Assistant {
+        id,
+        text,
+        reasoning,
+        streaming: true,
+    } = projection.history.get(history_index)?
+    else {
+        return None;
+    };
+
+    let (committed_bytes, committed_reasoning) = app
+        .inline_stream_commit
+        .as_ref()
+        .filter(|commit| {
+            commit.history_index == history_index
+                && commit.item_id == *id
+                && text.starts_with(&commit.committed_text)
+                && commit.committed_reasoning.as_ref().is_none_or(|prefix| {
+                    reasoning
+                        .as_deref()
+                        .is_some_and(|value| value.starts_with(prefix))
+                })
+        })
+        .map_or((0, None), |commit| {
+            (
+                commit.committed_text.len(),
+                commit.committed_reasoning.clone(),
+            )
+        });
+    let transcript_capacity = terminal_rows
+        .saturating_sub(inline_chrome_rows(app, width))
+        .max(3);
+    let target_rows = transcript_capacity
+        .saturating_sub(STREAMING_TRANSCRIPT_RESERVE_ROWS)
+        .max(3);
+    if inline_transcript_rows(app, width) <= target_rows {
+        return None;
+    }
+
+    let boundaries = safe_markdown_boundaries(&text[committed_bytes..]);
+    let mut selected = None;
+    for relative_boundary in boundaries {
+        let boundary = committed_bytes + relative_boundary;
+        let state = InlineStreamCommit {
+            history_index,
+            item_id: id.clone(),
+            committed_text: text[..boundary].to_owned(),
+            committed_reasoning: reasoning.clone().or_else(|| committed_reasoning.clone()),
+        };
+        let remaining_rows = inline_transcript_rows_with_commit(app, width, Some(&state));
+        selected = Some(state);
+        if remaining_rows <= target_rows {
+            break;
+        }
+    }
+    let state = selected?;
+    let chunk = HistoryItem::Assistant {
+        id: id.clone(),
+        text: text[committed_bytes..state.committed_text.len()].to_owned(),
+        reasoning: reasoning_suffix(reasoning.as_ref(), committed_reasoning.as_ref()),
+        streaming: false,
+    };
+    let mut lines = history_lines(
+        &chunk,
+        &app.theme,
+        app.details_expanded,
+        width.saturating_sub(6) as usize,
+        app.spinner_frame,
+        false,
+    );
+    if committed_bytes > 0 && !lines.is_empty() {
+        suppress_assistant_prefixes(&mut lines, committed_reasoning.is_some(), true);
+        lines.insert(0, Line::raw(""));
+    } else if committed_bytes == 0
+        && committed_reasoning.is_none()
+        && (app.header_committed || history_index > 0)
+        && !lines.is_empty()
+    {
+        lines.insert(0, Line::raw(""));
+    }
+    (!lines.is_empty()).then_some(StreamingCommitCandidate { lines, state })
+}
+
+fn reasoning_suffix(reasoning: Option<&String>, committed: Option<&String>) -> Option<String> {
+    match (reasoning, committed) {
+        (Some(reasoning), Some(committed)) => reasoning
+            .strip_prefix(committed)
+            .filter(|suffix| !suffix.is_empty())
+            .map(ToOwned::to_owned),
+        (Some(reasoning), None) => Some(reasoning.clone()),
+        (None, _) => None,
+    }
+}
+
+fn suppress_assistant_prefixes(
+    lines: &mut [Line<'static>],
+    suppress_reasoning: bool,
+    suppress_text: bool,
+) {
+    for line in lines {
+        for span in &mut line.spans {
+            let suppress = (suppress_reasoning && span.content.as_ref() == "∵ ")
+                || (suppress_text && span.content.as_ref() == "◆ ");
+            if suppress {
+                span.content = "  ".into();
+                break;
+            }
+        }
+    }
+}
+
+fn safe_markdown_boundaries(text: &str) -> Vec<usize> {
+    let mut boundaries = Vec::new();
+    let mut fence = None::<(char, usize)>;
+    let mut offset = 0usize;
+    for line in text.split_inclusive('\n') {
+        let trimmed = line.trim();
+        let marker = trimmed
+            .chars()
+            .next()
+            .filter(|marker| matches!(marker, '`' | '~'))
+            .map(|marker| {
+                (
+                    marker,
+                    trimmed.chars().take_while(|ch| ch == &marker).count(),
+                )
+            })
+            .filter(|(_, count)| *count >= 3);
+        if let Some((marker, count)) = marker {
+            match fence {
+                Some((open_marker, open_count)) if marker == open_marker && count >= open_count => {
+                    fence = None;
+                }
+                None => fence = Some((marker, count)),
+                _ => {}
+            }
+        }
+        offset += line.len();
+        if fence.is_none() && trimmed.is_empty() && offset > 0 {
+            boundaries.push(offset);
+        }
+    }
+    boundaries
 }
 
 fn rendered_rows(lines: &[Line<'_>], width: usize) -> usize {
@@ -433,6 +799,114 @@ fn history_lines(
             lines
         }
     }
+}
+
+fn history_lines_for_app(
+    app: &App,
+    history_index: usize,
+    item: &HistoryItem,
+    expanded: bool,
+    width: usize,
+    focused: bool,
+) -> Vec<Line<'static>> {
+    history_lines_with_stream_commit(
+        app,
+        app.inline_stream_commit.as_ref(),
+        history_index,
+        item,
+        expanded,
+        width,
+        focused,
+    )
+}
+
+fn history_lines_with_stream_commit(
+    app: &App,
+    stream_commit: Option<&InlineStreamCommit>,
+    history_index: usize,
+    item: &HistoryItem,
+    expanded: bool,
+    width: usize,
+    focused: bool,
+) -> Vec<Line<'static>> {
+    let Some(commit) = stream_commit
+        .filter(|commit| commit.history_index == history_index && commit.item_id == item.id())
+    else {
+        return history_lines(
+            item,
+            &app.theme,
+            expanded,
+            width,
+            app.spinner_frame,
+            focused,
+        );
+    };
+    let HistoryItem::Assistant {
+        id,
+        text,
+        reasoning,
+        streaming,
+    } = item
+    else {
+        return history_lines(
+            item,
+            &app.theme,
+            expanded,
+            width,
+            app.spinner_frame,
+            focused,
+        );
+    };
+    let Some(text) = text.strip_prefix(&commit.committed_text) else {
+        return history_lines(
+            item,
+            &app.theme,
+            expanded,
+            width,
+            app.spinner_frame,
+            focused,
+        );
+    };
+    let tail_reasoning = match (reasoning.as_ref(), commit.committed_reasoning.as_ref()) {
+        (Some(reasoning), Some(committed)) => {
+            let Some(suffix) = reasoning.strip_prefix(committed) else {
+                return history_lines(
+                    item,
+                    &app.theme,
+                    expanded,
+                    width,
+                    app.spinner_frame,
+                    focused,
+                );
+            };
+            (!suffix.is_empty()).then(|| suffix.to_owned())
+        }
+        (Some(reasoning), None) => Some(reasoning.clone()),
+        (None, _) => None,
+    };
+    let tail = HistoryItem::Assistant {
+        id: id.clone(),
+        text: text.to_owned(),
+        reasoning: tail_reasoning,
+        streaming: *streaming,
+    };
+    let mut lines = history_lines(
+        &tail,
+        &app.theme,
+        expanded,
+        width,
+        app.spinner_frame,
+        focused,
+    );
+    if !lines.is_empty() {
+        suppress_assistant_prefixes(
+            &mut lines,
+            commit.committed_reasoning.is_some(),
+            !commit.committed_text.is_empty(),
+        );
+        lines.insert(0, Line::raw(""));
+    }
+    lines
 }
 
 fn prefixed_lines(prefix: &str, text: &str, color: ratatui::style::Color) -> Vec<Line<'static>> {
@@ -1189,11 +1663,7 @@ fn render_composer(frame: &mut Frame<'_>, app: &App, area: Rect) {
         )),
         Rect::new(area.x, area.y, area.width, 1),
     );
-    let input_rows = if app.editor.is_empty() {
-        1
-    } else {
-        app.editor.text().split('\n').count() as u16
-    };
+    let input_rows = input_rows(app, area.width);
     let input_area = Rect::new(area.x, area.y + 1, area.width, input_rows);
     let bottom = Rect::new(area.x, area.y + 1 + input_rows, area.width, 1);
     if app.editor.is_empty() {
@@ -1214,18 +1684,24 @@ fn render_composer(frame: &mut Frame<'_>, app: &App, area: Rect) {
         ));
         frame.render_widget(Paragraph::new(Line::from(spans)), input_area);
     } else {
+        let (visual_lines, cursor_line) = input_visual_layout(app, area.width);
+        let visible_start = cursor_line
+            .saturating_add(1)
+            .saturating_sub(INPUT_VIEWPORT_ROWS);
+        let visible_end = visible_start
+            .saturating_add(INPUT_VIEWPORT_ROWS)
+            .min(visual_lines.len());
         let mut lines = Vec::new();
-        let mut offset = 0usize;
-        for (index, line) in app.editor.text().split('\n').enumerate() {
-            let start = offset;
-            let end = start + line.len();
-            let cursor_here = app.editor.cursor() >= start && app.editor.cursor() <= end;
+        for (index, visual) in visual_lines[visible_start..visible_end].iter().enumerate() {
+            let visual_index = visible_start + index;
+            let line = &app.editor.text()[visual.start..visual.end];
+            let cursor_here = visual_index == cursor_line;
             let prefix = Span::styled(
-                if index == 0 { "> " } else { "  " },
+                if visual_index == 0 { "> " } else { "  " },
                 Style::default().fg(app.theme.accent),
             );
             if cursor_here {
-                let relative = app.editor.cursor() - start;
+                let relative = app.editor.cursor().saturating_sub(visual.start);
                 let before = &line[..relative];
                 let rest = &line[relative..];
                 let cursor = rest.graphemes(true).next().unwrap_or(" ");
@@ -1251,7 +1727,6 @@ fn render_composer(frame: &mut Frame<'_>, app: &App, area: Rect) {
                     Span::styled(line.to_owned(), Style::default().fg(app.theme.primary)),
                 ]));
             }
-            offset = end + 1;
         }
         frame.render_widget(Paragraph::new(lines), input_area);
     }
@@ -1704,6 +2179,162 @@ mod tests {
         let mut app = App::with_projection(projection);
         app.cwd = "/workspace/dao".into();
         app
+    }
+
+    #[test]
+    fn inline_content_height_shrinks_when_idle_and_grows_with_live_content() {
+        let mut app = fixture();
+        app.inline_mode = true;
+        app.header_committed = true;
+        app.committed_history_count = app.projection.as_ref().unwrap().history.len();
+
+        assert_eq!(inline_content_height(&app, 100), 4);
+
+        app.editor.set_text("first\nsecond\nthird");
+        assert_eq!(inline_content_height(&app, 100), 6);
+
+        app.projection
+            .as_mut()
+            .unwrap()
+            .history
+            .push(HistoryItem::Assistant {
+                id: "streaming".into(),
+                text: "A response that is still streaming".into(),
+                reasoning: None,
+                streaming: true,
+            });
+        assert!(inline_content_height(&app, 100) >= 9);
+    }
+
+    #[test]
+    fn inline_content_height_includes_suggestions_and_dialog_content() {
+        let mut app = fixture();
+        app.inline_mode = true;
+        app.header_committed = true;
+        app.committed_history_count = app.projection.as_ref().unwrap().history.len();
+        app.commands = vec![
+            ("model".into(), "Select model".into()),
+            ("models".into(), "List models".into()),
+        ];
+        app.editor.set_text("/mo");
+        assert_eq!(inline_content_height(&app, 100), 6);
+
+        app.selector = Some(crate::app::Selector {
+            kind: SelectorKind::Model,
+            title: "Select model".into(),
+            options: (0..8)
+                .map(|index| (format!("model-{index}"), json!(index)))
+                .collect(),
+            selected: 0,
+            original_theme: None,
+        });
+        assert_eq!(inline_content_height(&app, 100), 15);
+    }
+
+    #[test]
+    fn composer_uses_visual_unicode_rows_and_keeps_a_ten_row_cursor_viewport() {
+        let mut app = fixture();
+        app.inline_mode = true;
+        app.header_committed = true;
+        app.committed_history_count = app.projection.as_ref().unwrap().history.len();
+        app.editor.set_text(format!("{}尾", "你".repeat(50)));
+
+        let (lines, cursor_line) = input_visual_layout(&app, 12);
+        assert_eq!(lines.len(), 11);
+        assert_eq!(cursor_line, 10);
+        assert_eq!(input_rows(&app, 12), 10);
+        assert_eq!(inline_content_height(&app, 12), 13);
+        assert!(
+            lines
+                .iter()
+                .all(|line| { app.editor.text()[line.start..line.end].width() <= 10 })
+        );
+        assert_eq!(lines[cursor_line].end, app.editor.text().len());
+    }
+
+    #[test]
+    fn streaming_markdown_only_splits_after_complete_blocks() {
+        let source = "first\n\n```rust\nlet x = 1;\n\nstill fenced\n```\n\nlast";
+        let boundaries = safe_markdown_boundaries(source);
+        assert_eq!(boundaries.len(), 2);
+        assert_eq!(&source[..boundaries[0]], "first\n\n");
+        assert_eq!(
+            &source[..boundaries[1]],
+            "first\n\n```rust\nlet x = 1;\n\nstill fenced\n```\n\n"
+        );
+    }
+
+    #[test]
+    fn streaming_assistant_commits_safe_prefix_without_repeating_it_at_finalization() {
+        let mut app = fixture();
+        app.inline_mode = true;
+        app.header_committed = true;
+        app.committed_history_count = app.projection.as_ref().unwrap().history.len();
+        let text = concat!(
+            "ALPHA is the first complete block.\n\n",
+            "BRAVO is the second complete block.\n\n",
+            "CHARLIE is the third complete block.\n\n",
+            "DELTA remains live until the message finishes."
+        );
+        app.projection
+            .as_mut()
+            .unwrap()
+            .history
+            .push(HistoryItem::Assistant {
+                id: "stream:run".into(),
+                text: text.into(),
+                reasoning: None,
+                streaming: true,
+            });
+
+        let candidate = streaming_commit_candidate(&app, 30, 9).expect("safe prefix");
+        assert!(candidate.state.committed_text.contains("ALPHA"));
+        assert!(candidate.state.committed_text.ends_with("\n\n"));
+        assert_eq!(
+            candidate
+                .lines
+                .iter()
+                .flat_map(|line| &line.spans)
+                .filter(|span| span.content.as_ref() == "◆ ")
+                .count(),
+            1
+        );
+        let committed_prefix = candidate.state.committed_text.clone();
+        app.record_inline_stream_commit(candidate.state);
+        assert!(inline_transcript_rows(&app, 30) > 0);
+
+        let envelope: Envelope = serde_json::from_value(json!({
+            "type":"event",
+            "event":"message",
+            "event_id":"final-answer",
+            "data":{"message":{"role":"assistant","content":text}}
+        }))
+        .unwrap();
+        app.apply_envelope(&envelope);
+        let state = app
+            .inline_stream_commit
+            .as_ref()
+            .expect("reconciled prefix");
+        assert_eq!(state.item_id, "final-answer");
+        assert_eq!(state.committed_text, committed_prefix);
+
+        let start = app.committed_history_count;
+        let end = app.committable_history_end();
+        let lines = committed_lines(&app, start, end, false, true, 30);
+        assert!(lines.first().is_some_and(|line| line.width() == 0));
+        assert!(
+            !lines
+                .iter()
+                .flat_map(|line| &line.spans)
+                .any(|span| span.content.as_ref() == "◆ ")
+        );
+        let remaining = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert!(!remaining.contains("ALPHA"), "{remaining}");
+        assert!(remaining.contains("DELTA"), "{remaining}");
     }
 
     #[test]

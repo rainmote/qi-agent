@@ -34,6 +34,8 @@ pub struct WorkerDescriptor {
     pub session_path: PathBuf,
     pub repository_root: PathBuf,
     pub config_path: PathBuf,
+    #[serde(default)]
+    pub repl_backend: Option<String>,
     pub socket_path: PathBuf,
     pub token: String,
     pub generation: u64,
@@ -68,6 +70,7 @@ impl WorkerDescriptor {
             session_path,
             repository_root,
             config_path,
+            repl_backend: None,
             token,
             generation: 1,
             pid: None,
@@ -107,6 +110,7 @@ pub fn write_descriptor(path: &Path, descriptor: &WorkerDescriptor) -> Result<()
 pub fn serve(descriptor_path: &Path) -> Result<()> {
     let descriptor_path = descriptor_path.to_path_buf();
     let descriptor = read_descriptor(&descriptor_path)?;
+    let log_directory = RuntimePaths::discover()?.logs_dir;
     let lease_path = PathBuf::from(format!("{}.writer.lock", descriptor.session_path.display()));
     if let Some(parent) = lease_path.parent() {
         fs::create_dir_all(parent)?;
@@ -118,6 +122,7 @@ pub fn serve(descriptor_path: &Path) -> Result<()> {
         .write(true)
         .open(&lease_path)
         .with_context(|| format!("could not open session lease {}", lease_path.display()))?;
+    set_owner_only_file(&lease_path)?;
     lease.try_lock_exclusive().with_context(|| {
         format!(
             "session is already owned: {}",
@@ -171,7 +176,7 @@ pub fn serve(descriptor_path: &Path) -> Result<()> {
                     Arc::clone(&shutdown_requested),
                 ) {
                     append_log(
-                        &descriptor.repository_root,
+                        &log_directory,
                         &descriptor.worker_id,
                         &format!("private connection rejected: {error:#}\n"),
                     );
@@ -214,7 +219,7 @@ pub fn serve(descriptor_path: &Path) -> Result<()> {
             restart_attempts += 1;
             if restart_attempts > 5 {
                 append_log(
-                    &descriptor.repository_root,
+                    &log_directory,
                     &descriptor.worker_id,
                     "worker restart budget exhausted after 5 consecutive failures\n",
                 );
@@ -301,6 +306,9 @@ fn start_babashka(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(backend) = &snapshot.repl_backend {
+        command.env("DAO_REPL_BACKEND", backend);
+    }
     if let Some(seconds) = std::env::var("DAO_WORKER_CPU_SECONDS")
         .ok()
         .and_then(|value| value.parse::<libc::rlim_t>().ok())

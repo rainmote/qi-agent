@@ -24,7 +24,12 @@ Rust 前端直接打开 controlling TTY。它通过 TTY 读取按键，并使用
 维护屏幕底部的动态区；公开 JSONL 协议运行在 owner-only Unix socket 上，诊断只写日志或
 stderr。完成的消息和工具组由
 `insert_before` 提交到 terminal scrollback，流式 assistant、运行中工具、composer 和 dialog
-留在动态区重绘。程序不启用 alternate screen 和鼠标捕获，所以终端原生滚动条、滚轮与历史快捷键
+留在动态区重绘。动态区会按当前的流式内容、运行中工具、composer、命令候选、队列和 dialog
+自动伸缩；空闲时只保留实际需要的行数，增长时最多使用终端当前可用行。composer 按终端单元格
+宽度（包括中文宽字符）计算视觉换行，并保留最多 10 行的光标窗口。较长的流式 assistant 会在
+完整 Markdown 块的空行边界逐段提交到 scrollback；未闭合 fenced code/mermaid 块和运行中工具
+仍留在动态区，避免提交半截结构。内容或窗口尺寸变化时都会即时重新计算。程序不启用
+alternate screen 和鼠标捕获，所以终端原生滚动条、滚轮与历史快捷键
 可以直接查看已经完成的对话。没有 controlling TTY 时应运行测试，不应启动交互界面。
 
 ## 已对齐范围

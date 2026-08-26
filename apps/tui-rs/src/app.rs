@@ -37,6 +37,18 @@ pub struct Selector {
     pub original_theme: Option<String>,
 }
 
+/// Tracks the source prefix of the first live assistant message that has
+/// already been moved into the terminal's native scrollback. The projection
+/// continues to own the complete message, while the inline renderer only
+/// redraws the uncommitted suffix.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InlineStreamCommit {
+    pub history_index: usize,
+    pub item_id: String,
+    pub committed_text: String,
+    pub committed_reasoning: Option<String>,
+}
+
 #[derive(Clone, Debug)]
 pub struct App {
     pub projection: Option<UiProjection>,
@@ -57,6 +69,7 @@ pub struct App {
     pub inline_mode: bool,
     pub header_committed: bool,
     pub committed_history_count: usize,
+    pub inline_stream_commit: Option<InlineStreamCommit>,
     pub scroll_offset: usize,
     pub follow_bottom: bool,
     pub notice: Option<String>,
@@ -91,6 +104,7 @@ impl Default for App {
             inline_mode: false,
             header_committed: false,
             committed_history_count: 0,
+            inline_stream_commit: None,
             scroll_offset: 0,
             follow_bottom: true,
             notice: None,
@@ -199,6 +213,7 @@ impl App {
 
     pub fn load_snapshot(&mut self, value: Value) -> anyhow::Result<()> {
         self.projection = Some(projection::from_snapshot(serde_json::from_value(value)?));
+        self.reconcile_inline_stream_commit();
         self.sync_theme();
         self.sync_busy_indicator();
         Ok(())
@@ -230,6 +245,7 @@ impl App {
     pub fn apply_envelope(&mut self, envelope: &Envelope) {
         if let Some(current) = self.projection.take() {
             self.projection = Some(projection::apply_envelope(current, envelope));
+            self.reconcile_inline_stream_commit();
             self.sync_theme();
             self.sync_busy_indicator();
         }
@@ -589,6 +605,63 @@ impl App {
             .iter()
             .position(|item| !item.is_final())
             .map_or(projection.history.len(), |offset| start + offset)
+    }
+
+    pub fn record_inline_stream_commit(&mut self, commit: InlineStreamCommit) {
+        self.inline_stream_commit = Some(commit);
+    }
+
+    pub fn finish_inline_history_commit(&mut self, end: usize) {
+        if self
+            .inline_stream_commit
+            .as_ref()
+            .is_some_and(|commit| commit.history_index < end)
+        {
+            self.inline_stream_commit = None;
+        }
+    }
+
+    fn reconcile_inline_stream_commit(&mut self) {
+        let Some(mut commit) = self.inline_stream_commit.take() else {
+            return;
+        };
+        let Some(projection) = self.projection.as_ref() else {
+            return;
+        };
+        if commit.history_index < self.committed_history_count {
+            return;
+        }
+
+        let matches_prefix = |item: &HistoryItem| match item {
+            HistoryItem::Assistant {
+                text, reasoning, ..
+            } => {
+                text.starts_with(&commit.committed_text)
+                    && commit.committed_reasoning.as_ref().is_none_or(|prefix| {
+                        reasoning
+                            .as_deref()
+                            .is_some_and(|value| value.starts_with(prefix))
+                    })
+            }
+            _ => false,
+        };
+        let matched = projection
+            .history
+            .get(commit.history_index)
+            .filter(|item| matches_prefix(item))
+            .map(|item| (commit.history_index, item))
+            .or_else(|| {
+                projection.history[self.committed_history_count.min(projection.history.len())..]
+                    .iter()
+                    .enumerate()
+                    .find(|(_, item)| matches_prefix(item))
+                    .map(|(offset, item)| (self.committed_history_count + offset, item))
+            });
+        if let Some((history_index, item)) = matched {
+            commit.history_index = history_index;
+            commit.item_id = item.id().to_owned();
+            self.inline_stream_commit = Some(commit);
+        }
     }
 
     fn handle_tool_focus_key(&mut self, key: KeyEvent) -> Vec<Action> {

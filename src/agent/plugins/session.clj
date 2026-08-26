@@ -1,6 +1,7 @@
 (ns agent.plugins.session
   "Recoverable append-only JSONL sessions with checkpoints and safe forks."
   (:require [agent.kernel :as kernel]
+            [agent.secure-files :as secure]
             [cheshire.core :as json]
             [clojure.java.io :as io]
             [clojure.string :as str])
@@ -44,7 +45,20 @@
   (when-let [parent (.getParentFile (io/file path))]
     (when-not (or (.isDirectory parent) (.mkdirs parent))
       (throw (ex-info "Could not create session directory"
-                      {:path (str parent)})))))
+                      {:path (str parent)})))
+    (secure/protect-managed-parents! parent)))
+
+(defn- migrate-session-permissions! [path]
+  (let [target (io/file path)
+        parent (.getParentFile target)]
+    (ensure-parent! path)
+    (when (and parent (secure/managed-state-root parent))
+      (doseq [file (or (.listFiles parent) (make-array java.io.File 0))
+              :when (and (.isFile file)
+                         (or (str/ends-with? (.getName file) ".jsonl")
+                             (str/ends-with? (.getName file) ".writer.lock")))]
+        (secure/protect-file! file)))
+    (secure/ensure-owner-file! target)))
 
 (defn- ensure-line-boundary! [path]
   (let [target (io/file path)]
@@ -122,6 +136,7 @@
         temporary (java.io.File/createTempFile ".bb-agent-fork-" ".jsonl"
                                                 parent)]
     (try
+      (secure/protect-file! temporary)
       (with-open [writer (io/writer temporary)]
         (doseq [item events]
           (.write writer (str (json/generate-string item) "\n")))
@@ -136,6 +151,7 @@
             (throw error))))
       (finally
         (when (.exists temporary) (.delete temporary))))
+    (secure/protect-file! target)
     (str target)))
 
 (def plugin
@@ -150,7 +166,7 @@
                        {:retain-messages retain-messages
                         :max-summary-chars max-summary-chars})))
      (when path
-       (ensure-parent! path)
+       (migrate-session-permissions! path)
        (ensure-line-boundary! path))
      (let [{loaded-events :events loaded-diagnostics :diagnostics}
            (load-events path)

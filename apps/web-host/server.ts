@@ -1,7 +1,8 @@
 import { randomBytes } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { constants, createReadStream } from "node:fs";
 import { access, readFile, rm, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { isIP } from "node:net";
 import { dirname, extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SessionManager } from "./sessions.js";
@@ -27,6 +28,12 @@ interface WebHostOptions {
   stateDirectory?: string;
   staticRoot?: string;
   token?: string;
+  unsafeAllowNetwork?: boolean;
+}
+
+function isLoopbackHost(host: string): boolean {
+  if (host === "localhost" || host === "::1") return true;
+  return isIP(host) === 4 && host.startsWith("127.");
 }
 
 function securityHeaders(response: ServerResponse): void {
@@ -109,6 +116,11 @@ async function serveStatic(response: ServerResponse, root: string,
 
 export async function startWebHost(options: WebHostOptions = {}) {
   const host = options.host || "127.0.0.1";
+  if (!isLoopbackHost(host) && !options.unsafeAllowNetwork) {
+    throw new Error(
+      "Refusing a non-loopback Web Host. Use --unsafe-allow-network only behind an authenticated TLS proxy.",
+    );
+  }
   const port = options.port ?? Number(process.env.PORT || 3080);
   const token = options.token || randomBytes(24).toString("base64url");
   const staticRoot = options.staticRoot || defaultStaticRoot;
@@ -123,11 +135,42 @@ export async function startWebHost(options: WebHostOptions = {}) {
   const sessions = new SessionManager(workspaces, repositoryRoot,
     ownedDaemonEnvironment || {});
 
+  const readiness = async () => {
+    const workspaceRoots = workspaces.list().map((workspace) => workspace.path);
+    const binaryCandidates = [
+      process.env.DAO_BIN,
+      join(repositoryRoot, "apps", "tui-rs", "target", "release", "dao"),
+      join(repositoryRoot, "apps", "tui-rs", "target", "debug", "dao"),
+    ].filter((value): value is string => Boolean(value));
+    const checks = {
+      staticAssets: false,
+      runtimeConfig: false,
+      daemonBinary: false,
+      workspaces: false,
+    };
+    await Promise.allSettled([
+      access(join(staticRoot, "index.html")).then(() => { checks.staticAssets = true; }),
+      Promise.all([
+        access(join(repositoryRoot, "bb.edn")),
+        access(join(repositoryRoot, "agent.edn")),
+      ]).then(() => { checks.runtimeConfig = true; }),
+      Promise.any(binaryCandidates.map((path) => access(path, constants.X_OK)))
+        .then(() => { checks.daemonBinary = true; }),
+      Promise.all(workspaceRoots.map((path) => access(path)))
+        .then(() => { checks.workspaces = workspaceRoots.length > 0; }),
+    ]);
+    return { ok: Object.values(checks).every(Boolean), checks };
+  };
+
   const server = createServer(async (request, response) => {
     const url = new URL(request.url || "/", `http://${request.headers.host || `${host}:${port}`}`);
     try {
-      if (url.pathname === "/health") {
+      if (url.pathname === "/health" || url.pathname === "/health/live") {
         return json(response, 200, { ok: true });
+      }
+      if (url.pathname === "/health/ready") {
+        const status = await readiness();
+        return json(response, status.ok ? 200 : 503, status);
       }
       if (url.searchParams.get("token") === token && request.method === "GET") {
         response.setHeader("Set-Cookie",
@@ -294,6 +337,7 @@ function parseArguments(arguments_: string[]): WebHostOptions {
     if (argument === "--host") options.host = arguments_[++index];
     else if (argument === "--port") options.port = Number(arguments_[++index]);
     else if (argument === "--workspace") options.workspace = arguments_[++index];
+    else if (argument === "--unsafe-allow-network") options.unsafeAllowNetwork = true;
     else throw new Error(`Unknown Web Host argument: ${argument}`);
   }
   return options;

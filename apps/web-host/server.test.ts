@@ -48,6 +48,8 @@ test("web host authenticates, catalogs, creates a real worker, and invokes RPC",
   const authorization = { Authorization: "Bearer test-token" };
   try {
     assert.equal((await fetch(`${base}/health`)).status, 200);
+    const ready = await fetch(`${base}/health/ready`);
+    assert.equal(ready.status, 200, await ready.text());
     assert.equal((await fetch(`${base}/api/bootstrap`)).status, 401);
     const bootstrapResponse = await fetch(`${base}/api/bootstrap`, { headers: authorization });
     const bootstrap = await bootstrapResponse.json() as {
@@ -119,4 +121,11 @@ test("web host authenticates, catalogs, creates a real worker, and invokes RPC",
     await host.close();
     await rm(root, { recursive: true });
   }
+});
+
+test("web host rejects network exposure unless it is explicitly acknowledged", async () => {
+  await assert.rejects(
+    startWebHost({ host: "0.0.0.0", port: 0 }),
+    /Refusing a non-loopback Web Host/,
+  );
 });

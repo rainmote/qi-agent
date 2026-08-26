@@ -95,9 +95,12 @@ Host 的边界：
 - 浏览器只能打开 allowlist 中经过 `realpath` 解析的工作区，会话路径完全由 Host 生成；
 - 远程命令拒绝带任意目标路径的 `/fork`，运行时状态不会返回 context 正文或认证信息；
 - session JSONL、工作区清单和凭据都不会打包进前端产物。
+- `/health/live` 只检查进程存活；`/health/ready` 还会检查静态产物、运行配置、daemon
+  二进制和工作区可访问性。
 
-Web Host 是本机单用户边界，不是公网多租户服务。若显式使用 `--host` 绑定非回环地址，仍应
-在受控网络和反向代理后运行。
+Web Host 是本机单用户边界，不是公网多租户服务。非回环地址默认会被拒绝；只有在已配置
+认证和 TLS 的反向代理后，才可显式传入 `--unsafe-allow-network --host ADDRESS`。该开关不把
+Web Host 变成多租户服务。
 
 ## 测试
 

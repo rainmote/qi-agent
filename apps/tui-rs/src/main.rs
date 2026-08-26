@@ -8,7 +8,7 @@ use crossterm::{
     cursor::{Hide, MoveTo, Show},
     event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyEventKind},
     execute,
-    terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode},
+    terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode, size},
 };
 use ratatui::{
     Terminal, TerminalOptions, Viewport,
@@ -28,8 +28,15 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+use uuid::Uuid;
 
-const INLINE_VIEWPORT_HEIGHT: u16 = 18;
+fn inline_viewport_height(content_rows: u16, terminal_rows: u16) -> u16 {
+    if terminal_rows == 0 {
+        content_rows.max(1)
+    } else {
+        content_rows.max(1).min(terminal_rows)
+    }
+}
 
 enum HostMessage {
     Envelope(Box<Envelope>),
@@ -46,7 +53,8 @@ struct PendingRequest {
 
 struct TerminalGuard {
     terminal: Terminal<CrosstermBackend<File>>,
-    tty_fd: RawFd,
+    tty: File,
+    viewport_height: u16,
 }
 
 /// Crossterm obtains the cursor position by writing a device-status query to
@@ -95,68 +103,130 @@ impl TerminalGuard {
             .try_clone()
             .context("could not clone controlling terminal")?;
         let tty_fd = tty.as_raw_fd();
+        let backend_tty = tty
+            .try_clone()
+            .context("could not clone controlling terminal for renderer")?;
         enable_raw_mode().context("could not enable terminal raw mode")?;
         if let Err(error) = execute!(tty, EnableBracketedPaste, Hide) {
             let _ = execute!(cleanup_tty, Show, DisableBracketedPaste);
             let _ = disable_raw_mode();
             return Err(error).context("could not initialize inline terminal UI");
         }
-        let terminal = match StdoutToTty::new(tty_fd).and_then(|_redirect| {
-            Terminal::with_options(
-                CrosstermBackend::new(tty),
+        let initialized = match StdoutToTty::new(tty_fd).and_then(|_redirect| {
+            let terminal_size = size()?;
+            let viewport_height = inline_viewport_height(4, terminal_size.1);
+            let terminal = Terminal::with_options(
+                CrosstermBackend::new(backend_tty),
                 TerminalOptions {
-                    viewport: Viewport::Inline(INLINE_VIEWPORT_HEIGHT),
+                    viewport: Viewport::Inline(viewport_height),
                 },
-            )
+            )?;
+            Ok((terminal, viewport_height))
         }) {
-            Ok(terminal) => terminal,
+            Ok(initialized) => initialized,
             Err(error) => {
                 let _ = execute!(cleanup_tty, Show, DisableBracketedPaste);
                 let _ = disable_raw_mode();
                 return Err(error).context("could not create inline terminal viewport");
             }
         };
-        Ok(Self { terminal, tty_fd })
+        Ok(Self {
+            terminal: initialized.0,
+            tty,
+            viewport_height: initialized.1,
+        })
     }
 
     fn draw(&mut self, app: &App) -> Result<()> {
-        let _redirect = StdoutToTty::new(self.tty_fd)?;
+        let _redirect = StdoutToTty::new(self.tty.as_raw_fd())?;
         self.terminal.draw(|frame| ui::draw(frame, app))?;
         Ok(())
     }
 
-    fn commit_ready_history(&mut self, app: &mut App) -> Result<bool> {
+    fn resize_inline(&mut self, app: &App, terminal_width: u16, terminal_rows: u16) -> Result<()> {
+        let viewport_height = inline_viewport_height(
+            ui::inline_content_height(app, terminal_width),
+            terminal_rows,
+        );
+        if viewport_height == self.viewport_height {
+            return Ok(());
+        }
+
+        let current = self.terminal.current_buffer_mut().area;
+        let anchor_y = current.y.min(terminal_rows.saturating_sub(1));
+        let backend_tty = self
+            .tty
+            .try_clone()
+            .context("could not clone controlling terminal for resize")?;
+        let _redirect = StdoutToTty::new(self.tty.as_raw_fd())?;
+        execute!(
+            self.terminal.backend_mut(),
+            MoveTo(current.x, anchor_y),
+            Clear(ClearType::FromCursorDown)
+        )?;
+        self.terminal = Terminal::with_options(
+            CrosstermBackend::new(backend_tty),
+            TerminalOptions {
+                viewport: Viewport::Inline(viewport_height),
+            },
+        )?;
+        self.viewport_height = viewport_height;
+        Ok(())
+    }
+
+    fn commit_ready_history(
+        &mut self,
+        app: &mut App,
+        terminal_width: u16,
+        terminal_rows: u16,
+    ) -> Result<bool> {
         if app.projection.is_none() {
             return Ok(false);
         }
+        let mut changed = false;
         let include_header = !app.header_committed;
         let start = app.committed_history_count;
         let end = app.committable_history_end();
-        if !include_header && start >= end {
-            return Ok(false);
+        if include_header || start < end {
+            let lines = ui::committed_lines(
+                app,
+                start,
+                end,
+                include_header,
+                app.header_committed || start > 0,
+                terminal_width,
+            );
+            if !lines.is_empty() {
+                self.insert_scrollback_lines(lines, terminal_width)?;
+            }
+            app.header_committed = true;
+            app.committed_history_count = end;
+            app.finish_inline_history_commit(end);
+            changed = true;
         }
-        let width = self.terminal.size()?.width;
-        let lines = ui::committed_lines(
-            app,
-            start,
-            end,
-            include_header,
-            app.header_committed || start > 0,
-            width,
-        );
-        if lines.is_empty() {
-            return Ok(false);
+
+        if let Some(candidate) = ui::streaming_commit_candidate(app, terminal_width, terminal_rows)
+        {
+            self.insert_scrollback_lines(candidate.lines, terminal_width)?;
+            app.record_inline_stream_commit(candidate.state);
+            changed = true;
         }
+        Ok(changed)
+    }
+
+    fn insert_scrollback_lines(
+        &mut self,
+        lines: Vec<ratatui::text::Line<'static>>,
+        width: u16,
+    ) -> Result<()> {
         let height = ui::committed_height(&lines, width);
-        let _redirect = StdoutToTty::new(self.tty_fd)?;
+        let _redirect = StdoutToTty::new(self.tty.as_raw_fd())?;
         self.terminal.insert_before(height, move |buffer| {
             Paragraph::new(Text::from(lines))
                 .wrap(Wrap { trim: false })
                 .render(buffer.area, buffer);
         })?;
-        app.header_committed = true;
-        app.committed_history_count = end;
-        Ok(true)
+        Ok(())
     }
 }
 
@@ -244,7 +314,7 @@ fn send_request(
 ) -> Result<()> {
     *counter += 1;
     let id = format!("ratatui-{counter}");
-    let command_id = wire::mutation(method).then(|| format!("{client_id}-{counter}"));
+    let command_id = wire::mutation(method).then(|| format!("command-{}", Uuid::new_v4()));
     serde_json::to_writer(
         &mut *output,
         &wire::command(
@@ -354,7 +424,9 @@ fn run_tui(mut attached: AttachedAgent) -> Result<()> {
 
     'ui: loop {
         if dirty {
-            terminal.commit_ready_history(&mut app)?;
+            let terminal_size = size()?;
+            terminal.commit_ready_history(&mut app, terminal_size.0, terminal_size.1)?;
+            terminal.resize_inline(&app, terminal_size.0, terminal_size.1)?;
             terminal.draw(&app)?;
             dirty = false;
         }
@@ -451,9 +523,7 @@ fn run_tui(mut attached: AttachedAgent) -> Result<()> {
                 Event::Mouse(mouse) => {
                     dirty |= app.handle_mouse(mouse.kind);
                 }
-                Event::Resize(_, _) => {
-                    dirty = true;
-                }
+                Event::Resize(_, _) => dirty = true,
                 _ => {}
             }
         }
@@ -491,6 +561,7 @@ fn entrypoint() -> Result<()> {
     let args: Vec<String> = env::args().skip(1).collect();
     let repository_root = option_path(&args, "--repository-root");
     let config_path = option_path(&args, "--config");
+    let repl_backend = value_after(&args, "--repl-backend");
     let (command, tail) = command_and_tail(&args);
     match command {
         Some("daemon") if tail.first().map(String::as_str) == Some("serve") => {
@@ -516,6 +587,7 @@ fn entrypoint() -> Result<()> {
             repository_root,
             config_path,
         ),
+        Some("backup") => call_and_print("daemon.backup", json!({}), repository_root, config_path),
         Some("service") => {
             let action = match tail.first().map(String::as_str).unwrap_or("print") {
                 "print" => service::ServiceAction::Print,
@@ -538,6 +610,7 @@ fn entrypoint() -> Result<()> {
                 Some(agent_id),
                 repository_root.as_deref(),
                 config_path.as_deref(),
+                None,
             )?;
             let result = attached.connection.call("agent.stop", json!({}))?;
             print_json(&result)
@@ -551,6 +624,7 @@ fn entrypoint() -> Result<()> {
                 requested_agent,
                 repository_root.as_deref(),
                 config_path.as_deref(),
+                repl_backend,
             )?;
             let result = attached
                 .connection
@@ -572,6 +646,7 @@ fn entrypoint() -> Result<()> {
                 Some(agent_id),
                 repository_root.as_deref(),
                 config_path.as_deref(),
+                None,
             )?)
         }
         Some("help" | "--help" | "-h") => {
@@ -579,10 +654,12 @@ fn entrypoint() -> Result<()> {
             Ok(())
         }
         Some(value) if !value.starts_with('-') => bail!("unknown dao command: {value}"),
+        Some(value) => bail!("unknown dao option: {value}"),
         _ => run_tui(client::attach_or_create(
             None,
             repository_root.as_deref(),
             config_path.as_deref(),
+            repl_backend,
         )?),
     }
 }
@@ -590,13 +667,18 @@ fn entrypoint() -> Result<()> {
 fn command_and_tail(args: &[String]) -> (Option<&str>, &[String]) {
     let mut index = 0;
     while index < args.len() {
-        if matches!(args[index].as_str(), "--config" | "--repository-root") {
+        if matches!(
+            args[index].as_str(),
+            "--config" | "--repository-root" | "--repl-backend"
+        ) {
             index += 2;
             continue;
         }
+        if matches!(args[index].as_str(), "--help" | "-h") {
+            return (Some(args[index].as_str()), &args[index + 1..]);
+        }
         if args[index].starts_with('-') {
-            index += 1;
-            continue;
+            return (Some(args[index].as_str()), &args[index + 1..]);
         }
         return (Some(args[index].as_str()), &args[index + 1..]);
     }
@@ -614,6 +696,7 @@ const USAGE: &str = "Daemon-backed Clojure agent runtime
   dao update                       recover missing workers and refresh leases
   dao doctor                       run non-destructive diagnostics
   dao doctor --fix                 purge only provably expired leases
+  dao backup                       create a consistent SQLite snapshot
   dao service print|install|uninstall
                                    manage the per-user OS daemon service
   dao stop AGENT_ID                explicitly stop one root agent tree
@@ -622,6 +705,7 @@ const USAGE: &str = "Daemon-backed Clojure agent runtime
 
 Options:
   --config PATH                    worker profile (default: agent.edn)
+  --repl-backend BACKEND           babashka (default) or jvm-clojure
   --repository-root PATH           dao runtime source root";
 
 fn call_and_print(
@@ -641,7 +725,8 @@ fn run_repl(
     repository_root: Option<&Path>,
     config_path: Option<&Path>,
 ) -> Result<()> {
-    let mut attached = client::attach_or_create(Some(agent_id), repository_root, config_path)?;
+    let mut attached =
+        client::attach_or_create(Some(agent_id), repository_root, config_path, None)?;
     println!("Clojure REPL for {agent_id}. Ctrl-D exits without stopping the agent.");
     let stdin = io::stdin();
     loop {
@@ -677,7 +762,7 @@ fn option_path(args: &[String], flag: &str) -> Option<PathBuf> {
 
 fn value_after<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
     args.iter()
-        .position(|argument| argument == flag)
+        .rposition(|argument| argument == flag)
         .and_then(|index| args.get(index + 1))
         .map(String::as_str)
 }
@@ -692,7 +777,7 @@ fn positional(args: &[String], index: usize) -> Option<&str> {
             }
             if matches!(
                 argument.as_str(),
-                "--config" | "--repository-root" | "--agent"
+                "--config" | "--repository-root" | "--repl-backend" | "--agent"
             ) {
                 skip_next = true;
                 return false;
@@ -701,4 +786,54 @@ fn positional(args: &[String], index: usize) -> Option<&str> {
         })
         .nth(index)
         .map(String::as_str)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    #[test]
+    fn top_level_help_is_a_command_instead_of_starting_the_tui() {
+        let values = args(&["--repository-root", "/tmp/dao", "--help"]);
+        let (command, tail) = command_and_tail(&values);
+        assert_eq!(command, Some("--help"));
+        assert!(tail.is_empty());
+    }
+
+    #[test]
+    fn unknown_top_level_options_are_not_silently_ignored() {
+        let values = args(&["--unknown"]);
+        let (command, tail) = command_and_tail(&values);
+        assert_eq!(command, Some("--unknown"));
+        assert!(tail.is_empty());
+    }
+
+    #[test]
+    fn the_last_repeated_option_overrides_an_installed_launcher_default() {
+        let values = args(&[
+            "--config",
+            "/installed/agent.edn",
+            "--config",
+            "/workspace/jvm-clojure.edn",
+        ]);
+        assert_eq!(
+            value_after(&values, "--config"),
+            Some("/workspace/jvm-clojure.edn")
+        );
+    }
+
+    #[test]
+    fn inline_viewport_height_tracks_content_with_safe_terminal_bounds() {
+        assert_eq!(inline_viewport_height(4, 0), 4);
+        assert_eq!(inline_viewport_height(4, 44), 4);
+        assert_eq!(inline_viewport_height(18, 44), 18);
+        assert_eq!(inline_viewport_height(30, 44), 30);
+        assert_eq!(inline_viewport_height(12, 8), 8);
+        assert_eq!(inline_viewport_height(40, 80), 40);
+        assert_eq!(inline_viewport_height(100, 80), 80);
+    }
 }

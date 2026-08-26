@@ -7,8 +7,17 @@
   {:ns agent.plugins.auth-store}
 
   {:ns agent.plugins.model-registry
-   :config {:default-provider :chatgpt}}
+   :config {:default-provider :openai}}
 
+  {:ns agent.plugins.openai-responses
+   :config {:model "gpt-5.6-sol"
+            :api-key-env "OPENAI_API_KEY"
+            :timeout-ms 180000
+            :max-retries 2
+            :retry-delay-ms 500
+            :extra-body {:reasoning {:effort "medium"}}}}
+
+  ;; Optional experimental fallback that reuses a local Codex/ChatGPT login.
   {:ns agent.plugins.chatgpt
    :config {:model "gpt-5.6-sol"
             :timeout-ms 180000
@@ -78,8 +87,8 @@
             :max-edits 32
             :default-role :default
             ;; Values may also be fallback vectors, for example
-            ;; :plan [:anthropic :chatgpt]. Only registered providers are used.
-            :roles {:default :chatgpt}}}
+            ;; :plan [:openai :chatgpt]. Only registered providers are used.
+            :roles {:default :openai}}}
 
   ;; DeepSeek Harness-style subagents are split into a provider-neutral
   ;; registry, isolated spawn/fork providers, and model-facing tool adapters.
@@ -96,7 +105,14 @@
     {:plugins
      [{:ns agent.plugins.session :config {:path nil :ephemeral true}}
       {:ns agent.plugins.model-registry
-       :config {:default-provider :chatgpt}}
+       :config {:default-provider :openai}}
+      {:ns agent.plugins.openai-responses
+       :config {:model "gpt-5.6-sol"
+                :api-key-env "OPENAI_API_KEY"
+                :timeout-ms 180000
+                :max-retries 2
+                :retry-delay-ms 500
+                :extra-body {:reasoning {:effort "medium"}}}}
       {:ns agent.plugins.chatgpt
        :config {:model "gpt-5.6-sol"
                 :timeout-ms 180000
@@ -114,6 +130,7 @@
       {:ns agent.plugins.durable-state
        :config {:root "."}}
       {:ns agent.plugins.bb-repl
+       ;; `dao --repl-backend jvm-clojure` 会为新 agent 覆盖默认 backend。
        :config {:root "."
                 :sandbox :auto
                 :timeout-ms 10000
@@ -134,6 +151,7 @@
    :config {:root "."}}
 
   {:ns agent.plugins.bb-repl
+   ;; 也可直接替换为 agent.plugins.jvm-clojure-repl。
    :config {:root "."
             :sandbox :auto
             :timeout-ms 10000

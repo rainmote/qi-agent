@@ -120,7 +120,7 @@ DeepSeek 将一次 model request 及其工具调用称为 step，一个 turn 可
 
 ### 5.7 配置组合优于运行时条件分支
 
-用不同 EDN profile 选择默认 Codex/ChatGPT 订阅、DeepSeek 或 mock，以及只读/完整
+用不同 EDN profile 选择默认 OpenAI 公共 API、实验性 Codex/ChatGPT 订阅、DeepSeek 或 mock，以及只读/完整
 工具、console/OTel telemetry。避免在 loop 中堆积 `if benchmark`、`if web`、
 `if plan-mode`。
 
@@ -136,12 +136,15 @@ Pi 和当前 Babashka 实现中的插件都与主进程同权限。项目级插�
 - session store 会跳过并诊断损坏 JSONL 行；clear、compaction 都是 append-only
   checkpoint；fork 原子创建新文件并生成独立 session id。
 - `agent.plugins.openai`：隔离 OpenAI-compatible/DeepSeek HTTP 协议。
+- `agent.plugins.openai-responses`：默认生产 adapter；限制 API key 只发往 OpenAI 公共
+  Responses endpoint，并保留/replay 完整 output items。
 - `agent.plugins.chatgpt`：隔离 ChatGPT 订阅的 Responses/SSE 协议；每次请求
   重读 Codex auth cache，只把 access token 放进 Authorization header，并保留、
   replay 完整 response output items 以维持 reasoning/tool-call 连续性。传输默认使用
   HTTP/1.1；TLS/连接错误会轮换 HTTP client 并指数退避，且不会与 runtime 形成乘法重试。
-- 根目录 `agent.edn` 默认装配 `agent.plugins.chatgpt`；DeepSeek adapter 保留在
-  `examples/deepseek.edn`，模型切换只替换 profile，不修改 kernel 或 loop。
+- 根目录 `agent.edn` 默认选择 `agent.plugins.openai-responses`；实验性 ChatGPT 订阅 adapter
+  仍可通过 `/model` 或 `examples/chatgpt.edn` 使用，DeepSeek adapter 保留在
+  `examples/deepseek.edn`。模型切换只替换 provider/profile，不修改 kernel 或 loop。
 - `agent.plugins.runtime`：有 step 上限的默认 tool-calling loop；本身通过 `:agent/run` service 可替换。
 - `agent.cancellation` 与 `agent.streaming`：所有 adapter 共享取消 token 和 SSE framing；
   `:llm/stream` 对外发布统一 start/delta/completed/error live event。

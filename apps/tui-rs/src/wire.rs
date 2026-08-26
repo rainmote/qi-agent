@@ -106,6 +106,7 @@ pub fn mutation(method: &str) -> bool {
             | "goal.complete"
             | "goal.resume"
             | "daemon.update"
+            | "daemon.backup"
             | "daemon.shutdown"
     )
 }

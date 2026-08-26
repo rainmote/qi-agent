@@ -6,6 +6,7 @@
   (:require [agent.cancellation :as cancellation]
             [agent.kernel :as kernel]
             [agent.sandbox :as sandbox]
+            [agent.secure-files :as secure]
             [babashka.fs :as fs]
             [clojure.java.io :as io]
             [clojure.string :as str])
@@ -71,6 +72,25 @@
      :truncated (< end (count text))
      :size (count text)}))
 
+(defn- assert-file-size! [path max-file-bytes]
+  (let [size (Files/size path)]
+    (when (> size max-file-bytes)
+      (throw (ex-info "File exceeds the configured safe read limit"
+                      {:path (str path)
+                       :bytes size
+                       :max-file-bytes max-file-bytes})))
+    size))
+
+(defn- content-bytes [value]
+  (alength (.getBytes (str value) "UTF-8")))
+
+(defn- assert-write-size! [content max-write-bytes]
+  (let [size (content-bytes content)]
+    (when (> size max-write-bytes)
+      (throw (ex-info "Write exceeds the configured safe size limit"
+                      {:bytes size :max-write-bytes max-write-bytes})))
+    size))
+
 (defn- logical-lines [text]
   ;; A final POSIX newline terminates the last physical line; it does not add a
   ;; second, phantom empty line to the range/count shown to the model.
@@ -133,50 +153,139 @@
 (defn- relative [^Path root ^Path target]
   (str (.relativize root target)))
 
-(defn- walk-paths [root]
+(defn- walk-paths [root max-walk-entries]
   ;; Files/walk does not follow symbolic links unless FOLLOW_LINKS is supplied.
   (with-open [paths (Files/walk root (make-array java.nio.file.FileVisitOption 0))]
-    (vec (iterator-seq (.iterator paths)))))
+    (let [entries (vec (take (inc max-walk-entries)
+                             (iterator-seq (.iterator paths))))]
+      (when (> (count entries) max-walk-entries)
+        (throw (ex-info "Workspace traversal exceeds the configured entry limit"
+                        {:root (str root)
+                         :max-walk-entries max-walk-entries})))
+      entries)))
 
-(defn- regular-files [root]
-  (->> (walk-paths root)
+(defn- direct-paths [root max-walk-entries]
+  (with-open [entries (Files/newDirectoryStream root)]
+    (let [values (vec (take (inc max-walk-entries) (seq entries)))]
+      (when (> (count values) max-walk-entries)
+        (throw (ex-info "Directory listing exceeds the configured entry limit"
+                        {:root (str root)
+                         :max-walk-entries max-walk-entries})))
+      values)))
+
+(defn- regular-files [root max-walk-entries max-file-bytes skipped]
+  (->> (walk-paths root max-walk-entries)
        (filter #(Files/isRegularFile % (make-array LinkOption 0)))
-       (remove #(Files/isSymbolicLink %))))
+       (remove #(Files/isSymbolicLink %))
+       (filter (fn [file]
+                 (if (<= (Files/size file) max-file-bytes)
+                   true
+                   (do (swap! skipped inc) false))))))
 
 (defn- bounded [items limit]
   (let [values (vec (take (inc limit) items))]
     {:items (vec (take limit values))
      :truncated (> (count values) limit)}))
 
-(defn- pump! [stream stream-name on-update]
+(defn- pump! [stream stream-name on-update spool-path preview-limit spool-limit
+              overflow terminate!]
   (future
-    (with-open [reader (io/reader stream)]
+    (with-open [reader (io/reader stream)
+                writer (io/writer spool-path)]
       (let [buffer (char-array 4096)
             output (StringBuilder.)]
-        (loop []
+        (loop [total 0
+               live-characters 0]
           (let [n (.read reader buffer)]
             (if (neg? n)
-              (str output)
-              (let [chunk (String. buffer 0 n)]
-                (.append output chunk)
-                (when on-update
-                  (on-update {:stream stream-name :chunk chunk}))
-                (recur)))))))))
+              {:preview (str output)
+               :total-chars total
+               :path spool-path}
+              (let [next-total (+ total n)
+                    preview-count (min n (max 0 (- preview-limit (.length output))))
+                    persist-count (min n (max 0 (- spool-limit total)))
+                    live-count (min n (max 0 (- preview-limit live-characters)))]
+                (when (pos? preview-count)
+                  (.append output buffer 0 preview-count))
+                (when (pos? persist-count)
+                  (.write writer buffer 0 persist-count))
+                (when (and on-update (pos? live-count))
+                  (on-update {:stream stream-name
+                              :chunk (String. buffer 0 live-count)}))
+                (when (and (> next-total spool-limit)
+                           (compare-and-set!
+                            overflow nil
+                            {:stream stream-name
+                             :max-output-file-chars spool-limit}))
+                  (terminate!))
+                (recur next-total (+ live-characters live-count))))))))))
 
-(defn- persist-full-output! [output-root stdout stderr]
-  (fs/create-dirs output-root)
-  (let [target (fs/path output-root (str (random-uuid) ".log"))]
-    (spit (str target) (str "STDOUT\n" stdout "\nSTDERR\n" stderr))
+(defn- spool-path! [output-root suffix]
+  (secure/protect-managed-parents! output-root)
+  (secure/protect-directory! output-root)
+  (let [target (fs/path output-root
+                        (str "." (random-uuid) "." suffix ".tmp"))]
+    (secure/ensure-owner-file! target)
     (str target)))
 
-(defn- file-matches [root pattern file]
+(defn- persist-full-output! [output-root stdout-result stderr-result]
+  (let [target (fs/path output-root (str (random-uuid) ".log"))]
+    (secure/ensure-owner-file! target)
+    (with-open [writer (io/writer (str target))]
+      (.write writer "STDOUT\n")
+      (with-open [reader (io/reader (:path stdout-result))]
+        (io/copy reader writer))
+      (.write writer "\nSTDERR\n")
+      (with-open [reader (io/reader (:path stderr-result))]
+        (io/copy reader writer)))
+    (secure/protect-file! target)
+    (str target)))
+
+(def ^:private generated-output-name
+  #"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.log")
+
+(defn- prune-generated-output! [output-root max-output-files max-walk-entries]
+  (if-not (Files/exists output-root (make-array LinkOption 0))
+    0
+    (let [files (->> (walk-paths output-root max-walk-entries)
+                     (filter #(Files/isRegularFile % (make-array LinkOption 0)))
+                     (filter #(re-matches generated-output-name
+                                          (str (.getFileName %))))
+                     (sort-by #(.toMillis
+                                (Files/getLastModifiedTime
+                                 % (make-array LinkOption 0)))
+                              >))
+          expired (drop max-output-files files)]
+      (doseq [path expired]
+        (fs/delete-if-exists path))
+      (count expired))))
+
+(defn- file-matches [root pattern file limit]
   (with-open [reader (io/reader (str file))]
-    (doall
-     (for [[index line] (map-indexed vector (line-seq reader))
-           :when (re-find pattern line)]
-       {:path (relative root file)
-        :line (inc index)
-        :text line}))))
+    (->> (line-seq reader)
+         (map-indexed vector)
+         (keep (fn [[index line]]
+                 (when (re-find pattern line)
+                   {:path (relative root file)
+                    :line (inc index)
+                    :text line})))
+         (take limit)
+         doall)))
+
+(defn- terminate-process-tree! [process]
+  (let [root (.toHandle process)
+        descendants (with-open [stream (.descendants root)]
+                      (vec (iterator-seq (.iterator stream))))
+        handles (conj (vec (reverse descendants)) root)]
+    (doseq [handle handles]
+      (when (.isAlive handle)
+        (.destroy handle)))
+    (try
+      (.waitFor process 200 TimeUnit/MILLISECONDS)
+      (catch Throwable _))
+    (doseq [handle handles]
+      (when (.isAlive handle)
+        (.destroyForcibly handle)))))
 
 (defn- process-command [sandbox root command]
   ;; Tool commands are intentionally non-login shells. A login shell reads
@@ -194,7 +303,9 @@
             "Process execution is unavailable because no safe sandbox was found"
             {:sandbox sandbox}))))
 
-(defn- spawn! [root output-root sandbox default-timeout max-output
+(defn- spawn! [root output-root sandbox default-timeout max-timeout
+               max-output max-output-file-chars max-output-files
+               max-walk-entries
                {:keys [command cwd timeout-ms cancel-token on-update]
                 :or {cwd "."}}]
   (when (str/blank? command)
@@ -203,56 +314,112 @@
     (when-not (fs/directory? working-directory)
       (throw (ex-info "Command cwd is not a directory" {:cwd cwd})))
     (cancellation/throw-if-cancelled! cancel-token)
-    (let [started (System/nanoTime)
-          process (.start (doto (ProcessBuilder.
-                                 (process-command sandbox root command))
-                            (.directory (io/file (str working-directory)))))
+    (let [effective-timeout (or timeout-ms default-timeout)]
+      (when-not (and (pos-int? effective-timeout)
+                     (<= effective-timeout max-timeout))
+        (throw (ex-info "Command timeout is outside the configured safe range"
+                        {:timeout-ms effective-timeout
+                         :max-timeout-ms max-timeout})))
+      (let [started (System/nanoTime)
+          stdout-spool (spool-path! output-root "stdout")
+          stderr-spool (spool-path! output-root "stderr")
+          overflow (atom nil)
+          process (try
+                    (.start (doto (ProcessBuilder.
+                                   (process-command sandbox root command))
+                              (.directory (io/file (str working-directory)))))
+                    (catch Throwable error
+                      (doseq [path [stdout-spool stderr-spool]]
+                        (try (fs/delete-if-exists path) (catch Throwable _)))
+                      (throw error)))
+          terminate! #(terminate-process-tree! process)
           dispose-cancel (cancellation/on-cancel!
                           cancel-token
-                          #(do (.destroy process)
-                               (when (.isAlive process)
-                                 (.destroyForcibly process))))
-          stdout-task (pump! (.getInputStream process) :stdout on-update)
-          stderr-task (pump! (.getErrorStream process) :stderr on-update)
-          effective-timeout (or timeout-ms default-timeout)]
-      (try
-        (when-not (.waitFor process effective-timeout TimeUnit/MILLISECONDS)
-          (.destroy process)
-          (when (.isAlive process) (.destroyForcibly process))
-          (throw (ex-info "Command timed out"
-                          {:timeout-ms effective-timeout :command command})))
-        (cancellation/throw-if-cancelled! cancel-token)
-        (let [stdout @stdout-task
-              stderr @stderr-task
-              truncated? (or (> (count stdout) max-output)
-                             (> (count stderr) max-output))
-              output-path (when truncated?
-                            (persist-full-output! output-root stdout stderr))]
-          {:exit-code (.exitValue process)
-           :stdout (subs stdout 0 (min max-output (count stdout)))
-           :stderr (subs stderr 0 (min max-output (count stderr)))
-           :truncated truncated?
-           :full-output-path output-path
-           :cwd (relative root working-directory)
-           :duration-ms (long (/ (- (System/nanoTime) started) 1000000))})
-        (finally
-          (dispose-cancel))))))
+                          terminate!)
+          stdout-task (pump! (.getInputStream process) :stdout on-update
+                             stdout-spool max-output max-output-file-chars
+                             overflow terminate!)
+          stderr-task (pump! (.getErrorStream process) :stderr on-update
+                             stderr-spool max-output max-output-file-chars
+                             overflow terminate!)]
+        (try
+          (let [completed? (.waitFor process effective-timeout TimeUnit/MILLISECONDS)]
+            (when-not completed?
+              (terminate!))
+            (let [stdout @stdout-task
+                  stderr @stderr-task]
+              (when-let [limit @overflow]
+                (throw (ex-info "Command output exceeded the configured disk limit"
+                                (assoc limit :command command))))
+              (when-not completed?
+                (throw (ex-info "Command timed out"
+                                {:timeout-ms effective-timeout :command command})))
+              (cancellation/throw-if-cancelled! cancel-token)
+              (let [truncated? (or (> (:total-chars stdout) max-output)
+                                   (> (:total-chars stderr) max-output))
+                    output-path (when truncated?
+                                  (prune-generated-output!
+                                   output-root (dec max-output-files)
+                                   max-walk-entries)
+                                  (persist-full-output! output-root stdout stderr))]
+                {:exit-code (.exitValue process)
+                 :stdout (:preview stdout)
+                 :stderr (:preview stderr)
+                 :stdout-chars (:total-chars stdout)
+                 :stderr-chars (:total-chars stderr)
+                 :truncated truncated?
+                 :full-output-path output-path
+                 :cwd (relative root working-directory)
+                 :duration-ms (long (/ (- (System/nanoTime) started) 1000000))})))
+          (finally
+            (dispose-cancel)
+            (doseq [path [stdout-spool stderr-spool]]
+              (try (fs/delete-if-exists path) (catch Throwable _)))))))))
 
 (def plugin
   {:id :execution/local-world
    :description "Workspace-bounded filesystem and cancellable process provider."
    :provides #{:execution/world}
    :start
-   (fn [ctx {:keys [root timeout-ms max-output-chars output-dir sandbox]
+   (fn [ctx {:keys [root timeout-ms max-timeout-ms
+                    max-output-chars max-output-file-chars
+                    max-file-bytes max-write-bytes max-walk-entries
+                    max-output-files output-dir sandbox]
              :or {root "." timeout-ms 30000 max-output-chars 50000
+                  max-timeout-ms 300000
+                  max-output-file-chars 10000000 max-file-bytes 16777216
+                  max-write-bytes 4194304
+                  max-walk-entries 100000
+                  max-output-files 1000
                   output-dir ".bb-agent/tool-output" sandbox :auto}}]
-     (when-not (and (pos-int? timeout-ms) (pos-int? max-output-chars))
+     (when-not (every? pos-int? [timeout-ms max-timeout-ms max-output-chars
+                                 max-output-file-chars max-file-bytes
+                                 max-write-bytes max-walk-entries
+                                 max-output-files])
        (throw (ex-info "Execution limits must be positive integers"
+                        {:timeout-ms timeout-ms
+                        :max-timeout-ms max-timeout-ms
+                        :max-output-chars max-output-chars
+                        :max-output-file-chars max-output-file-chars
+                        :max-file-bytes max-file-bytes
+                        :max-write-bytes max-write-bytes
+                        :max-walk-entries max-walk-entries
+                        :max-output-files max-output-files})))
+     (when (< max-output-file-chars max-output-chars)
+       (throw (ex-info ":max-output-file-chars must be at least :max-output-chars"
+                       {:max-output-chars max-output-chars
+                        :max-output-file-chars max-output-file-chars})))
+     (when (> timeout-ms max-timeout-ms)
+       (throw (ex-info ":timeout-ms must not exceed :max-timeout-ms"
                        {:timeout-ms timeout-ms
-                        :max-output-chars max-output-chars})))
+                        :max-timeout-ms max-timeout-ms})))
      (let [workspace-root (real-path root)
            mode (sandbox/resolve-mode sandbox)
            output-root (lexical-path workspace-root output-dir)
+           _ (when (Files/exists output-root (make-array LinkOption 0))
+               (secure/protect-tree! output-root))
+           _ (prune-generated-output! output-root max-output-files
+                                      max-walk-entries)
            world
            {:provider :local
             :sandbox mode
@@ -265,21 +432,35 @@
             :read! (fn [{:keys [path offset limit unit max-chars]
                          :or {offset 0 limit 50000 max-chars 50000}}]
                      (let [target (existing-inside workspace-root path)]
+                       (assert-file-size! target max-file-bytes)
                        (merge {:path (relative workspace-root target)}
                               (if (= unit :lines)
                                 (read-lines-limited target offset limit
                                                     max-chars)
                                 (read-limited target offset limit)))))
             :write! (fn [{:keys [path content append]}]
-                      (let [target (writable-inside workspace-root path)]
+                      (let [target (writable-inside workspace-root path)
+                            bytes (assert-write-size! content max-write-bytes)
+                            existing-bytes (if (and append
+                                                    (Files/exists target
+                                                     (make-array LinkOption 0)))
+                                             (Files/size target)
+                                             0)]
+                        (when (> (+ existing-bytes bytes) max-write-bytes)
+                          (throw (ex-info
+                                  "Append would exceed the configured safe size limit"
+                                  {:existing-bytes existing-bytes
+                                   :bytes bytes
+                                   :max-write-bytes max-write-bytes})))
                         (if append
                           (spit (str target) content :append true)
                           (spit (str target) content))
                         {:path (relative workspace-root target)
-                         :bytes (count (.getBytes (str content) "UTF-8"))
+                         :bytes bytes
                          :appended (boolean append)}))
             :edit! (fn [{:keys [path old-text new-text]}]
                      (let [target (existing-inside workspace-root path)
+                           _ (assert-file-size! target max-file-bytes)
                            content (slurp (str target))
                            first-index (.indexOf content old-text)
                            second-index (when-not (neg? first-index)
@@ -293,21 +474,26 @@
                                           new-text
                                           (subs content (+ first-index
                                                            (count old-text))))]
+                         (assert-write-size! updated max-write-bytes)
                          (spit (str target) updated)
                          {:path (relative workspace-root target)
                           :replacements 1
                           :bytes (count (.getBytes updated "UTF-8"))})))
             :list! (fn [{:keys [path limit] :or {path "." limit 500}}]
                      (let [target (existing-inside workspace-root path)
-                           entries (->> (.listFiles (io/file (str target)))
-                                        (sort-by #(.getName ^java.io.File %))
+                           entries (->> (direct-paths target max-walk-entries)
+                                        (sort-by #(str (.getFileName %)))
                                         (map (fn [file]
                                                {:path (relative
                                                        workspace-root
-                                                       (.toPath file))
+                                                       file)
                                                 :type (cond
-                                                        (.isDirectory file) :directory
-                                                        (.isFile file) :file
+                                                        (Files/isDirectory
+                                                         file (make-array LinkOption 0))
+                                                        :directory
+                                                        (Files/isRegularFile
+                                                         file (make-array LinkOption 0))
+                                                        :file
                                                         :else :other)})))]
                        (merge {:path (relative workspace-root target)}
                               (bounded entries limit))))
@@ -317,7 +503,7 @@
                            matcher (.getPathMatcher
                                     (java.nio.file.FileSystems/getDefault)
                                     (str "glob:" pattern))
-                           entries (->> (walk-paths target)
+                           entries (->> (walk-paths target max-walk-entries)
                                         (remove #(= target %))
                                         (filter #(.matches matcher
                                                             (.getFileName %)))
@@ -330,13 +516,20 @@
                            :or {path "." limit 200}}]
                        (let [target (existing-inside workspace-root path)
                              pattern (re-pattern query)
+                             skipped (atom 0)
                              matches
-                             (mapcat #(file-matches workspace-root pattern %)
-                                     (regular-files target))]
+                             (mapcat #(file-matches workspace-root pattern %
+                                                    (inc limit))
+                                     (regular-files target max-walk-entries
+                                                    max-file-bytes skipped))
+                             result (bounded matches limit)]
                          (merge {:path (relative workspace-root target)
-                                 :query query}
-                                (bounded matches limit))))
+                                 :query query
+                                 :skipped-files @skipped}
+                                result)))
             :spawn! #(spawn! workspace-root output-root mode timeout-ms
-                             max-output-chars %)}]
+                             max-timeout-ms
+                             max-output-chars max-output-file-chars
+                             max-output-files max-walk-entries %)}]
        (kernel/register-service! ctx :execution/world world))
      nil)})

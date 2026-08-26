@@ -96,16 +96,33 @@
                     {:launcher (str launcher)}))))
 
 (defn- copy-source! [source stage]
-  (doseq [name ["src" "plugins" "apps"]]
+  (doseq [name ["src" "plugins" "apps/tui-rs/src"]]
     (fs/copy-tree (fs/path source name) (fs/path stage name)))
-  (doseq [name ["bb.edn" "agent.edn" "package.json" "package-lock.json"]]
+  (doseq [name ["bb.edn" "agent.edn" "LICENSE" "README.md"
+                "apps/tui-rs/Cargo.toml" "apps/tui-rs/Cargo.lock"]]
     (fs/copy (fs/path source name) (fs/path stage name))))
+
+(defn- prune-build-stage! [stage]
+  (let [target (fs/path stage "apps/tui-rs/target")
+        release (fs/path target "release")
+        binary (fs/path release "dao")
+        retained (fs/path stage (str ".dao-release-" (random-uuid)))]
+    (when-not (fs/regular-file? binary)
+      (throw (ex-info "Release build did not produce the dao executable"
+                      {:binary (str binary)})))
+    (fs/move binary retained)
+    (fs/delete-tree target)
+    (fs/create-dirs release)
+    (fs/move retained binary)
+    binary))
 
 (defn- build-stage! [stage]
   (println "Building Rust/Ratatui TUI...")
   (process/shell {:dir (str stage)}
                  "cargo" "build" "--release"
-                 "--manifest-path" "apps/tui-rs/Cargo.toml"))
+                 "--locked"
+                 "--manifest-path" "apps/tui-rs/Cargo.toml")
+  (prune-build-stage! stage))
 
 (defn- activate-stage! [stage install-dir]
   (let [install-path (fs/path install-dir)

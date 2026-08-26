@@ -29,7 +29,12 @@
           ctx
           {:name "bb_repl"
            :description
-           (str "Evaluate Clojure in a persistent Babashka REPL. Definitions "
+           (str "Evaluate Clojure in this agent's persistent "
+                (case (:backend repl)
+                  :jvm-clojure "native JVM Clojure"
+                  :babashka "Babashka"
+                  "Clojure")
+                " REPL. Definitions "
                 "remain available to later calls in this agent process. Use it "
                 "for exact calculations and Clojure data transformations.")
            :parameters {:type "object"

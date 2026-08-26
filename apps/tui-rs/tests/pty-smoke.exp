@@ -8,29 +8,33 @@ cd $repo_root
 set capture_path [file join /tmp "dao-tui-pty-[pid].log"]
 set runtime_path [file join /tmp "dao-pty-runtime-[pid]"]
 set state_path [file join /tmp "dao-pty-state-[pid]"]
+set workspace_path [file join /tmp "dao-pty-workspace-[pid]"]
 file mkdir $runtime_path
 file mkdir $state_path
+file mkdir $workspace_path
 log_file -noappend $capture_path
 
 proc fail {message code} {
-    global capture_path runtime_path state_path repo_root
+    global capture_path runtime_path state_path workspace_path repo_root
     puts stderr $message
     catch {send -- "\003"}
     after 100
     catch {send -- "\003"}
     catch {exec env DAO_RUNTIME_DIR=$runtime_path DAO_STATE_DIR=$state_path \
-        apps/tui-rs/target/release/dao shutdown --repository-root $repo_root \
+        [file join $repo_root apps tui-rs target release dao] shutdown --repository-root $repo_root \
         --config [file join $repo_root examples tui-mock.edn]}
     catch {file delete -force $capture_path}
     catch {file delete -force $runtime_path}
     catch {file delete -force $state_path}
+    catch {file delete -force $workspace_path}
     exit $code
 }
 
 # Some non-interactive Expect hosts create the child PTY at 0x0, so Ratatui's
 # first frame would correctly contain no cells. Configure the spawned slave.
+cd $workspace_path
 spawn -noecho env DAO_RUNTIME_DIR=$runtime_path DAO_STATE_DIR=$state_path \
-    apps/tui-rs/target/release/dao --repository-root $repo_root \
+    [file join $repo_root apps tui-rs target release dao] --repository-root $repo_root \
     --config [file join $repo_root examples tui-mock.edn]
 stty rows 44 columns 160 < $spawn_out(slave,name)
 
@@ -50,6 +54,11 @@ expect {
     eof { fail "startup: early exit" 3 }
 }
 
+# Exercise both sides of the adaptive inline viewport while the TUI is live.
+stty rows 28 columns 160 < $spawn_out(slave,name)
+exec kill -WINCH [exp_pid]
+after 100
+
 send -- "hello\r"
 expect {
     # Ratatui may place cursor/style sequences between adjacent words, so use
@@ -58,6 +67,10 @@ expect {
     timeout { fail "turn: timed out" 4 }
     eof { fail "turn: early exit" 5 }
 }
+
+stty rows 52 columns 160 < $spawn_out(slave,name)
+exec kill -WINCH [exp_pid]
+after 100
 
 send -- "\004"
 expect {
@@ -74,10 +87,11 @@ expect {
             fail "terminal: mouse capture was unexpectedly enabled" 8
         }
         catch {exec env DAO_RUNTIME_DIR=$runtime_path DAO_STATE_DIR=$state_path \
-            apps/tui-rs/target/release/dao shutdown --repository-root $repo_root \
+            [file join $repo_root apps tui-rs target release dao] shutdown --repository-root $repo_root \
             --config [file join $repo_root examples tui-mock.edn]}
         file delete -force $runtime_path
         file delete -force $state_path
+        file delete -force $workspace_path
         puts "scrollback: native"
         puts "exit: clean"
     }
