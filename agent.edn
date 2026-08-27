@@ -85,10 +85,10 @@
   {:ns agent.plugins.omp
    :config {:max-file-chars 500000
             :max-edits 32
-            :default-role :default
-            ;; Values may also be fallback vectors, for example
-            ;; :plan [:openai :chatgpt]. Only registered providers are used.
-            :roles {:default :openai}}}
+            ;; Leave :default unrouted so /model controls normal turns.
+            ;; Named roles may still use fallback vectors such as
+            ;; :plan [:openai :chatgpt].
+            :default-role :default}}
 
   ;; DeepSeek Harness-style subagents are split into a provider-neutral
   ;; registry, isolated spawn/fork providers, and model-facing tool adapters.
