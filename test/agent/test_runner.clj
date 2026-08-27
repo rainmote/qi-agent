@@ -1621,6 +1621,7 @@
           {:ns 'agent.plugins.bb-repl
            :config {:root (System/getProperty "java.io.tmpdir")
                     :sandbox :none :timeout-ms 5000}}
+          {:ns 'agent.plugins.clojure-repl}
           {:ns 'agent.plugins.mock :config {:generate generate}}
           {:ns 'example.math}
           {:ns 'agent.plugins.runtime :config {:max-steps 3}}]}}}
@@ -1633,7 +1634,7 @@
                (deliver request-seen request)
                {:message {:role "assistant" :content "{\"answer\":42}"}
                 :finish-reason "stop"})
-             #{"calculate"})]
+             #{"calculate" "bb_repl"})]
     (try
       (let [runtime (kernel/require-service ctx :subagents/runtime)
             delegate (kernel/tool ctx "delegate_task")
@@ -1651,6 +1652,8 @@
         (is (= :completed (:stop-reason result)))
         (is (= {:answer 42} (:structured result)))
         (is (str/includes? (:system-prompt request) "terse verifier"))
+        (is (not (str/includes? (:system-prompt request)
+                                "You have your own persistent Clojure-family REPL")))
         (is (= ["calculate"]
                (mapv #(get-in % [:function :name]) (:tools request))))
         (is (= [:completed] (mapv :status ((:jobs runtime)))))
@@ -1737,12 +1740,15 @@
       (finally (kernel/dispose-all! ctx)))))
 
 (deftest retained-subagent-accepts-follow-up-and-owns-an-isolated-repl
-  (let [ctx (subagent-test-context
+  (let [requests (atom [])
+        ctx (subagent-test-context
              (fn [request]
+               (swap! requests conj request)
                {:message {:role "assistant"
                           :content (str "answered: "
                                         (:content (last (:messages request))))}
-                :finish-reason "stop"}))]
+                :finish-reason "stop"})
+             #{"bb_repl"})]
     (try
       (let [runtime (kernel/require-service ctx :subagents/runtime)
             delegate (kernel/tool ctx "delegate_task")
@@ -1760,6 +1766,14 @@
         (is (:accepted accepted))
         (is (= "answered: second" (:output follow-up)))
         (is (= :completed (:stop-reason ((:wait! runtime) second-id 2000))))
+        (is (every? #(str/includes? (:system-prompt %)
+                                    "You have your own persistent Clojure-family REPL")
+                    @requests))
+        (is (every? #(= ["bb_repl"]
+                        (mapv (fn [tool]
+                                (get-in tool [:function :name]))
+                              (:tools %)))
+                    @requests))
         (is (:ok ((:invoke! runtime) first-id "repl.eval"
                   {:code "(def local-value :first)"})))
         (is (:ok ((:invoke! runtime) second-id "repl.eval"

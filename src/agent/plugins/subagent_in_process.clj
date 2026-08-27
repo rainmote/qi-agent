@@ -10,7 +10,18 @@
   (:import [java.time Instant]))
 
 (def ^:private default-allowed-tools
-  #{"current_time" "read" "read_file" "ls" "find" "grep" "load_skill"})
+  #{"current_time" "read" "read_file" "ls" "find" "grep" "load_skill"
+    "bb_repl"})
+
+(def ^:private repl-system-prompt
+  (str "# Your Clojure REPL\n\n"
+       "You have your own persistent Clojure-family REPL through the `bb_repl` "
+       "tool. It is isolated from every other agent, and definitions remain "
+       "available across later calls while this REPL process is alive. The "
+       "backend may be Babashka or native JVM Clojure even though the tool name "
+       "is always `bb_repl`. Use it for exact calculations, EDN/JSON/text "
+       "transformations, data inspection, and reusable task-local helpers. "
+       "REPL memory is not durable state and may be lost after a reset or restart."))
 
 (def ^:private bridged-events
   [:session/event :llm/stream :tool.execution/confirming
@@ -96,7 +107,7 @@
 (defn- install-boundary! [child {:keys [tool-filter persona output-schema]}]
   (let [boundary (kernel/plugin-context child :subagent/child-boundary)
         schema-text (when output-schema (json/generate-string output-schema))
-        extra-prompt
+        task-prompt
         (str
          (when-not (str/blank? persona)
            (str "\n\nSubagent persona:\n" persona))
@@ -106,14 +117,17 @@
     (kernel/intercept!
      boundary :llm/request -100
      (fn [_ request next]
-       (next (cond-> (update request :tools
-                             (fn [tools]
-                               (filterv #(contains?
-                                          tool-filter
-                                          (get-in % [:function :name]))
-                                        tools)))
-               (not (str/blank? extra-prompt))
-               (update :system-prompt str extra-prompt)))))
+       (let [tools (filterv #(contains? tool-filter
+                                        (get-in % [:function :name]))
+                            (:tools request))
+             repl-available?
+             (some #(= "bb_repl" (get-in % [:function :name])) tools)
+             extra-prompt (str (when repl-available?
+                                 (str "\n\n" repl-system-prompt))
+                               task-prompt)]
+         (next (cond-> (assoc request :tools tools)
+                 (not (str/blank? extra-prompt))
+                 (update :system-prompt str extra-prompt))))))
     (kernel/intercept!
      boundary :tool/pre-execute -100
      (fn [_ request next]

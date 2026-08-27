@@ -98,9 +98,10 @@
    :config
    {:max-depth 1
     ;; A request may narrow this set but can never expand it. Mutating and
-    ;; process tools remain unavailable to unattended child agents.
+    ;; general process tools remain unavailable to unattended child agents;
+    ;; bb_repl is confined to the child's own sandbox and namespace.
     :allowed-tools ["current_time" "read" "read_file" "ls" "find" "grep"
-                    "load_skill"]
+                    "load_skill" "bb_repl"]
     :child-profile
     {:plugins
      [{:ns agent.plugins.session :config {:path nil :ephemeral true}}
