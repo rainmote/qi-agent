@@ -313,15 +313,27 @@
 (defn- http-version [config]
   (or (:http-version config) default-http-version))
 
+(defn- valid-proxy-config? [proxy]
+  (or (nil? proxy)
+      (and (map? proxy)
+           (let [proxy-type (or (:type proxy) :http)]
+             (and (contains? #{:http :direct} proxy-type)
+                  (or (= :direct proxy-type)
+                      (and (not (str/blank? (:host proxy)))
+                           (integer? (:port proxy))
+                           (<= 1 (:port proxy) 65535))))))))
+
 (defn- new-http-client [config]
   ;; The ChatGPT route is commonly reached through VPN/TUN proxies. HTTP/1.1
   ;; avoids flaky HTTP/2 ALPN paths, and rebuilding this client after a failed
   ;; handshake also drops the JDK client's cached connection/TLS state.
   (http/client
-   (assoc http/default-client-opts
-          :connect-timeout (or (:connect-timeout-ms config)
-                               default-connect-timeout-ms)
-          :version (http-version config))))
+   (cond->
+    (assoc http/default-client-opts
+           :connect-timeout (or (:connect-timeout-ms config)
+                                default-connect-timeout-ms)
+           :version (http-version config))
+     (:proxy config) (assoc :proxy (:proxy config)))))
 
 (defn- transport-state [config]
   {:config config
@@ -460,12 +472,14 @@
                       (pos-int? (or (:connect-timeout-ms config)
                                     default-connect-timeout-ms))
                       (contains? #{:http1.1 :http2}
-                                 (http-version config)))
+                                 (http-version config))
+                      (valid-proxy-config? (:proxy config)))
          (throw (ex-info "ChatGPT retry settings are invalid"
                          {:transport-retries (:transport-retries config)
                           :retry-delay-ms (:retry-delay-ms config)
                           :connect-timeout-ms (:connect-timeout-ms config)
-                          :http-version (:http-version config)})))
+                          :http-version (:http-version config)
+                          :proxy (:proxy config)})))
        (when-let [store (kernel/service ctx :auth/store)]
          (kernel/track-effect!
           ctx

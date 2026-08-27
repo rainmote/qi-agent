@@ -1522,7 +1522,9 @@
                                :auth-file (str auth-file)
                                :check-permissions false
                                :transport-retries 1
-                               :retry-delay-ms 1}}]})]
+                               :retry-delay-ms 1
+                               :proxy {:host "127.0.0.1"
+                                       :port 7897}}}]})]
           (try
             (is (= "recovered"
                    (get-in ((kernel/require-service ctx :llm/generate)
@@ -1533,6 +1535,9 @@
             (is (= 2 (count @requests)))
             (is (= 2 (count @client-options)))
             (is (every? #(= :http1.1 (:version %)) @client-options))
+            (is (every? #(= {:host "127.0.0.1" :port 7897}
+                            (:proxy %))
+                        @client-options))
             (is (every? #(= :http1.1 (:version %)) @requests))
             (is (not= (:client (first @requests))
                       (:client (second @requests))))

@@ -128,7 +128,9 @@ API key。认证缓存位置是官方文档支持的，但订阅后端协议并�
 订阅 adapter 默认使用 HTTP/1.1，并为 ChatGPT 单独维护连接客户端。TLS 握手、连接建立、
 连接重置等传输错误会丢弃旧连接状态，以 400ms 起步的指数退避重试 4 次；业务错误和
 取消不会重试。可通过 `:http-version`、`:connect-timeout-ms`、`:transport-retries` 与
-`:retry-delay-ms` 调整。连接层重试耗尽后不会再由 runtime 成倍重放同一个请求。
+`:retry-delay-ms` 调整。若 VPN/TUN 的透明路由无法完成 TLS 握手，可为 ChatGPT 插件配置
+`:proxy {:host "127.0.0.1" :port 7897}`，显式使用本机 HTTP/mixed proxy。连接层重试
+耗尽后不会再由 runtime 成倍重放同一个请求。
 
 `dao` 会连接常驻 supervisor，选择已有 agent 或创建新的持久 session；关闭终端只会 detach，
 不会停止后台 run、子 agent 或 REPL。`bb agent` 仍保留为 headless/embedding 入口。
