@@ -70,7 +70,8 @@ npm install
 bb web
 ```
 
-WebUI 默认只监听 `127.0.0.1:3080`，启动后打开终端打印的鉴权 URL。它提供工作区白名单、
+WebUI 默认从 `127.0.0.1:3080` 开始监听；若端口已占用，会持续尝试 `3081`、`3082` 等后续
+端口。启动后打开终端打印的鉴权 URL。它提供工作区白名单、
 会话恢复、流式时间线、通用工具卡、远程审批、模型选择、subagent 状态和插件清单；每个打开
 的会话由独立 Babashka Worker 执行，TUI 与 WebUI 共享同一份插件和 append-only session。
 架构、协议、安全边界与开发命令见 [WebUI 文档](docs/webui.md)。
@@ -109,8 +110,16 @@ server 只在 `/lsp status` 显示 unavailable，不影响启动，也不会自�
 
 ```bash
 export DEEPSEEK_API_KEY="..."
+bb web
+# 在 Web 顶栏的模型选择器中选择 deepseek-v4-flash
+
+# 或单次从命令行使用独立 profile
 bb agent --config examples/deepseek.edn --once "读取 README.md 并总结这个项目"
 ```
+
+默认 profile 已注册 `deepseek-v4-flash`，通过官方 `https://api.deepseek.com/chat/completions`
+接口调用；主 Agent 与子 Agent 均可选择 `deepseek` provider。当前使用非思考模式，以保持工具
+调用后的多轮消息回放稳定。
 
 默认 `agent.edn` 使用 `agent.plugins.openai-responses`，从 `OPENAI_API_KEY` 动态取 key，
 只向 `https://api.openai.com/v1/responses` 发送凭据。请求默认 `store=false`，支持 SSE、图片、

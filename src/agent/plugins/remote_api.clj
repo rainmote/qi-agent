@@ -224,6 +224,13 @@
                   (public-provider
                    ((:select! (kernel/require-service ctx :llm/registry))
                     (keyword provider)))))
+       (method! "provider.settings.reload"
+                "Reload persistent provider settings into this agent."
+                empty-params {:type "object"}
+                (fn [_]
+                  (if-let [settings (kernel/service ctx :provider/settings)]
+                    ((:reload! settings))
+                    {:providers 0 :models 0 :available false})))
        (method! "policy.status" "Return the active per-session approval policy."
                 empty-params {:type "object"}
                 (fn [_]

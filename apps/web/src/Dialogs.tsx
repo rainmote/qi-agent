@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { api } from "./api";
-import { BrandMark } from "./BrandMark";
 import { Icon } from "./icons";
-import type { Interaction, ModelEntry, RuntimeStatus, Workspace } from "./types";
+import { ProviderSettingsPanel } from "./ProviderSettingsPanel";
+import type { Interaction, RuntimeStatus, Workspace } from "./types";
 
 function DialogFrame({ title, children, onClose, className = "", dangerous = false }: {
   title: string; children: ReactNode; onClose?: () => void; className?: string; dangerous?: boolean;
@@ -94,13 +94,13 @@ export function WorkspaceDialog({ initialPath, onClose, onSelect }: {
 
 type SettingsTab = "general" | "models" | "plugins" | "tools";
 
-export function SettingsDialog({ workspaces, runtime, models, theme, onThemeChange, onClose,
-  onAddWorkspace, onRemoveWorkspace }: {
+export function SettingsDialog({ workspaces, runtime, theme, onThemeChange, onClose,
+  onAddWorkspace, onRemoveWorkspace, onProvidersChanged }: {
   workspaces: Workspace[]; runtime: RuntimeStatus | null;
-  models: { current: ModelEntry | null; providers: ModelEntry[] } | null;
   theme: "dark" | "light" | "system"; onThemeChange: (theme: "dark" | "light" | "system") => void;
   onClose: () => void; onAddWorkspace: () => void;
   onRemoveWorkspace?: (workspace: Workspace) => Promise<void>;
+  onProvidersChanged?: () => Promise<void> | void;
 }) {
   const [tab, setTab] = useState<SettingsTab>("general");
   const tabs: Array<{ id: SettingsTab; label: string; icon: "settings" | "sparkles" | "command" | "terminal" }> = [
@@ -115,7 +115,7 @@ export function SettingsDialog({ workspaces, runtime, models, theme, onThemeChan
         <Icon name="x" />
       </button>
       <nav aria-label="设置分区">
-        <div className="settings-brand"><BrandMark /><strong>DAO</strong></div>
+        <div className="settings-brand"><strong>设置</strong></div>
         {tabs.map((entry) => <button type="button" key={entry.id} className={tab === entry.id ? "active" : ""}
           onClick={() => setTab(entry.id)}><Icon name={entry.icon} />{entry.label}</button>)}
       </nav>
@@ -136,12 +136,7 @@ export function SettingsDialog({ workspaces, runtime, models, theme, onThemeChan
             </div>)}</div>
           </section>
         </>}
-        {tab === "models" && <section><h3>模型</h3><p>当前会话可用的模型提供方。</p>
-          <div className="settings-cards">{models?.providers.map((model) => <div className="settings-card" key={model.id}>
-            <span className="provider-dot" /><div><strong>{model.model || model.id}</strong><span>{model.provider || model.id}</span></div>
-            {models.current?.id === model.id && <em>当前</em>}
-          </div>)}{!models?.providers.length && <div className="settings-empty">打开会话后显示模型。</div>}</div>
-        </section>}
+        {tab === "models" && <ProviderSettingsPanel onChanged={onProvidersChanged} />}
         {tab === "plugins" && <section><h3>插件</h3><p>{runtime ? `${runtime.plugins.length} 个已加载插件` : "打开会话后显示"}</p>
           <div className="settings-cards">{runtime?.plugins.map((plugin) => <div className="settings-card" key={plugin.id}>
             <Icon name="command" /><div><strong>{plugin.id}</strong><span>{plugin.description || plugin.namespace}</span></div>

@@ -17,6 +17,7 @@ interface PendingCall {
 export interface DaemonEnvironment {
   runtimeDirectory?: string;
   stateDirectory?: string;
+  providerSettingsPath?: string;
 }
 
 const mutationMethods = new Set([
@@ -28,7 +29,7 @@ const mutationMethods = new Set([
   "repl.interrupt", "repl.reset", "state.put", "state.delete", "agent.message.send",
   "subagent.stop", "subagent.delete", "schedule.add", "schedule.cancel", "goal.set",
   "goal.cancel", "goal.complete", "goal.resume", "daemon.update", "daemon.backup",
-  "daemon.shutdown",
+  "daemon.shutdown", "provider.settings.reload",
 ]);
 
 export class AgentWorker extends EventEmitter {
@@ -218,6 +219,8 @@ export class AgentWorker extends EventEmitter {
           ? { DAO_RUNTIME_DIR: this.daemonEnvironment.runtimeDirectory } : {}),
         ...(this.daemonEnvironment.stateDirectory
           ? { DAO_STATE_DIR: this.daemonEnvironment.stateDirectory } : {}),
+        ...(this.daemonEnvironment.providerSettingsPath
+          ? { DAO_PROVIDER_SETTINGS_FILE: this.daemonEnvironment.providerSettingsPath } : {}),
       },
       stdio: "ignore",
     });

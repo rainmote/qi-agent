@@ -10,6 +10,21 @@
    (fn [ctx {:keys [default-provider]}]
      (let [providers (atom {})
            selected (atom default-provider)
+           upsert!
+           (fn [{:keys [id generate] :as entry}]
+             (when-not (and (keyword? id) (fn? generate))
+               (throw (ex-info "Provider entry requires keyword :id and :generate"
+                               {:entry (dissoc entry :generate)})))
+             (let [previous (get @providers id)]
+               (swap! providers assoc id entry)
+               (compare-and-set! selected nil id)
+               (fn []
+                 (if previous
+                   (swap! providers assoc id previous)
+                   (do
+                     (swap! providers dissoc id)
+                     (when (= id @selected)
+                       (reset! selected (first (keys @providers)))))))))
            register!
            (fn [{:keys [id generate] :as entry}]
              (when-not (and (keyword? id) (fn? generate))
@@ -45,6 +60,7 @@
                ((:generate entry) (update request :options dissoc :provider))))
            registry
            {:register! register!
+            :upsert! upsert!
             :select! select!
             :current current
             :providers (fn []

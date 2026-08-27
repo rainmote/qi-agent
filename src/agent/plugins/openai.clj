@@ -14,6 +14,16 @@
   (or api-key
       (when api-key-env (System/getenv api-key-env))))
 
+(defn valid-proxy-config? [proxy]
+  (or (nil? proxy)
+      (and (map? proxy)
+           (let [proxy-type (or (:type proxy) :http)]
+             (and (contains? #{:http :direct} proxy-type)
+                  (or (= :direct proxy-type)
+                      (and (not (str/blank? (:host proxy)))
+                           (integer? (:port proxy))
+                           (<= 1 (:port proxy) 65535))))))))
+
 (defn- error-body [body]
   (let [text (if (string? body)
                body
@@ -126,7 +136,7 @@
     (update message :content chat-content)
     message))
 
-(defn- generate [ctx config request]
+(defn generate [ctx config request]
   (let [auth-id (or (:auth-id config) (:provider-id config)
                     :openai-compatible)
         key (if-let [store (kernel/service ctx :auth/store)]
@@ -150,13 +160,15 @@
                       (:extra-body config)
                       (:options request))
           _ (cancellation/throw-if-cancelled! (:cancel-token request))
-          response (http/post (endpoint (:base-url config))
-                              {:headers {"authorization" (str "Bearer " key)
-                                         "content-type" "application/json"}
-                               :body (json/generate-string body)
-                               :as (if use-stream? :stream :string)
-                               :throw false
-                               :timeout (or (:timeout-ms config) 120000)})]
+          request-options
+          (cond-> {:headers {"authorization" (str "Bearer " key)
+                             "content-type" "application/json"}
+                   :body (json/generate-string body)
+                   :as (if use-stream? :stream :string)
+                   :throw false
+                   :timeout (or (:timeout-ms config) 120000)}
+            (:proxy config) (assoc :proxy (:proxy config)))
+          response (http/post (endpoint (:base-url config)) request-options)]
       (when-not (<= 200 (:status response) 299)
         (throw (ex-info (str "LLM request failed with HTTP " (:status response))
                         {:status (:status response)
@@ -167,16 +179,33 @@
         (json-response ctx (:body response))
         (stream-response ctx (:body response) (:cancel-token request))))))
 
+(defn provider-entry
+  "Build one OpenAI-compatible registry entry for a validated config."
+  [ctx config]
+  (when-not (and (string? (:base-url config))
+                 (string? (:model config)))
+    (throw (ex-info "OpenAI plugin requires :base-url and :model"
+                    {:config (dissoc config :api-key)})))
+  (when-not (valid-proxy-config? (:proxy config))
+    (throw (ex-info "OpenAI plugin :proxy is invalid"
+                    {:proxy (:proxy config)})))
+  {:id (or (:provider-id config) :openai-compatible)
+   :provider :openai-compatible
+   :model (:model config)
+   :display-name (:display-name config)
+   :settings-provider-id (:settings-provider-id config)
+   :context-window (:context-window config)
+   :thinking-levels (:thinking-levels config)
+   :input-modalities (or (:input-modalities config) #{:text})
+   :generate (partial generate ctx config)})
+
 (def plugin
   {:id :llm/openai-compatible
    :description "OpenAI-compatible chat-completions adapter."
    :provides #{:llm/generate}
    :start
    (fn [ctx config]
-     (when-not (and (string? (:base-url config))
-                    (string? (:model config)))
-       (throw (ex-info "OpenAI plugin requires :base-url and :model"
-                       {:config (dissoc config :api-key)})))
+     (let [entry (provider-entry ctx config)]
      (when-let [store (kernel/service ctx :auth/store)]
        (kernel/track-effect!
         ctx
@@ -189,13 +218,6 @@
        (if-let [registry (kernel/service ctx :llm/registry)]
          (kernel/track-effect!
           ctx
-          ((:register! registry)
-           {:id (or (:provider-id config) :openai-compatible)
-            :provider :openai-compatible
-            :model (:model config)
-            :context-window (:context-window config)
-            :thinking-levels (:thinking-levels config)
-            :input-modalities (or (:input-modalities config) #{:text})
-            :generate generator}))
+          ((:register! registry) entry))
          (kernel/register-service! ctx :llm/generate generator)))
-     nil)})
+     nil))})

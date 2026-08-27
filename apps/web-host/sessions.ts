@@ -186,4 +186,9 @@ export class SessionManager {
     await Promise.allSettled(entries.map(([, open]) => open.worker.close()));
     for (const [id] of entries) this.#open.delete(id);
   }
+
+  async reloadProviderSettings(): Promise<void> {
+    await Promise.allSettled([...this.#open.values()].map(({ worker }) =>
+      worker.call("provider.settings.reload", {}, 10_000)));
+  }
 }

@@ -5,10 +5,12 @@ import { ApprovalDialog, SettingsDialog, WorkspaceDialog } from "./Dialogs";
 import { Icon } from "./icons";
 import { applyHostEvent, fromSnapshot, type Projection } from "./projection";
 import { Timeline } from "./Timeline";
+import { Trajectory } from "./Trajectory";
 import type { HostEvent, ModelEntry, PolicyStatus, RuntimeStatus, SessionSnapshot, SessionSummary, SubagentStatus, Workspace } from "./types";
 
 type Theme = "dark" | "light" | "system";
 type ConversationView = "chat" | "trajectory";
+type CommandResult = { output?: unknown; error?: string; ui?: string };
 
 function phaseLabel(phase: string) {
   return ({ idle: "就绪", model: "模型响应", tool: "执行工具", retry: "正在重试", compacting: "整理上下文" } as Record<string, string>)[phase] || phase;
@@ -17,6 +19,22 @@ function phaseLabel(phase: string) {
 function resolvedTheme(theme: Theme): "dark" | "light" {
   if (theme !== "system") return theme;
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+export function commandOutputNotice(output: unknown): string {
+  if (typeof output === "string") return output.length > 420 ? `${output.slice(0, 419)}…` : output;
+  if (Array.isArray(output)) {
+    const names = output.map((entry) => entry && typeof entry === "object" && "name" in entry
+      ? String((entry as { name: unknown }).name) : "").filter(Boolean);
+    if (names.length) return `可用命令：${names.slice(0, 12).map((name) => `/${name}`).join("、")}${names.length > 12 ? ` 等 ${names.length} 个` : ""}`;
+  }
+  const serialized = JSON.stringify(output);
+  return serialized.length > 420 ? `${serialized.slice(0, 419)}…` : serialized;
+}
+
+export function matchingCommands(commands: RuntimeStatus["commands"] | undefined, composer: string) {
+  if (!commands || !composer.startsWith("/") || /\s/.test(composer)) return [];
+  return commands.filter((command) => `/${command.name}`.startsWith(composer)).slice(0, 7);
 }
 
 function Brand({ collapsed = false }: { collapsed?: boolean }) {
@@ -28,9 +46,12 @@ function Brand({ collapsed = false }: { collapsed?: boolean }) {
 export function App() {
   const started = useRef(false);
   const timeline = useRef<HTMLDivElement>(null);
+  const composerInput = useRef<HTMLTextAreaElement>(null);
+  const noticeTimer = useRef<number | null>(null);
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [activeSession, setActiveSession] = useState<SessionSummary | null>(null);
+  const [draftSession, setDraftSession] = useState<SessionSummary | null>(null);
   const [projection, setProjection] = useState<Projection | null>(null);
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
   const [subagents, setSubagents] = useState<SubagentStatus | null>(null);
@@ -39,6 +60,9 @@ export function App() {
   const [connected, setConnected] = useState(false);
   const [busy, setBusy] = useState(false);
   const [composer, setComposer] = useState("");
+  const [commandIndex, setCommandIndex] = useState(0);
+  const [pendingModel, setPendingModel] = useState<string | null>(null);
+  const [pendingPolicy, setPendingPolicy] = useState<PolicyStatus["mode"] | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("dao.sidebar") === "collapsed");
   const [mobileSidebar, setMobileSidebar] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -64,10 +88,35 @@ export function App() {
       ? (a, b) => String(a.name).localeCompare(String(b.name), "zh-CN")
       : (a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
   }, [allSessions, search, sortBy]);
+  const runSummary = useMemo(() => {
+    const events = projection?.events || [];
+    const turns = events.filter((event) => event.type === "message"
+      && (event.data.message as { role?: string } | undefined)?.role === "user").length;
+    const steps = events.filter((event) => event.type === "step/start").length;
+    const calls = events.filter((event) => event.type === "tool/call").length;
+    const durationMs = events.reduce((total, event) => {
+      if (event.type !== "tool/result") return total;
+      const value = event.data["duration-ms"] ?? event.data.duration_ms;
+      return total + (typeof value === "number" && Number.isFinite(value) ? value : 0);
+    }, 0);
+    const timing = durationMs > 0 ? ` · 工具调用 ${(durationMs / 1_000).toFixed(1)}s` : "";
+    return `${turns} 轮 · ${steps} 步 | ${calls} 次工具调用${timing} | ${events.length} 条轨迹`;
+  }, [projection?.events]);
+
+  const flashNotice = useCallback((message: string, timeout = 4_000) => {
+    setNotice(message);
+    if (noticeTimer.current !== null) window.clearTimeout(noticeTimer.current);
+    noticeTimer.current = window.setTimeout(() => {
+      setNotice(null); noticeTimer.current = null;
+    }, timeout);
+  }, []);
 
   const showError = useCallback((error: unknown) => {
-    setNotice(error instanceof Error ? error.message : "操作失败");
-    window.setTimeout(() => setNotice(null), 5000);
+    flashNotice(error instanceof Error ? error.message : "操作失败", 5_000);
+  }, [flashNotice]);
+
+  useEffect(() => () => {
+    if (noticeTimer.current !== null) window.clearTimeout(noticeTimer.current);
   }, []);
 
   useEffect(() => {
@@ -102,10 +151,13 @@ export function App() {
 
   const acceptOpen = useCallback((session: SessionSummary, snapshot: SessionSnapshot) => {
     setActiveSession(session);
+    setDraftSession(null);
     setWorkspaceId(session.workspaceId);
     setProjection(fromSnapshot(snapshot));
     setModels(snapshot.models);
     setPolicy(snapshot.policy || null);
+    setPendingModel(snapshot.models?.current?.id || null);
+    setPendingPolicy(snapshot.policy?.mode || null);
     setMobileSidebar(false);
     setSessionMenu(null);
     setNotice(null);
@@ -128,8 +180,21 @@ export function App() {
       setWorkspaceId(data.activeWorkspaceId);
       const first = data.catalogs.find((entry) => entry.workspaceId === data.activeWorkspaceId)?.sessions[0];
       if (first) void openSession(first);
+      else if (data.activeWorkspaceId) {
+        // A brand-new workspace still needs real model, policy, and command
+        // metadata before its first message. Keep this initialized session as
+        // the draft that the composer will submit into.
+        void api.createSession(data.activeWorkspaceId).then((created) => {
+          setDraftSession(created.session);
+          setModels(created.snapshot.models);
+          setPolicy(created.snapshot.policy || null);
+          setPendingModel(created.snapshot.models?.current?.id || null);
+          setPendingPolicy(created.snapshot.policy?.mode || null);
+          return loadRuntime(created.session.id);
+        }).catch(showError);
+      }
     }).catch(showError);
-  }, [openSession, showError]);
+  }, [loadRuntime, openSession, showError]);
 
   useEffect(() => {
     if (!activeSession) { setConnected(false); return; }
@@ -146,9 +211,14 @@ export function App() {
   }, [activeSession?.id]);
 
   useEffect(() => {
+    if (conversationView !== "chat") return;
     const element = timeline.current;
     if (element) element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
-  }, [projection?.events.length, projection?.state["partial-assistant"]]);
+  }, [conversationView, projection?.events.length, projection?.state["partial-assistant"]]);
+
+  useEffect(() => {
+    if (conversationView === "trajectory") timeline.current?.scrollTo({ top: 0 });
+  }, [activeSession?.id, conversationView]);
 
   const refreshCatalog = useCallback(async (targetWorkspace = workspaceId) => {
     if (!targetWorkspace) return;
@@ -158,8 +228,21 @@ export function App() {
   }, [workspaceId]);
 
   const startNewSession = () => {
-    setActiveSession(null); setProjection(null); setConnected(false); setRuntime(null); setSubagents(null);
-    setPolicy(null); setComposer(""); setDetailsOpen(false); setMobileSidebar(false); setConversationView("chat");
+    setPendingModel(models?.current?.id || null);
+    setPendingPolicy(policy?.mode || null);
+    setActiveSession(null); setProjection(null); setConnected(false); setSubagents(null);
+    setComposer(""); setCommandIndex(0); setDetailsOpen(false); setMobileSidebar(false); setConversationView("chat");
+    const source = activeSession;
+    if (source) {
+      void Promise.all([
+        api.rpc<RuntimeStatus>(source.id, "runtime.status"),
+        api.rpc<{ current: ModelEntry | null; providers: ModelEntry[] }>(source.id, "model.list"),
+        api.rpc<PolicyStatus>(source.id, "policy.status"),
+      ]).then(([nextRuntime, nextModels, nextPolicy]) => {
+        setRuntime(nextRuntime); setModels(nextModels); setPolicy(nextPolicy);
+        setPendingModel(nextModels.current?.id || null); setPendingPolicy(nextPolicy.mode);
+      }).catch(showError);
+    }
   };
 
   const refreshSnapshot = async (id = activeSession?.id) => {
@@ -172,19 +255,33 @@ export function App() {
     if (!composer.trim() || busy || !workspaceId) return;
     const message = composer.trim();
     setComposer(""); setBusy(true);
-    let session = activeSession;
+    let session = activeSession || draftSession;
     try {
       if (!session) {
         const created = await api.createSession(workspaceId);
         session = created.session;
-        acceptOpen(created.session, created.snapshot);
+      }
+      if (!activeSession) {
+        if (pendingModel) await api.rpc(session.id, "model.select", { provider: pendingModel });
+        if (pendingPolicy) await api.rpc(session.id, "policy.select", { mode: pendingPolicy });
+        const snapshot = await api.rpc<SessionSnapshot>(session.id, "session.snapshot");
+        acceptOpen(session, snapshot);
         await refreshCatalog(workspaceId);
       }
       if (message.startsWith("/")) {
-        const result = await api.rpc<{ output?: unknown; error?: string }>(session.id,
+        const result = await api.rpc<CommandResult>(session.id,
           "command.execute", { command: message });
         if (result.error) throw new Error(result.error);
-        if (result.output != null) setNotice(typeof result.output === "string" ? result.output : JSON.stringify(result.output));
+        if (result.ui === "model-selector" && result.output && typeof result.output === "object") {
+          const output = result.output as { current?: ModelEntry | null; providers?: ModelEntry[] };
+          if (Array.isArray(output.providers)) {
+            setModels({ current: output.current || null, providers: output.providers });
+            setPendingModel(output.current?.id || null);
+          }
+          flashNotice("请从模型菜单中选择本会话使用的模型");
+        } else if (result.output != null) {
+          flashNotice(commandOutputNotice(result.output));
+        }
         await refreshSnapshot(session.id);
       } else if (mode === "steer") {
         await api.rpc(session.id, "turn.steer", { message });
@@ -237,23 +334,33 @@ export function App() {
       await api.archiveSession(session.id);
       if (activeSession?.id === session.id) startNewSession();
       await refreshCatalog(session.workspaceId);
-      setNotice("会话已归档");
+      flashNotice("会话已归档");
     } catch (error) { showError(error); }
   };
 
   const selectModel = async (provider: string) => {
-    if (!activeSession) return;
+    const local = models?.providers.find((entry) => entry.id === provider) || null;
+    setPendingModel(provider);
+    if (!activeSession && !draftSession) {
+      if (local) setModels((current) => current ? { ...current, current: local } : current);
+      return;
+    }
     try {
-      const selected = await api.rpc<ModelEntry>(activeSession.id, "model.select", { provider });
+      const selected = await api.rpc<ModelEntry>((activeSession || draftSession)!.id,
+        "model.select", { provider });
       setModels((current) => current ? { ...current, current: selected } : current);
-      setNotice(`已切换到 ${selected.model || provider}`);
+      flashNotice(`已切换到 ${selected.model || provider}`);
     } catch (error) { showError(error); }
   };
 
   const selectPolicy = async (mode: PolicyStatus["mode"]) => {
-    if (!activeSession) return;
+    setPendingPolicy(mode);
+    if (!activeSession && !draftSession) {
+      setPolicy((current) => current ? { ...current, mode } : current);
+      return;
+    }
     try {
-      await api.rpc(activeSession.id, "policy.select", { mode });
+      await api.rpc((activeSession || draftSession)!.id, "policy.select", { mode });
       setPolicy((current) => current ? { ...current, mode } : current);
     } catch (error) { showError(error); }
   };
@@ -274,8 +381,16 @@ export function App() {
 
   const activeWorkspace = bootstrap?.workspaces.find((entry) => entry.id === workspaceId);
   const phase = projection?.state.phase || "idle";
-  const commandSuggestions = runtime?.commands.filter((command) =>
-    composer.startsWith("/") && `/${command.name}`.startsWith(composer.split(/\s/, 1)[0])).slice(0, 7) || [];
+  const commandSuggestions = matchingCommands(runtime?.commands, composer);
+
+  useEffect(() => setCommandIndex(0), [composer.split(/\s/, 1)[0], commandSuggestions.length]);
+
+  const chooseCommand = (index = commandIndex) => {
+    const command = commandSuggestions[index];
+    if (!command) return;
+    setComposer(`/${command.name} `);
+    requestAnimationFrame(() => composerInput.current?.focus());
+  };
 
   const toggleSidebar = () => {
     setSidebarCollapsed((current) => {
@@ -285,20 +400,36 @@ export function App() {
   };
 
   const composerNode = <div className="composer-shell">
-    {commandSuggestions.length > 0 && <div className="command-menu" role="listbox" aria-label="命令建议">
-      {commandSuggestions.map((command) => <button type="button" role="option" key={command.name}
-        onClick={() => setComposer(`/${command.name} `)}><code>/{command.name}</code><span>{command.description}</span></button>)}
+    {commandSuggestions.length > 0 && <div id="command-suggestions" className="command-menu" role="listbox" aria-label="命令建议">
+      <div className="command-menu-title">命令</div>
+      {commandSuggestions.map((command, index) => <button type="button" role="option" key={command.name}
+        aria-selected={index === commandIndex} className={index === commandIndex ? "selected" : ""}
+        onMouseEnter={() => setCommandIndex(index)} onClick={() => chooseCommand(index)}>
+        <code>{command.name}</code><span>{command.description}</span></button>)}
     </div>}
     <div className={`composer ${phase !== "idle" ? "is-active" : ""}`}>
-      <textarea rows={2} value={composer} disabled={!workspaceId} placeholder={workspaceId ? "给代理发送消息" : "选择一个工作区开始"}
+      <textarea ref={composerInput} rows={2} value={composer} disabled={!workspaceId} placeholder={workspaceId ? "给代理发送消息" : "选择一个工作区开始"}
+        aria-controls={commandSuggestions.length ? "command-suggestions" : undefined}
         onChange={(event) => setComposer(event.target.value)} onKeyDown={(event) => {
+          if (commandSuggestions.length && event.key === "ArrowDown") {
+            event.preventDefault(); setCommandIndex((value) => (value + 1) % commandSuggestions.length); return;
+          }
+          if (commandSuggestions.length && event.key === "ArrowUp") {
+            event.preventDefault(); setCommandIndex((value) => (value - 1 + commandSuggestions.length) % commandSuggestions.length); return;
+          }
+          if (commandSuggestions.length && (event.key === "Tab" || event.key === "Enter")) {
+            event.preventDefault(); chooseCommand(); return;
+          }
+          if (commandSuggestions.length && event.key === "Escape") {
+            event.preventDefault(); setComposer(""); return;
+          }
           if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); }
         }} aria-label="给代理发送消息" />
       <div className="composer-footer">
         <div className="composer-left">
           <button type="button" className="toolbar-button command-button" aria-label="命令"
-            onClick={() => setComposer((value) => value.startsWith("/") ? value : "/")}><Icon name="command" /></button>
-          {activeSession && <select className="toolbar-select policy-select" aria-label="访问模式"
+            onClick={() => { setComposer((value) => value.startsWith("/") ? value : "/"); requestAnimationFrame(() => composerInput.current?.focus()); }}><Icon name="command" /></button>
+          {policy && <select className="toolbar-select policy-select" aria-label="访问模式"
             value={policy?.mode || "deny"} onChange={(event) => void selectPolicy(event.target.value as PolicyStatus["mode"])}>
             {(policy?.modes.length ? policy.modes : [{ id: "deny" as const, label: "Read Only" }]).map((entry) =>
               <option value={entry.id} key={entry.id}>{entry.label}</option>)}
@@ -306,9 +437,10 @@ export function App() {
           {phase !== "idle" && <span className="phase-copy">{phaseLabel(phase)} · 新消息将排队</span>}
         </div>
         <div className="composer-right">
-          {activeSession && <select className="toolbar-select model-select" aria-label="选择模型"
-            value={models?.current?.id || ""} onChange={(event) => void selectModel(event.target.value)}>
-            {models?.providers.map((model) => <option value={model.id} key={model.id}>{model.model || model.id}</option>)}
+          {!!models?.providers.length && <select className="toolbar-select model-select" aria-label="选择模型"
+            value={pendingModel || models.current?.id || ""} onChange={(event) => void selectModel(event.target.value)}>
+            {models?.providers.map((model) => <option value={model.id} key={model.id}>
+              {model["display-name"] || model.model || model.id}</option>)}
           </select>}
           {phase !== "idle" && composer.trim() && <button type="button" className="steer-button" onClick={() => void send("steer")}>立即引导</button>}
           {phase !== "idle" && activeSession ? <button type="button" className="send-button stop"
@@ -378,8 +510,7 @@ export function App() {
               <option value="" disabled>选择工作区</option>
               {bootstrap?.workspaces.map((workspace) => <option value={workspace.id} key={workspace.id}>{workspace.name}</option>)}</select></label>
             <button type="button" onClick={() => {
-              setNotice("当前项目仅配置了“标准模式”预设");
-              window.setTimeout(() => setNotice(null), 3000);
+              flashNotice("当前项目仅配置了“标准模式”预设", 3_000);
             }}><Icon name="sparkles" />标准模式<Icon name="chevron" /></button>
           </div>
           {composerNode}
@@ -393,19 +524,17 @@ export function App() {
           <div className="session-header-actions">
             {subagents?.jobs.length ? <span className="job-pill">{subagents.jobs.filter((job) => job.status === "running").length} 个后台任务</span> : null}
             <button type="button" className={`header-action ${detailsOpen ? "active" : ""}`} onClick={() => setDetailsOpen((value) => !value)}>
-              会话日志<Icon name="chevron" /></button>
+              Session log<Icon name="chevron" /></button>
           </div>
         </header>
         <div className="view-tabs" role="tablist"><button type="button" role="tab" aria-selected={conversationView === "chat"}
           onClick={() => setConversationView("chat")}>对话</button><button type="button" role="tab" aria-selected={conversationView === "trajectory"}
             onClick={() => setConversationView("trajectory")}>轨迹</button></div>
-        <div className="timeline" ref={timeline} aria-live="polite">
+        <div className={`timeline ${conversationView === "trajectory" ? "trajectory-mode" : ""}`} ref={timeline} aria-live="polite">
           {conversationView === "chat" && projection && <Timeline projection={projection} />}
-          {conversationView === "trajectory" && <div className="trajectory-list">{projection?.events.map((event) => <div key={event.id}>
-            <span>{event.seq}</span><code>{event.type}</code><time>{new Date(event.at).toLocaleTimeString()}</time>
-            <pre>{JSON.stringify(event.data, null, 2)}</pre></div>)}</div>}
+          {conversationView === "trajectory" && <Trajectory events={projection?.events || []} />}
         </div>
-        <div className="composer-wrap">{composerNode}</div>
+        <div className="composer-wrap">{composerNode}<div className="session-run-summary">{runSummary}</div></div>
       </section>}
     </main>
 
@@ -421,8 +550,17 @@ export function App() {
 
     {projection?.interactions[0] && <ApprovalDialog interaction={projection.interactions[0]}
       resolving={resolving} onResolve={resolveApproval} />}
-    {settingsOpen && <SettingsDialog workspaces={bootstrap?.workspaces || []} runtime={runtime} models={models}
+    {settingsOpen && <SettingsDialog workspaces={bootstrap?.workspaces || []} runtime={runtime}
       theme={theme} onThemeChange={setTheme} onClose={() => setSettingsOpen(false)}
+      onProvidersChanged={async () => {
+        const source = activeSession || draftSession;
+        if (!source) return;
+        const next = await api.rpc<{ current: ModelEntry | null; providers: ModelEntry[] }>(source.id, "model.list");
+        setModels(next);
+        if (!next.providers.some((entry) => entry.id === pendingModel)) {
+          setPendingModel(next.current?.id || null);
+        }
+      }}
       onAddWorkspace={() => { setSettingsOpen(false); setWorkspaceDialogOpen(true); }} onRemoveWorkspace={removeWorkspace} />}
     {workspaceDialogOpen && <WorkspaceDialog initialPath={activeWorkspace?.path} onClose={() => setWorkspaceDialogOpen(false)} onSelect={addWorkspace} />}
     {notice && <div className="toast" role="status">{notice}</div>}

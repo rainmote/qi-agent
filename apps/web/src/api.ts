@@ -1,4 +1,5 @@
-import type { HostEvent, SessionSnapshot, SessionSummary, Workspace } from "./types";
+import type { HostEvent, ProviderModelSettings, ProviderPreset, ProviderSettings,
+  SessionSnapshot, SessionSummary, Workspace } from "./types";
 
 interface ApiEnvelope<T> {
   ok: boolean;
@@ -25,6 +26,19 @@ export interface Bootstrap {
 
 export const api = {
   bootstrap: () => request<Bootstrap>("/api/bootstrap"),
+  listProviders: () => request<{ providers: ProviderSettings[]; presets: ProviderPreset[] }>("/api/providers"),
+  saveProvider: (provider: Omit<ProviderSettings, "apiKeyConfigured"> & { apiKey?: string }) =>
+    request<ProviderSettings>("/api/providers", {
+      method: "POST",
+      body: JSON.stringify(provider),
+    }),
+  removeProvider: (id: string) => request<{ removed: boolean }>(
+    `/api/providers/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  discoverProviderModels: (input: { providerId?: string; baseUrl?: string; apiKey?: string }) =>
+    request<ProviderModelSettings[]>("/api/providers/discover", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
   listSessions: (workspaceId: string) =>
     request<SessionSummary[]>(`/api/sessions?workspace=${encodeURIComponent(workspaceId)}`),
   createSession: (workspaceId: string, name?: string) =>

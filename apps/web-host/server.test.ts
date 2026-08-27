@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -8,6 +9,10 @@ import { WorkspaceRegistry, workspaceId } from "./workspaces.js";
 
 async function temporaryRoot() {
   return mkdtemp(join(tmpdir(), "bb-agent-web-test-"));
+}
+
+async function removeTemporaryRoot(root: string) {
+  await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }
 
 test("workspace registry persists canonical allowlisted roots", async () => {
@@ -25,7 +30,7 @@ test("workspace registry persists canonical allowlisted roots", async () => {
     await restored.load();
     assert.equal(restored.get(workspaceId(canonical)).path, canonical);
   } finally {
-    await rm(root, { recursive: true });
+    await removeTemporaryRoot(root);
   }
 });
 
@@ -60,6 +65,36 @@ test("web host authenticates, catalogs, creates a real worker, and invokes RPC",
     };
     assert.equal(bootstrap.ok, true);
     assert.equal(JSON.stringify(bootstrap).includes("test-token"), false);
+
+    const providersResponse = await fetch(`${base}/api/providers`, { headers: authorization });
+    const providers = await providersResponse.json() as {
+      ok: boolean;
+      result: { providers: Array<{ id: string; apiKeyConfigured: boolean }> };
+    };
+    assert.equal(providers.ok, true);
+    assert.deepEqual(providers.result.providers.slice(0, 2).map((provider) => provider.id),
+      ["deepseek", "openai"]);
+    assert.equal(JSON.stringify(providers).includes("apiKey\""), false);
+
+    const saveProviderResponse = await fetch(`${base}/api/providers`, {
+      method: "POST",
+      headers: { ...authorization, "Content-Type": "application/json", Origin: base },
+      body: JSON.stringify({
+        id: "web-test",
+        name: "Web Test",
+        protocol: "openai-completions",
+        baseUrl: "https://gateway.example/v1",
+        apiKey: "web-test-secret",
+        models: [{ id: "web-test-chat", name: "Web Test Chat" }],
+      }),
+    });
+    const savedProvider = await saveProviderResponse.json() as {
+      ok: boolean;
+      result: { id: string; apiKeyConfigured: boolean };
+    };
+    assert.equal(savedProvider.ok, true, JSON.stringify(savedProvider));
+    assert.equal(savedProvider.result.apiKeyConfigured, true);
+    assert.equal(JSON.stringify(savedProvider).includes("web-test-secret"), false);
 
     const directoriesResponse = await fetch(
       `${base}/api/directories?path=${encodeURIComponent(workspace)}`,
@@ -97,6 +132,20 @@ test("web host authenticates, catalogs, creates a real worker, and invokes RPC",
     const rpc = await rpcResponse.json() as { ok: boolean; result: { phase: string } };
     assert.equal(rpc.ok, true);
     assert.equal(rpc.result.phase, "idle");
+
+    const modelListResponse = await fetch(
+      `${base}/api/sessions/${created.result.session.id}/rpc`, {
+        method: "POST",
+        headers: { ...authorization, "Content-Type": "application/json", Origin: base },
+        body: JSON.stringify({ method: "model.list", params: {} }),
+      });
+    const modelList = await modelListResponse.json() as {
+      ok: boolean;
+      result: { providers: Array<{ id: string; model: string; "display-name"?: string }> };
+    };
+    assert.equal(modelList.ok, true, JSON.stringify(modelList));
+    assert.equal(modelList.result.providers.some((provider) => provider.id === "web-test"
+      && provider.model === "web-test-chat" && provider["display-name"] === "Web Test Chat"), true);
 
     const policyStatusResponse = await fetch(
       `${base}/api/sessions/${created.result.session.id}/rpc`, {
@@ -180,7 +229,7 @@ test("web host authenticates, catalogs, creates a real worker, and invokes RPC",
     assert.equal(catalog.result.some((session) => session.id === forked.result.session.id), false);
   } finally {
     await host.close();
-    await rm(root, { recursive: true });
+    await removeTemporaryRoot(root);
   }
 });
 
@@ -189,4 +238,40 @@ test("web host rejects network exposure unless it is explicitly acknowledged", a
     startWebHost({ host: "0.0.0.0", port: 0 }),
     /Refusing a non-loopback Web Host/,
   );
+});
+
+test("web host increments the port until one is available", async () => {
+  const root = await temporaryRoot();
+  const workspace = join(root, "workspace");
+  const state = join(root, "state");
+  const staticRoot = join(root, "static");
+  await mkdir(workspace);
+  await mkdir(staticRoot);
+  await writeFile(join(staticRoot, "index.html"), "<!doctype html><title>test</title>");
+
+  const occupied = createServer((_request, response) => response.end("occupied"));
+  await new Promise<void>((resolve, reject) => {
+    occupied.once("error", reject);
+    occupied.listen(0, "127.0.0.1", resolve);
+  });
+  const address = occupied.address();
+  assert.ok(address && typeof address === "object");
+  const occupiedPort = address.port;
+
+  let host: Awaited<ReturnType<typeof startWebHost>> | undefined;
+  try {
+    host = await startWebHost({
+      port: occupiedPort,
+      workspace,
+      stateDirectory: state,
+      staticRoot,
+      token: "test-token",
+    });
+    assert.ok(host.port > occupiedPort);
+    assert.equal((await fetch(`http://${host.host}:${host.port}/health`)).status, 200);
+  } finally {
+    if (host) await host.close();
+    await new Promise<void>((resolve) => occupied.close(() => resolve()));
+    await removeTemporaryRoot(root);
+  }
 });

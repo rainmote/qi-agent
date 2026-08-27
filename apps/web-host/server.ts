@@ -8,6 +8,7 @@ import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { SessionManager } from "./sessions.js";
 import type { HostEvent } from "./types.js";
+import { ProviderRegistry, type ProviderSettings } from "./providers.js";
 import { WorkspaceRegistry } from "./workspaces.js";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -30,6 +31,45 @@ interface WebHostOptions {
   staticRoot?: string;
   token?: string;
   unsafeAllowNetwork?: boolean;
+}
+
+function addressInUse(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error
+    && (error as NodeJS.ErrnoException).code === "EADDRINUSE";
+}
+
+async function listenOnce(
+  server: ReturnType<typeof createServer>, host: string, port: number,
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const onError = (error: Error) => {
+      server.off("listening", onListening);
+      reject(error);
+    };
+    const onListening = () => {
+      server.off("error", onError);
+      resolve();
+    };
+    server.once("error", onError);
+    server.once("listening", onListening);
+    server.listen(port, host);
+  });
+}
+
+async function listenOnAvailablePort(
+  server: ReturnType<typeof createServer>, host: string, initialPort: number,
+): Promise<number> {
+  let candidate = initialPort;
+  while (true) {
+    try {
+      await listenOnce(server, host, candidate);
+      const address = server.address();
+      return typeof address === "object" && address ? address.port : candidate;
+    } catch (error) {
+      if (!addressInUse(error) || candidate === 0 || candidate >= 65_535) throw error;
+      candidate += 1;
+    }
+  }
 }
 
 function isLoopbackHost(host: string): boolean {
@@ -127,14 +167,17 @@ export async function startWebHost(options: WebHostOptions = {}) {
   const staticRoot = options.staticRoot || defaultStaticRoot;
   const workspaces = new WorkspaceRegistry(options.stateDirectory);
   await workspaces.load(options.workspace || process.cwd());
+  const providers = new ProviderRegistry(workspaces.stateDirectory);
+  await providers.load();
   const ownedDaemonEnvironment = options.stateDirectory ? {
     // Unix socket paths are short on macOS. Keep the ephemeral runtime path
     // out of deeply nested test/application state directories.
     runtimeDirectory: join("/tmp", `dao-web-${process.pid}-${randomBytes(6).toString("hex")}`),
     stateDirectory: join(options.stateDirectory, "daemon-state"),
+    providerSettingsPath: providers.statePath,
   } : null;
   const sessions = new SessionManager(workspaces, repositoryRoot,
-    ownedDaemonEnvironment || {});
+    ownedDaemonEnvironment || { providerSettingsPath: providers.statePath });
 
   const readiness = async () => {
     const workspaceRoots = workspaces.list().map((workspace) => workspace.path);
@@ -196,6 +239,36 @@ export async function startWebHost(options: WebHostOptions = {}) {
           ok: true,
           result: { workspaces: roots, catalogs, activeWorkspaceId: roots[0]?.id || null },
         });
+      }
+      if (url.pathname === "/api/providers" && request.method === "GET") {
+        return json(response, 200, {
+          ok: true,
+          result: { providers: providers.list(), presets: providers.presets() },
+        });
+      }
+      if (url.pathname === "/api/providers" && request.method === "POST") {
+        const input = await body(request) as unknown as ProviderSettings;
+        const saved = await providers.upsert(input);
+        await sessions.reloadProviderSettings();
+        return json(response, 200, { ok: true, result: saved });
+      }
+      if (url.pathname === "/api/providers/discover" && request.method === "POST") {
+        const input = await body(request);
+        return json(response, 200, {
+          ok: true,
+          result: await providers.discover({
+            providerId: typeof input.providerId === "string" ? input.providerId : undefined,
+            baseUrl: typeof input.baseUrl === "string" ? input.baseUrl : undefined,
+            apiKey: typeof input.apiKey === "string" ? input.apiKey : undefined,
+          }),
+        });
+      }
+      const providerMatch = url.pathname.match(/^\/api\/providers\/([^/]+)$/);
+      if (providerMatch && request.method === "DELETE") {
+        const id = decodeURIComponent(providerMatch[1]);
+        const removed = await providers.remove(id);
+        await sessions.reloadProviderSettings();
+        return json(response, 200, { ok: true, result: { removed } });
       }
       if (url.pathname === "/api/workspaces" && request.method === "POST") {
         const input = await body(request);
@@ -322,12 +395,7 @@ export async function startWebHost(options: WebHostOptions = {}) {
     }
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(port, host, () => resolve());
-  });
-  const address = server.address();
-  const actualPort = typeof address === "object" && address ? address.port : port;
+  const actualPort = await listenOnAvailablePort(server, host, port);
   return {
     host,
     port: actualPort,

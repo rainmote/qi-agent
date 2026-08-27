@@ -234,7 +234,7 @@
             (recur (inc attempt)))
           response)))))
 
-(defn- generate [ctx config request]
+(defn generate [ctx config request]
   (let [auth-id (or (:auth-id config) (:provider-id config) :openai)
         key (or (when-let [store (kernel/service ctx :auth/store)]
                   (:api-key ((:resolve! store) auth-id)))
@@ -302,6 +302,45 @@
          :usage (:usage parsed)
          :model (:model parsed)}))))
 
+(defn- valid-provider-base-url? [base-url]
+  (try
+    (let [uri (URI. base-url)]
+      (and (contains? #{"https" "http"} (.getScheme uri))
+           (not (str/blank? (.getHost uri)))
+           (nil? (.getUserInfo uri))
+           (nil? (.getQuery uri))
+           (nil? (.getFragment uri))))
+    (catch Throwable _ false)))
+
+(defn provider-entry
+  "Build an OpenAI Responses registry entry for a validated provider config."
+  [ctx config]
+  (let [base-url (or (:base-url config) default-base-url)
+        max-retries (or (:max-retries config) default-max-retries)
+        retry-delay (or (:retry-delay-ms config) default-retry-delay-ms)]
+    (when (str/blank? (:model config))
+      (throw (ex-info "OpenAI Responses plugin requires :model"
+                      {:provider :openai})))
+    (when-not (valid-provider-base-url? base-url)
+      (throw (ex-info "OpenAI Responses base URL is invalid"
+                      {:provider :openai :base-url base-url})))
+    (when-not (and (nat-int? max-retries) (<= max-retries 10)
+                   (pos-int? retry-delay)
+                   (pos-int? (or (:timeout-ms config) default-timeout-ms)))
+      (throw (ex-info "OpenAI Responses retry/timeout settings are invalid"
+                      {:max-retries max-retries
+                       :retry-delay-ms retry-delay
+                       :timeout-ms (:timeout-ms config)})))
+    {:id (or (:provider-id config) :openai)
+     :provider :openai
+     :model (:model config)
+     :display-name (:display-name config)
+     :settings-provider-id (:settings-provider-id config)
+     :context-window (:context-window config)
+     :thinking-levels (or (:thinking-levels config) [:low :medium :high])
+     :input-modalities (or (:input-modalities config) #{:text :image})
+     :generate (partial generate ctx (assoc config :base-url base-url))}))
+
 (def plugin
   {:id :llm/openai-responses
    :description "Official OpenAI Responses API adapter."
@@ -309,22 +348,11 @@
    :start
    (fn [ctx config]
      (let [base-url (or (:base-url config) default-base-url)
-           max-retries (or (:max-retries config) default-max-retries)
-           retry-delay (or (:retry-delay-ms config) default-retry-delay-ms)]
-       (when (str/blank? (:model config))
-         (throw (ex-info "OpenAI Responses plugin requires :model"
-                         {:provider :openai})))
+           entry (provider-entry ctx config)]
        (when-not (valid-base-url? base-url)
          (throw (ex-info
                  "Refusing to send an OpenAI API key outside https://api.openai.com/v1"
                  {:provider :openai :base-url base-url})))
-       (when-not (and (nat-int? max-retries) (<= max-retries 10)
-                      (pos-int? retry-delay)
-                      (pos-int? (or (:timeout-ms config) default-timeout-ms)))
-         (throw (ex-info "OpenAI Responses retry/timeout settings are invalid"
-                         {:max-retries max-retries
-                          :retry-delay-ms retry-delay
-                          :timeout-ms (:timeout-ms config)})))
        (when-let [store (kernel/service ctx :auth/store)]
          (kernel/track-effect!
           ctx
@@ -333,19 +361,10 @@
            (fn [] {:api-key (api-key config)})
            {:provider :openai
             :source (if (:api-key config) :config :environment)})))
-       (let [generator (partial generate ctx (assoc config :base-url base-url))]
+       (let [generator (:generate entry)]
          (if-let [registry (kernel/service ctx :llm/registry)]
            (kernel/track-effect!
             ctx
-            ((:register! registry)
-             {:id (or (:provider-id config) :openai)
-              :provider :openai
-              :model (:model config)
-              :context-window (:context-window config)
-              :thinking-levels (or (:thinking-levels config)
-                                   [:low :medium :high])
-              :input-modalities (or (:input-modalities config)
-                                    #{:text :image})
-              :generate generator}))
+            ((:register! registry) entry))
            (kernel/register-service! ctx :llm/generate generator)))
        nil))})

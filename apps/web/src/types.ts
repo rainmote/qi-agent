@@ -29,6 +29,34 @@ export interface ModelEntry {
   id: string;
   provider?: string;
   model?: string;
+  "display-name"?: string;
+  "settings-provider-id"?: string;
+}
+
+export type ProviderProtocol = "openai-completions" | "openai-responses" | "anthropic-messages";
+
+export interface ProviderModelSettings {
+  id: string;
+  name: string;
+  contextWindow?: number;
+}
+
+export interface ProviderSettings {
+  id: string;
+  name: string;
+  protocol: ProviderProtocol;
+  baseUrl: string;
+  apiKeyEnv?: string;
+  apiKeyConfigured: boolean;
+  models: ProviderModelSettings[];
+  builtin?: boolean;
+}
+
+export interface ProviderPreset {
+  id: string;
+  name: string;
+  protocol: ProviderProtocol;
+  baseUrl: string;
 }
 
 export interface Interaction {

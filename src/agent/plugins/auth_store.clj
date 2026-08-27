@@ -9,6 +9,18 @@
    :start
    (fn [ctx _config]
      (let [resolvers (atom {})
+           upsert!
+           (fn [id resolver metadata]
+             (when-not (and (keyword? id) (fn? resolver))
+               (throw (ex-info "Auth resolver requires keyword id and function"
+                               {:id id})))
+             (let [previous (get @resolvers id)]
+               (swap! resolvers assoc id {:resolve resolver
+                                          :metadata metadata})
+               (fn []
+                 (if previous
+                   (swap! resolvers assoc id previous)
+                   (swap! resolvers dissoc id)))))
            register!
            (fn [id resolver metadata]
              (when-not (and (keyword? id) (fn? resolver))
@@ -27,6 +39,7 @@
        (kernel/register-service!
         ctx :auth/store
         {:register! register!
+         :upsert! upsert!
          :resolve! resolve!
          :providers (fn []
                       (mapv (fn [[id entry]]

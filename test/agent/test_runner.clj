@@ -1190,7 +1190,9 @@
                   [{:ns 'agent.plugins.openai
                     :config {:base-url "https://llm.example/v1/"
                              :model "demo-model"
-                             :api-key "test-key"}}]})]
+                             :api-key "test-key"
+                             :proxy {:host "192.168.90.9"
+                                     :port 7893}}}]})]
         (try
           (let [response ((kernel/require-service ctx :llm/generate)
                           {:system-prompt "system"
@@ -1210,6 +1212,8 @@
             (is (= "https://llm.example/v1/chat/completions" url))
             (is (= "Bearer test-key"
                    (get-in options [:headers "authorization"])))
+            (is (= {:host "192.168.90.9" :port 7893}
+                   (:proxy options)))
             (is (= "system" (get-in body [:messages 0 :role])))
             (is (= "user" (get-in body [:messages 1 :role])))
             (is (= "text" (get-in body [:messages 1 :content 0 :type])))
@@ -3282,9 +3286,12 @@
         (try
           ((kernel/require-service ctx :agent/run) "work")
           (let [catalog (kernel/require-service ctx :resources/catalog)
+                store (kernel/require-service ctx :session/store)
                 snapshot ((:snapshot catalog))
                 request (deref request-seen 1000 :timeout)
-                prompt (:system-prompt request)]
+                prompt (:system-prompt request)
+                context-event (first (filter #(= "context/snapshot" (:type %))
+                                             ((:events store))))]
             (is (= ["AGENTS.md"] (mapv :name (:contexts snapshot))))
             (is (= 3 (count (:system-prompts snapshot))))
             (is (= "Project custom system"
@@ -3298,7 +3305,9 @@
                    (str/index-of prompt "Project append")
                    (str/index-of prompt "Repository instructions")))
             (is (str/includes? prompt "load_skill"))
-            (is (str/includes? prompt (str (fs/real-path directory)))))
+            (is (str/includes? prompt (str (fs/real-path directory))))
+            (is (= prompt (get-in context-event [:data :content])))
+            (is (= 1 (get-in context-event [:data :step]))))
           (finally (kernel/dispose-all! ctx))))
       (finally (delete-tree! directory)))))
 
@@ -3333,6 +3342,63 @@
         (dispose-b)
         (dispose-a))
       (finally (kernel/dispose-all! ctx)))))
+
+(deftest web-provider-settings-reload-models-and-credentials-at-runtime
+  (let [directory (.toFile (java.nio.file.Files/createTempDirectory
+                            "dao-provider-settings-"
+                            (make-array java.nio.file.attribute.FileAttribute 0)))
+        settings (io/file directory "providers.json")
+        write-settings!
+        (fn [providers]
+          (spit settings (json/generate-string {:version 1 :providers providers})))]
+    (try
+      (write-settings!
+       [{:id "acme"
+         :name "Acme"
+         :protocol "openai-completions"
+         :baseUrl "https://gateway.example/v1"
+         :apiKey "acme-secret"
+         :models [{:id "acme-chat" :name "Acme Chat" :contextWindow 32000}
+                  {:id "acme-reason" :name "Acme Reason"}]}])
+      (let [ctx (plugin/boot!
+                 {:plugins
+                  [{:ns 'agent.plugins.model-registry}
+                   {:ns 'agent.plugins.auth-store}
+                   {:ns 'agent.plugins.provider-settings
+                    :config {:path (str settings)}}]})]
+        (try
+          (let [registry (kernel/require-service ctx :llm/registry)
+                auth (kernel/require-service ctx :auth/store)
+                settings-service (kernel/require-service ctx :provider/settings)]
+            (is (= #{:acme :acme--2} (set (map :id ((:providers registry))))))
+            (is (= "Acme Chat" (:display-name ((:current registry)))))
+            (is (= {:api-key "acme-secret"} ((:resolve! auth) :acme)))
+            ((:select! registry) :acme--2)
+            (write-settings!
+             [{:id "acme"
+               :name "Acme Updated"
+               :protocol "openai-completions"
+               :baseUrl "https://gateway.example/v1"
+               :apiKey "acme-secret"
+               :models [{:id "acme-chat" :name "Acme Chat"}
+                        {:id "acme-reason" :name "Acme Reason Updated"}]}])
+            ((:reload! settings-service))
+            (is (= :acme--2 (:id ((:current registry))))
+                "editing a provider preserves the selected model")
+            (write-settings!
+             [{:id "bravo"
+               :name "Bravo"
+               :protocol "openai-responses"
+               :baseUrl "https://responses.example/v1"
+               :apiKey "bravo-secret"
+               :models [{:id "bravo-1" :name "Bravo One"}]}])
+            (is (= {:providers 1 :models 1 :path (str settings)}
+                   ((:reload! settings-service))))
+            (is (= #{:bravo} (set (map :id ((:providers registry))))))
+            (is (= {:api-key "bravo-secret"} ((:resolve! auth) :bravo)))
+            (is (thrown? clojure.lang.ExceptionInfo ((:resolve! auth) :acme))))
+          (finally (kernel/dispose-all! ctx))))
+      (finally (delete-tree! directory)))))
 
 (deftest omp-anchored-edits-reject-stale-and-overlapping-work
   (let [directory (.toFile (java.nio.file.Files/createTempDirectory

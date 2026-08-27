@@ -595,7 +595,11 @@
       (inject-queued! ctx queue listeners :steer)
       (record! ctx "step/start" {:step step})
       (publish! ctx listeners :agent.turn/start {:step step})
-      (let [request {:system-prompt (system-prompt ctx config)
+      (let [current-system-prompt (system-prompt ctx config)
+            _ (when (= step 1)
+                (record! ctx "context/snapshot"
+                         {:step step :content current-system-prompt}))
+            request {:system-prompt current-system-prompt
                      :messages (messages ctx)
                      :tools (kernel/tool-schemas ctx)
                      :cancel-token cancel-token

@@ -25,7 +25,8 @@ npm install
 bb web
 ```
 
-默认监听 `127.0.0.1:3080`。启动日志会打印一个只使用一次的带 token URL；首次打开后，
+默认从 `127.0.0.1:3080` 开始监听；端口已占用时会逐一尝试后续端口，直至成功或到达端口
+范围上限。启动日志会打印一个只使用一次的带 token URL；首次打开后，
 Host 把随机 token 换成 `HttpOnly + SameSite=Strict` Cookie，并重定向到不含 token 的地址。
 可以显式选择首个工作区或端口：
 
@@ -40,6 +41,8 @@ WebUI 支持：
 - 会话目录、创建、恢复、重命名、清理与压缩；
 - 持久消息、通用工具卡、实时输出、steer、follow-up 和 abort；
 - provider 切换、远程审批、subagent 任务与运行时插件/工具清单；
+- 与 DeepSeek Harness 对齐的“设置 → 模型”：添加预设或自定义提供方、编辑 API 地址与协议、
+  管理模型目录、从兼容端点获取模型，并在保存后即时刷新已打开会话的模型选择器；
 - 桌面三栏布局、移动抽屉、键盘焦点、`prefers-reduced-motion`；
 - SSE 自动重连与 Host 内事件补发，重启后由 session snapshot 重新投影。
 
@@ -95,6 +98,8 @@ Host 的边界：
 - 浏览器只能打开 allowlist 中经过 `realpath` 解析的工作区，会话路径完全由 Host 生成；
 - 远程命令拒绝带任意目标路径的 `/fork`，运行时状态不会返回 context 正文或认证信息；
 - session JSONL、工作区清单和凭据都不会打包进前端产物。
+- 模型 API 密钥只写入本机 Web Host 状态目录的 `providers.json`，文件权限为 `0600`；
+  列表和保存响应只返回“是否已配置”，不会把密钥回传给浏览器。
 - `/health/live` 只检查进程存活；`/health/ready` 还会检查静态产物、运行配置、daemon
   二进制和工作区可访问性。
 
