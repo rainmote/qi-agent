@@ -46,7 +46,9 @@ dao
 启动器不会切换工作目录，因此文件工具、信任状态和 `.bb-agent/sessions` 都属于调用
 `dao` 时所在的仓库。可用 `DAO_INSTALL_DIR`、`DAO_BIN_DIR`，或
 `bb install --install-dir PATH --bin-dir PATH` 覆盖默认安装位置。重复执行 `bb install`
-会构建并原子替换之前由该命令管理的安装；若目标 `dao` 是其他程序，安装器会拒绝覆盖。
+会构建并原子替换之前由该命令管理的安装，但保留已安装的 `agent.edn` 用户配置；只有显式
+传入 `bb install --reset-config` 才恢复仓库默认 profile。若目标 `dao` 是其他程序，安装器
+会拒绝覆盖。
 
 先运行完全离线的两轮工具调用示例：
 

@@ -85,6 +85,30 @@
                (->> (.listFiles release) (map #(.getName %)) sort vec))))
       (finally (delete-tree! root)))))
 
+(deftest installer-preserves-an-active-profile-unless-reset-is-explicit
+  (let [root (.toFile (java.nio.file.Files/createTempDirectory
+                       "dao-config-preservation-"
+                       (make-array java.nio.file.attribute.FileAttribute 0)))
+        install-path (io/file root "installed")
+        stage (io/file root "stage")
+        preserve! (var-get (ns-resolve 'agent.install
+                                       'preserve-installed-config!))]
+    (try
+      (.mkdirs install-path)
+      (.mkdirs stage)
+      (spit (io/file install-path "agent.edn") "{:provider :chatgpt}")
+      (spit (io/file stage "agent.edn") "{:provider :openai}")
+
+      (is (true? (preserve! install-path stage false)))
+      (is (= "{:provider :chatgpt}"
+             (slurp (io/file stage "agent.edn"))))
+
+      (spit (io/file stage "agent.edn") "{:provider :openai}")
+      (is (nil? (preserve! install-path stage true)))
+      (is (= "{:provider :openai}"
+             (slurp (io/file stage "agent.edn"))))
+      (finally (delete-tree! root)))))
+
 (deftest reversible-kernel-effects
   (let [ctx (kernel/create-context)
         plugin-ctx (kernel/plugin-context ctx :test/plugin)

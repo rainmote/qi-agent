@@ -11,6 +11,7 @@
   (str "Install dao for use from any workspace.\n\n"
        "  bb install\n"
        "  bb install --install-dir PATH --bin-dir PATH\n\n"
+       "  bb install --reset-config\n\n"
        "Environment overrides:\n"
        "  DAO_INSTALL_DIR   Application files (default: ~/.local/share/dao)\n"
        "  DAO_BIN_DIR       Launcher directory (default: ~/.local/bin)\n"))
@@ -29,6 +30,9 @@
         (if-let [path (second remaining)]
           (recur (nnext remaining) (assoc options :bin-dir path))
           (throw (ex-info "--bin-dir requires a path" {})))
+
+        "--reset-config"
+        (recur (next remaining) (assoc options :reset-config true))
 
         "--help" (assoc options :help true)
         "-h" (assoc options :help true)
@@ -102,6 +106,15 @@
                 "apps/tui-rs/Cargo.toml" "apps/tui-rs/Cargo.lock"]]
     (fs/copy (fs/path source name) (fs/path stage name))))
 
+(defn- preserve-installed-config!
+  "Keep the user's active profile across atomic application upgrades."
+  [install-path stage reset-config]
+  (let [installed (fs/path install-path "agent.edn")
+        staged (fs/path stage "agent.edn")]
+    (when (and (not reset-config) (fs/regular-file? installed))
+      (fs/copy installed staged {:replace-existing true})
+      true)))
+
 (defn- prune-build-stage! [stage]
   (let [target (fs/path stage "apps/tui-rs/target")
         release (fs/path target "release")
@@ -148,7 +161,7 @@
     (fs/move temporary launcher {:replace-existing true :atomic-move true})))
 
 (defn install!
-  [{:keys [source-root install-dir bin-dir]
+  [{:keys [source-root install-dir bin-dir reset-config]
     :or {source-root (System/getProperty "user.dir")}}]
   (let [source-root (require-source-root! (absolute-path source-root))
         install-dir (absolute-path (or install-dir (default-install-dir)))
@@ -170,6 +183,7 @@
                                      :prefix ".dao-install-"})]
       (try
         (copy-source! source-root stage)
+        (preserve-installed-config! install-path stage reset-config)
         (build-stage! stage)
         (activate-stage! stage install-dir)
         (install-launcher! launcher install-dir)
