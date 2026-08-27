@@ -175,6 +175,20 @@ pub fn apply_envelope(mut projection: UiProjection, envelope: &Envelope) -> UiPr
     projection
 }
 
+fn record_run_error(projection: &mut UiProjection, text: String, fallback_id: String) {
+    let duplicate =
+        projection.history.iter().rev().take(4).any(
+            |item| matches!(item, HistoryItem::Error { text: existing, .. } if existing == &text),
+        );
+    if !duplicate {
+        projection.history.push(HistoryItem::Error {
+            id: fallback_id,
+            text: text.clone(),
+        });
+    }
+    projection.state.last_error = Some(text);
+}
+
 fn apply_event(
     mut projection: UiProjection,
     event: &str,
@@ -268,16 +282,13 @@ fn apply_event(
         "ui/run-error" => {
             let text =
                 string_at(data, &["message", "error"]).unwrap_or_else(|| "Run failed".into());
-            let duplicate = projection.history.iter().rev().take(4).any(
-                |item| matches!(item, HistoryItem::Error { text: existing, .. } if existing == &text),
-            );
-            if !duplicate {
-                projection.history.push(HistoryItem::Error {
-                    id: fallback_id,
-                    text: text.clone(),
-                });
-            }
-            projection.state.last_error = Some(text);
+            record_run_error(&mut projection, text, fallback_id);
+        }
+        "remote/run-result" if data.get("ok").and_then(Value::as_bool) == Some(false) => {
+            let text = object_at(data, &["error"])
+                .and_then(|error| string_at(error, &["message"]))
+                .unwrap_or_else(|| "Run failed".into());
+            record_run_error(&mut projection, text, fallback_id);
         }
         "llm/model-selected" => {
             if let Ok(model) = serde_json::from_value::<Model>(Value::Object(data.clone())) {
@@ -640,6 +651,27 @@ mod tests {
         .unwrap();
         let p = apply_envelope(apply_envelope(p, &envelope), &envelope);
         assert_eq!(p.history.len(), 1);
+    }
+
+    #[test]
+    fn asynchronous_run_failures_are_projected_into_history() {
+        let envelope: Envelope = serde_json::from_value(json!({
+            "type":"event", "event":"remote/run-result", "seq":9,
+            "data":{"request_id":"request-1", "ok":false,
+                    "error":{"message":"ChatGPT login expired"}}
+        }))
+        .unwrap();
+
+        let projection = apply_envelope(UiProjection::default(), &envelope);
+
+        assert_eq!(
+            projection.state.last_error.as_deref(),
+            Some("ChatGPT login expired")
+        );
+        assert!(matches!(
+            projection.history.last(),
+            Some(HistoryItem::Error { text, .. }) if text == "ChatGPT login expired"
+        ));
     }
 
     #[test]

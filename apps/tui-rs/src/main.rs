@@ -6,9 +6,15 @@ use bb_agent_tui::{
 };
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
-    event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyEventKind},
+    event::{
+        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event, KeyEventKind,
+    },
     execute,
-    terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode, size},
+    terminal::{
+        Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
+        enable_raw_mode, size,
+    },
 };
 use ratatui::{
     Terminal, TerminalOptions, Viewport,
@@ -55,6 +61,13 @@ struct TerminalGuard {
     terminal: Terminal<CrosstermBackend<File>>,
     tty: File,
     viewport_height: u16,
+    mode: TerminalMode,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TerminalMode {
+    VirtualHistory,
+    NativeScrollback,
 }
 
 /// Crossterm obtains the cursor position by writing a device-status query to
@@ -93,7 +106,7 @@ impl Drop for StdoutToTty {
 }
 
 impl TerminalGuard {
-    fn open() -> Result<Self> {
+    fn open(mode: TerminalMode) -> Result<Self> {
         let mut tty = OpenOptions::new()
             .read(true)
             .write(true)
@@ -107,43 +120,76 @@ impl TerminalGuard {
             .try_clone()
             .context("could not clone controlling terminal for renderer")?;
         enable_raw_mode().context("could not enable terminal raw mode")?;
-        if let Err(error) = execute!(tty, EnableBracketedPaste, Hide) {
-            let _ = execute!(cleanup_tty, Show, DisableBracketedPaste);
+        let setup = match mode {
+            TerminalMode::VirtualHistory => execute!(
+                tty,
+                EnterAlternateScreen,
+                EnableMouseCapture,
+                EnableBracketedPaste,
+                Hide
+            ),
+            TerminalMode::NativeScrollback => execute!(tty, EnableBracketedPaste, Hide),
+        };
+        if let Err(error) = setup {
+            let _ = execute!(
+                cleanup_tty,
+                Show,
+                DisableBracketedPaste,
+                DisableMouseCapture,
+                LeaveAlternateScreen
+            );
             let _ = disable_raw_mode();
-            return Err(error).context("could not initialize inline terminal UI");
+            return Err(error).context("could not initialize terminal UI");
         }
         let initialized = match StdoutToTty::new(tty_fd).and_then(|_redirect| {
             let terminal_size = size()?;
-            let viewport_height = inline_viewport_height(4, terminal_size.1);
+            let (viewport, viewport_height) = match mode {
+                TerminalMode::VirtualHistory => (Viewport::Fullscreen, terminal_size.1),
+                TerminalMode::NativeScrollback => {
+                    let height = inline_viewport_height(4, terminal_size.1);
+                    (Viewport::Inline(height), height)
+                }
+            };
             let terminal = Terminal::with_options(
                 CrosstermBackend::new(backend_tty),
-                TerminalOptions {
-                    viewport: Viewport::Inline(viewport_height),
-                },
+                TerminalOptions { viewport },
             )?;
             Ok((terminal, viewport_height))
         }) {
             Ok(initialized) => initialized,
             Err(error) => {
-                let _ = execute!(cleanup_tty, Show, DisableBracketedPaste);
+                let _ = execute!(
+                    cleanup_tty,
+                    Show,
+                    DisableBracketedPaste,
+                    DisableMouseCapture,
+                    LeaveAlternateScreen
+                );
                 let _ = disable_raw_mode();
-                return Err(error).context("could not create inline terminal viewport");
+                return Err(error).context("could not create terminal viewport");
             }
         };
         Ok(Self {
             terminal: initialized.0,
             tty,
             viewport_height: initialized.1,
+            mode,
         })
     }
 
-    fn draw(&mut self, app: &App) -> Result<()> {
+    fn draw(&mut self, app: &mut App) -> Result<()> {
         let _redirect = StdoutToTty::new(self.tty.as_raw_fd())?;
         self.terminal.draw(|frame| ui::draw(frame, app))?;
         Ok(())
     }
 
     fn resize_inline(&mut self, app: &App, terminal_width: u16, terminal_rows: u16) -> Result<()> {
+        if self.mode == TerminalMode::VirtualHistory {
+            let _redirect = StdoutToTty::new(self.tty.as_raw_fd())?;
+            self.terminal.autoresize()?;
+            self.viewport_height = terminal_rows;
+            return Ok(());
+        }
         let viewport_height = inline_viewport_height(
             ui::inline_content_height(app, terminal_width),
             terminal_rows,
@@ -180,6 +226,9 @@ impl TerminalGuard {
         terminal_width: u16,
         terminal_rows: u16,
     ) -> Result<bool> {
+        if self.mode == TerminalMode::VirtualHistory {
+            return Ok(false);
+        }
         if app.projection.is_none() {
             return Ok(false);
         }
@@ -232,14 +281,27 @@ impl TerminalGuard {
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        let area = self.terminal.current_buffer_mut().area;
-        let _ = execute!(
-            self.terminal.backend_mut(),
-            MoveTo(area.x, area.y),
-            Clear(ClearType::FromCursorDown),
-            Show,
-            DisableBracketedPaste
-        );
+        match self.mode {
+            TerminalMode::VirtualHistory => {
+                let _ = execute!(
+                    self.terminal.backend_mut(),
+                    DisableBracketedPaste,
+                    DisableMouseCapture,
+                    LeaveAlternateScreen,
+                    Show
+                );
+            }
+            TerminalMode::NativeScrollback => {
+                let area = self.terminal.current_buffer_mut().area;
+                let _ = execute!(
+                    self.terminal.backend_mut(),
+                    MoveTo(area.x, area.y),
+                    Clear(ClearType::FromCursorDown),
+                    Show,
+                    DisableBracketedPaste
+                );
+            }
+        }
         let _ = disable_raw_mode();
     }
 }
@@ -387,7 +449,7 @@ fn dispatch_action(
     }
 }
 
-fn run_tui(mut attached: AttachedAgent) -> Result<()> {
+fn run_tui(mut attached: AttachedAgent, terminal_mode: TerminalMode) -> Result<()> {
     attached
         .connection
         .reader
@@ -404,7 +466,7 @@ fn run_tui(mut attached: AttachedAgent) -> Result<()> {
     let mut pending = HashMap::<String, PendingRequest>::new();
     let mut request_counter = 0u64;
     let mut app = App {
-        inline_mode: true,
+        inline_mode: terminal_mode == TerminalMode::NativeScrollback,
         ..App::default()
     };
     app.load_snapshot(attached.snapshot)?;
@@ -417,7 +479,7 @@ fn run_tui(mut attached: AttachedAgent) -> Result<()> {
         "command.list",
         json!({}),
     )?;
-    let mut terminal = TerminalGuard::open()?;
+    let mut terminal = TerminalGuard::open(terminal_mode)?;
     let mut last_tick = Instant::now();
     let tick_rate = Duration::from_millis(80);
     let mut dirty = true;
@@ -427,7 +489,7 @@ fn run_tui(mut attached: AttachedAgent) -> Result<()> {
             let terminal_size = size()?;
             terminal.commit_ready_history(&mut app, terminal_size.0, terminal_size.1)?;
             terminal.resize_inline(&app, terminal_size.0, terminal_size.1)?;
-            terminal.draw(&app)?;
+            terminal.draw(&mut app)?;
             dirty = false;
         }
 
@@ -562,6 +624,14 @@ fn entrypoint() -> Result<()> {
     let repository_root = option_path(&args, "--repository-root");
     let config_path = option_path(&args, "--config");
     let repl_backend = value_after(&args, "--repl-backend");
+    let terminal_mode = if args
+        .iter()
+        .any(|argument| argument == "--native-scrollback")
+    {
+        TerminalMode::NativeScrollback
+    } else {
+        TerminalMode::VirtualHistory
+    };
     let (command, tail) = command_and_tail(&args);
     match command {
         Some("daemon") if tail.first().map(String::as_str) == Some("serve") => {
@@ -642,12 +712,15 @@ fn entrypoint() -> Result<()> {
         }
         Some("attach") => {
             let agent_id = positional(tail, 0).context("attach requires an agent id")?;
-            run_tui(client::attach_or_create(
-                Some(agent_id),
-                repository_root.as_deref(),
-                config_path.as_deref(),
-                None,
-            )?)
+            run_tui(
+                client::attach_or_create(
+                    Some(agent_id),
+                    repository_root.as_deref(),
+                    config_path.as_deref(),
+                    None,
+                )?,
+                terminal_mode,
+            )
         }
         Some("help" | "--help" | "-h") => {
             println!("{USAGE}");
@@ -655,12 +728,15 @@ fn entrypoint() -> Result<()> {
         }
         Some(value) if !value.starts_with('-') => bail!("unknown dao command: {value}"),
         Some(value) => bail!("unknown dao option: {value}"),
-        _ => run_tui(client::attach_or_create(
-            None,
-            repository_root.as_deref(),
-            config_path.as_deref(),
-            repl_backend,
-        )?),
+        _ => run_tui(
+            client::attach_or_create(
+                None,
+                repository_root.as_deref(),
+                config_path.as_deref(),
+                repl_backend,
+            )?,
+            terminal_mode,
+        ),
     }
 }
 
@@ -672,6 +748,10 @@ fn command_and_tail(args: &[String]) -> (Option<&str>, &[String]) {
             "--config" | "--repository-root" | "--repl-backend"
         ) {
             index += 2;
+            continue;
+        }
+        if args[index] == "--native-scrollback" {
+            index += 1;
             continue;
         }
         if matches!(args[index].as_str(), "--help" | "-h") {
@@ -705,6 +785,7 @@ const USAGE: &str = "Daemon-backed Clojure agent runtime
 
 Options:
   --config PATH                    worker profile (default: agent.edn)
+  --native-scrollback              use terminal scrollback instead of virtual history
   --repl-backend BACKEND           babashka (default) or jvm-clojure
   --repository-root PATH           dao runtime source root";
 
@@ -810,6 +891,19 @@ mod tests {
         let (command, tail) = command_and_tail(&values);
         assert_eq!(command, Some("--unknown"));
         assert!(tail.is_empty());
+    }
+
+    #[test]
+    fn native_scrollback_is_a_global_tui_option() {
+        let values = args(&["--native-scrollback", "attach", "agent-1"]);
+        let (command, tail) = command_and_tail(&values);
+        assert_eq!(command, Some("attach"));
+        assert_eq!(positional(tail, 0), Some("agent-1"));
+
+        let values = args(&["attach", "--native-scrollback", "agent-2"]);
+        let (command, tail) = command_and_tail(&values);
+        assert_eq!(command, Some("attach"));
+        assert_eq!(positional(tail, 0), Some("agent-2"));
     }
 
     #[test]

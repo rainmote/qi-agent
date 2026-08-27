@@ -12,7 +12,9 @@ set workspace_path [file join /tmp "dao-pty-workspace-[pid]"]
 file mkdir $runtime_path
 file mkdir $state_path
 file mkdir $workspace_path
-log_file -noappend $capture_path
+# `log_user 0` keeps the CI output readable; `-a` still records the raw PTY
+# stream so terminal-mode setup and restoration can be asserted byte-for-byte.
+log_file -a -noappend $capture_path
 
 proc fail {message code} {
     global capture_path runtime_path state_path workspace_path repo_root
@@ -23,7 +25,7 @@ proc fail {message code} {
     catch {exec env DAO_RUNTIME_DIR=$runtime_path DAO_STATE_DIR=$state_path \
         [file join $repo_root apps tui-rs target release dao] shutdown --repository-root $repo_root \
         --config [file join $repo_root examples tui-mock.edn]}
-    catch {file delete -force $capture_path}
+    puts stderr "terminal capture: $capture_path"
     catch {file delete -force $runtime_path}
     catch {file delete -force $state_path}
     catch {file delete -force $workspace_path}
@@ -38,9 +40,8 @@ spawn -noecho env DAO_RUNTIME_DIR=$runtime_path DAO_STATE_DIR=$state_path \
     --config [file join $repo_root examples tui-mock.edn]
 stty rows 44 columns 160 < $spawn_out(slave,name)
 
-# Ratatui anchors an inline viewport by asking the real terminal for its cursor
-# row. Expect supplies the response that an interactive terminal emulator would
-# normally send automatically.
+# The native-scrollback fallback asks for the real terminal cursor row. Keep a
+# response installed so this smoke test also catches an accidental fallback.
 expect_before {
     -re "\x1b\\\[6n" {
         send -- "\x1b\[1;1R"
@@ -54,7 +55,7 @@ expect {
     eof { fail "startup: early exit" 3 }
 }
 
-# Exercise both sides of the adaptive inline viewport while the TUI is live.
+# Exercise virtual-history resize while the TUI is live.
 stty rows 28 columns 160 < $spawn_out(slave,name)
 exec kill -WINCH [exp_pid]
 after 100
@@ -79,12 +80,17 @@ expect {
         set capture [open $capture_path rb]
         set terminal_output [read $capture]
         close $capture
-        file delete -force $capture_path
-        if {[string first "\x1b\[?1049h" $terminal_output] >= 0} {
-            fail "terminal: alternate screen was unexpectedly enabled" 7
+        if {[string first "\x1b\[?1049h" $terminal_output] < 0} {
+            fail "terminal: alternate screen was not enabled" 7
         }
-        if {[string first "\x1b\[?1006h" $terminal_output] >= 0} {
-            fail "terminal: mouse capture was unexpectedly enabled" 8
+        if {[string first "\x1b\[?1049l" $terminal_output] < 0} {
+            fail "terminal: alternate screen was not restored" 8
+        }
+        if {[string first "\x1b\[?1006h" $terminal_output] < 0} {
+            fail "terminal: mouse capture was not enabled" 9
+        }
+        if {[string first "\x1b\[?1006l" $terminal_output] < 0} {
+            fail "terminal: mouse capture was not restored" 10
         }
         catch {exec env DAO_RUNTIME_DIR=$runtime_path DAO_STATE_DIR=$state_path \
             [file join $repo_root apps tui-rs target release dao] shutdown --repository-root $repo_root \
@@ -92,7 +98,8 @@ expect {
         file delete -force $runtime_path
         file delete -force $state_path
         file delete -force $workspace_path
-        puts "scrollback: native"
+        file delete -force $capture_path
+        puts "history: virtualized"
         puts "exit: clean"
     }
     timeout { fail "exit: timed out" 6 }

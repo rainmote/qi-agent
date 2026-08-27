@@ -183,10 +183,12 @@ bb tui-build
 apps/tui-rs/target/release/dao --repository-root . --config examples/tui-mock.edn
 ```
 
-Ratatui 直接打开 controlling TTY，并通过 owner-only Unix socket 使用 daemon JSONL 协议。完成的消息和工具框会
-写入 terminal scrollback，只有流式内容、运行中工具与输入区继续重绘，因此终端滚动条和滚轮可直接
-查看历史；程序不启用 alternate screen 或鼠标捕获，异常退出会恢复 raw mode 和光标。旧版
-TypeScript/React/Ink 前端已经删除，终端 UI 只维护 Rust/Ratatui 实现。
+Ratatui 直接打开 controlling TTY，并通过 owner-only Unix socket 使用 daemon JSONL 协议。默认 TUI
+采用与 Qwen Code 同类的应用内虚拟历史：alternate screen 中只排版可见消息及少量 overscan，按消息 ID
+和消息内行号稳定锚定，完成项高度会缓存；向上阅读时新输出不抢位置，回到底部后恢复自动跟随。鼠标
+滚轮、逐行、翻页与首尾快捷键均由应用处理，右侧显示虚拟滚动条。退出会恢复鼠标、屏幕、raw mode
+和光标；`--native-scrollback` 可切回原有 inline/terminal scrollback 模式。旧版 TypeScript/React/Ink
+前端已经删除，终端 UI 只维护 Rust/Ratatui 实现。
 
 同一次模型响应里的 read/search/list 工具会聚合成一条 Qwen 风格语义摘要，例如
 `Searching ToolGroup, reading README.md, listing apps/tui-rs…`；运行中的状态图标和底部短语会动态
@@ -194,8 +196,8 @@ TypeScript/React/Ink 前端已经删除，终端 UI 只维护 Rust/Ratatui 实�
 
 `Enter` 在空闲时提交、运行中 steer；`Ctrl+Q` 在运行中排入 follow-up；`Alt+Enter`、
 `Ctrl+N`、`Ctrl+Enter` 或 `Shift+Enter` 插入换行；`Esc`/`Ctrl+C` 中止当前运行，
-`Ctrl+O` 展开或折叠 reasoning 与工具详情，`Tab` 补全 slash command，
-使用终端滚动条、鼠标滚轮或终端自身的历史快捷键查看已完成内容。`/model`、
+`Ctrl+O` 展开或折叠 reasoning 与工具详情，`Tab` 补全 slash command；鼠标滚轮、`Shift+↑/↓`、
+`PageUp/PageDown`、`Ctrl+Home/End` 浏览虚拟历史。`/model`、
 `/sessions` 和 `/theme` 打开对应选择器。完整安装、按键、命令与当前 TTY/JSONL 过渡架构见
 [Ratatui TUI 文档](docs/tui-ratatui.md)。后台 daemon、worker 与 per-agent REPL 的目标架构及
 实施阶段见 [Daemon-backed Agent 架构](docs/daemon-agent-architecture.md)。

@@ -20,17 +20,18 @@ apps/tui-rs/target/release/dao
 apps/tui-rs/target/release/dao --repository-root . --config examples/tui-mock.edn
 ```
 
-Rust 前端直接打开 controlling TTY。它通过 TTY 读取按键，并使用 Ratatui inline viewport
-维护屏幕底部的动态区；公开 JSONL 协议运行在 owner-only Unix socket 上，诊断只写日志或
-stderr。完成的消息和工具组由
-`insert_before` 提交到 terminal scrollback，流式 assistant、运行中工具、composer 和 dialog
-留在动态区重绘。动态区会按当前的流式内容、运行中工具、composer、命令候选、队列和 dialog
-自动伸缩；空闲时只保留实际需要的行数，增长时最多使用终端当前可用行。composer 按终端单元格
-宽度（包括中文宽字符）计算视觉换行，并保留最多 10 行的光标窗口。较长的流式 assistant 会在
-完整 Markdown 块的空行边界逐段提交到 scrollback；未闭合 fenced code/mermaid 块和运行中工具
-仍留在动态区，避免提交半截结构。内容或窗口尺寸变化时都会即时重新计算。程序不启用
-alternate screen 和鼠标捕获，所以终端原生滚动条、滚轮与历史快捷键
-可以直接查看已经完成的对话。没有 controlling TTY 时应运行测试，不应启动交互界面。
+Rust 前端直接打开 controlling TTY。它通过 TTY 读取按键，默认进入 alternate screen，并在应用内
+维护与 Qwen Code 同类的虚拟历史视口；公开 JSONL 协议运行在 owner-only Unix socket 上，诊断只写
+日志或 stderr。视口以“消息 ID + 消息内行号”作为滚动锚点，只渲染可见消息及一项 overscan；完成
+消息的实际高度按宽度与展开状态缓存，流式 assistant 和运行中工具在可见时重新测量。恢复超长会话
+时不会逐条排版全文，窗口 resize、详情展开和流式高度变化也会保持当前阅读位置。
+
+默认跟随底部；一旦向上滚动，新输出不会抢走阅读位置，回到底部后自动恢复跟随。鼠标滚轮每次滚动
+3 行，`Shift+↑/↓` 精确滚动 1 行，另有翻页和首尾快捷键，右侧应用内滚动条显示当前位置。composer
+仍按终端单元格宽度（包括中文宽字符）计算视觉换行，并保留最多 10 行的光标窗口。退出或异常清理
+会关闭鼠标捕获、离开 alternate screen、恢复 raw mode 和光标。需要终端原生 scrollback 或依赖终端
+文本选择时，可传入 `--native-scrollback` 使用原有 inline 模式；该兼容模式不捕获鼠标，并继续把已
+完成历史提交到 terminal scrollback。没有 controlling TTY 时应运行测试，不应启动交互界面。
 
 ## 已对齐范围
 
@@ -44,7 +45,8 @@ alternate screen 和鼠标捕获，所以终端原生滚动条、滚轮与历史
 - 空闲 submit、运行中 steer、`Ctrl+Q` follow-up、abort、双击 `Ctrl+C` 与空输入 `Ctrl+D`；
 - model、session、tree、theme、approval、select、confirm、input 和 custom JSON 对话框；
 - Qwen 内置主题名称、宽屏代码/diff 预览、即时预览、Esc 回滚和 host 同步；
-- 已完成历史提交到 terminal scrollback，运行中工具框在 inline viewport 内局部重绘；
+- Qwen 风格应用内虚拟历史：按物理行滚动、稳定锚点、底部跟随、可见区 overscan、高度缓存和滚动条；
+- `--native-scrollback` 保留原有 inline viewport 与 terminal scrollback 兼容模式；
 - queue 三条预览、溢出计数、排队提示、审批等待行、status、widget、notification 和窗口 resize；
 - host 注册快捷键优先调用、snapshot/buffer 去重、流式增量投影、异常中断工具收口与安全退出恢复；
 - 所有宿主文本在渲染前移除 ANSI、控制字符和双向文本覆盖字符，避免终端注入。
@@ -59,8 +61,13 @@ alternate screen 和鼠标捕获，所以终端原生滚动条、滚轮与历史
 | `Ctrl+Q` | 运行中加入 follow-up 队列 |
 | `Ctrl+O` | 展开或收起全部工具详情 |
 | `Ctrl+T` | 聚焦最近工具组；方向键浏览，Enter 展开，Esc 退出 |
-| 终端滚动条 / 鼠标滚轮 / 终端历史快捷键 | 由终端原生浏览已经完成的长会话历史 |
+| 鼠标滚轮 | 在虚拟历史中滚动 3 行 |
+| `Shift+↑` / `Shift+↓` | 在虚拟历史中滚动 1 行 |
+| `PageUp` / `PageDown` | 向上 / 向下翻一页 |
+| `Ctrl+Home` / `Ctrl+End` | 跳到历史开头 / 回到底部并恢复跟随 |
 | `Esc` / `Ctrl+C` | 终止当前运行 |
+
+在 `--native-scrollback` 兼容模式下，历史浏览仍使用终端滚动条、滚轮和终端自身快捷键。
 
 ## 验证
 
@@ -73,10 +80,10 @@ bb test
 ```
 
 Rust 测试使用 Ratatui `TestBackend` 验证 160×44、80 列、Markdown、多行 composer、命令补全、dialog
-独占、主题、inline viewport/scrollback、queue/approval、extension slots 和完整工具画面；状态机测试验证事件投影、
-异常生命周期收口、去重和按键到 RPC 的路由。
-`bb tui-test` 还会使用真实的 160×44 PTY 验证启动渲染、消息提交、响应显示和干净退出，断言不会
-启用 alternate screen 或鼠标捕获，并防止协议 stdout 与控制终端 `/dev/tty` 再次混用。
+独占、主题、虚拟历史的逐行/翻页/锚点/底部跟随/万条消息可见区渲染、inline fallback、queue/approval、
+extension slots 和完整工具画面；状态机测试验证事件投影、异常生命周期收口、去重和按键到 RPC 的路由。
+`bb tui-test` 还会使用真实 PTY 验证启动渲染、resize、响应显示和干净退出，并逐字节断言 alternate
+screen 与鼠标捕获均正确启用和恢复，同时防止协议 stdout 与控制终端 `/dev/tty` 再次混用。
 
 ## Daemon 架构
 
