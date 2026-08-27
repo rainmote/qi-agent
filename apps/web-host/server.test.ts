@@ -35,6 +35,8 @@ test("web host authenticates, catalogs, creates a real worker, and invokes RPC",
   const state = join(root, "state");
   const staticRoot = join(root, "static");
   await mkdir(workspace);
+  await mkdir(join(workspace, "visible-child"));
+  await mkdir(join(workspace, ".hidden-child"));
   await mkdir(staticRoot);
   await writeFile(join(staticRoot, "index.html"), "<!doctype html><title>test</title>");
   const host = await startWebHost({
@@ -58,6 +60,17 @@ test("web host authenticates, catalogs, creates a real worker, and invokes RPC",
     };
     assert.equal(bootstrap.ok, true);
     assert.equal(JSON.stringify(bootstrap).includes("test-token"), false);
+
+    const directoriesResponse = await fetch(
+      `${base}/api/directories?path=${encodeURIComponent(workspace)}`,
+      { headers: authorization },
+    );
+    const directories = await directoriesResponse.json() as {
+      ok: boolean;
+      result: { path: string; directories: Array<{ name: string; path: string }> };
+    };
+    assert.equal(directories.ok, true);
+    assert.deepEqual(directories.result.directories.map((entry) => entry.name), ["visible-child"]);
 
     const createResponse = await fetch(`${base}/api/sessions`, {
       method: "POST",
@@ -84,6 +97,33 @@ test("web host authenticates, catalogs, creates a real worker, and invokes RPC",
     const rpc = await rpcResponse.json() as { ok: boolean; result: { phase: string } };
     assert.equal(rpc.ok, true);
     assert.equal(rpc.result.phase, "idle");
+
+    const policyStatusResponse = await fetch(
+      `${base}/api/sessions/${created.result.session.id}/rpc`, {
+        method: "POST",
+        headers: { ...authorization, "Content-Type": "application/json", Origin: base },
+        body: JSON.stringify({ method: "policy.status", params: {} }),
+      });
+    const policyStatus = await policyStatusResponse.json() as {
+      ok: boolean;
+      result: { mode: string; modes: Array<{ id: string; label: string }> };
+    };
+    assert.equal(policyStatus.ok, true, JSON.stringify(policyStatus));
+    assert.ok(["deny", "ask", "allow"].includes(policyStatus.result.mode));
+    assert.deepEqual(policyStatus.result.modes.map((mode) => mode.id), ["deny", "ask", "allow"]);
+
+    const policySelectResponse = await fetch(
+      `${base}/api/sessions/${created.result.session.id}/rpc`, {
+        method: "POST",
+        headers: { ...authorization, "Content-Type": "application/json", Origin: base },
+        body: JSON.stringify({ method: "policy.select", params: { mode: "ask" } }),
+      });
+    const policySelect = await policySelectResponse.json() as {
+      ok: boolean;
+      result: { mode: string };
+    };
+    assert.equal(policySelect.ok, true, JSON.stringify(policySelect));
+    assert.equal(policySelect.result.mode, "ask");
 
     const forkResponse = await fetch(
       `${base}/api/sessions/${created.result.session.id}/fork`, {
@@ -115,8 +155,29 @@ test("web host authenticates, catalogs, creates a real worker, and invokes RPC",
         method: "POST",
         headers: { ...authorization, "Content-Type": "application/json", Origin: "https://example.com" },
         body: JSON.stringify({ method: "turn.state", params: {} }),
-      });
+    });
     assert.equal(rejectedOrigin.status, 403);
+
+    const archiveResponse = await fetch(
+      `${base}/api/sessions/${forked.result.session.id}/archive`, {
+        method: "POST",
+        headers: { ...authorization, Origin: base },
+      });
+    const archived = await archiveResponse.json() as {
+      ok: boolean;
+      result: { archived: boolean };
+    };
+    assert.equal(archiveResponse.status, 200, JSON.stringify(archived));
+    assert.equal(archived.result.archived, true);
+
+    const catalogResponse = await fetch(
+      `${base}/api/sessions?workspace=${encodeURIComponent(bootstrap.result.activeWorkspaceId)}`,
+      { headers: authorization },
+    );
+    const catalog = await catalogResponse.json() as {
+      result: Array<{ id: string }>;
+    };
+    assert.equal(catalog.result.some((session) => session.id === forked.result.session.id), false);
   } finally {
     await host.close();
     await rm(root, { recursive: true });

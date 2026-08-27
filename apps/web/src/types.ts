@@ -49,6 +49,12 @@ export interface SessionSnapshot {
   state: AgentState;
   models: { current: ModelEntry | null; providers: ModelEntry[] } | null;
   interactions: Interaction[];
+  policy?: PolicyStatus | null;
+}
+
+export interface PolicyStatus {
+  mode: "deny" | "ask" | "allow";
+  modes: Array<{ id: "deny" | "ask" | "allow"; label: string }>;
 }
 
 export interface AgentState {

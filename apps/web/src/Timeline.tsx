@@ -131,19 +131,20 @@ function Message({ event }: { event: DurableEvent }) {
   if (!message || message.role === "tool") return null;
   const role = String(message.role || "assistant");
   const content = text(message.content);
+  const reasoning = text(message.reasoning_content || message.reasoning);
   const calls = Array.isArray(message.tool_calls) ? message.tool_calls.length : 0;
   if (!content && !calls) return null;
   return <article className={`message message-${role}`}>
-    <div className="message-avatar">{role === "user" ? "你" : <Icon name="bot" />}</div>
     <div className="message-body">
-      <div className="message-meta">
-        <span>{role === "user" ? "你" : "bb-agent"}</span>
-        <time>{new Date(event.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>
-      </div>
+      {role === "assistant" && reasoning && <details className="reasoning-row"><summary><Icon name="sparkles" />思考过程</summary>
+        <div>{reasoning}</div></details>}
       {content && (role === "assistant"
         ? <MarkdownContent content={content} />
         : <div className="message-content">{content}</div>)}
       {!content && calls > 0 && <div className="message-muted">准备调用 {calls} 个工具</div>}
+      {content && <div className="message-actions"><button type="button" aria-label="复制"
+        onClick={() => void navigator.clipboard.writeText(content)}><Icon name="copy" /></button>
+        <time>{new Date(event.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time></div>}
     </div>
   </article>;
 }
@@ -155,11 +156,7 @@ export function Timeline({ projection }: { projection: Projection }) {
     .map((event) => [callId(event), event])), [events]);
   const { batches, groupedCallIds } = useMemo(() => buildToolBatches(events), [events]);
   if (!events.length && projection.state.phase === "idle") {
-    return <div className="timeline-inner"><div className="welcome-state compact-welcome">
-      <div className="welcome-icon"><Icon name="bot" /></div>
-      <h2>开始这段会话</h2>
-      <p>描述你想完成的任务。工具调用、审批和子代理进度会保持在同一条时间线上。</p>
-    </div></div>;
+    return <div className="timeline-inner"><div className="empty-conversation">描述任务，开始这段会话。</div></div>;
   }
   return <div className="timeline-inner">
     {events.map((event) => {
@@ -182,13 +179,15 @@ export function Timeline({ projection }: { projection: Projection }) {
       return null;
     })}
     {projection.state.phase !== "idle" && (projection.state["partial-assistant"] ||
-      projection.state.partialAssistant) &&
+      projection.state.partialAssistant || projection.state["partial-reasoning"] ||
+      projection.state.partialReasoning) &&
       <article className="message message-assistant is-streaming">
-        <div className="message-avatar"><Icon name="bot" /></div>
         <div className="message-body">
-          <div className="message-meta"><span>bb-agent</span><span className="stream-label">生成中</span></div>
+          {(projection.state["partial-reasoning"] || projection.state.partialReasoning) &&
+            <details className="reasoning-row" open><summary><Icon name="sparkles" />正在思考</summary>
+              <div>{String(projection.state["partial-reasoning"] || projection.state.partialReasoning)}</div></details>}
           <MarkdownContent content={String(projection.state["partial-assistant"] ||
-            projection.state.partialAssistant)} />
+            projection.state.partialAssistant || "")} />
         </div>
       </article>}
     {projection.lastRunError && <div className="inline-error">{projection.lastRunError}</div>}

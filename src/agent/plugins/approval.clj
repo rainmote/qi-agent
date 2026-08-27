@@ -70,12 +70,27 @@
      (when-not (every? #(contains? #{:allow :deny} (:decision %)) rules)
        (throw (ex-info "Approval rules require :decision :allow or :deny"
                        {:rules rules})))
-     (let [session-grants (atom #{})]
+     (let [session-grants (atom #{})
+           active-mode (atom mode)]
+       (kernel/register-service!
+        ctx :approval/policy
+        {:status (fn [] {:mode @active-mode
+                         :modes [{:id :deny :label "Read Only"}
+                                 {:id :ask :label "Workspace Write"}
+                                 {:id :allow :label "Full Access"}]})
+         :select! (fn [next-mode]
+                    (when-not (contains? modes next-mode)
+                      (throw (ex-info "Unknown approval mode"
+                                      {:mode next-mode})))
+                    (reset! active-mode next-mode)
+                    (reset! session-grants #{})
+                    {:mode next-mode})})
        (kernel/register-service!
         ctx :approval/request
         (fn [request]
           (let [key (request-key request)
                 configured (rule-decision rules request)
+                mode @active-mode
                 raw (cond
                       (contains? @session-grants key) :allow
                       configured configured

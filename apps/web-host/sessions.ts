@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { mkdir, readdir } from "node:fs/promises";
+import { mkdir, readdir, rename } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import type { SessionSummary, Workspace, WorkerMessage } from "./types.js";
@@ -149,6 +149,20 @@ export class SessionManager {
   async worker(id: string): Promise<AgentWorker> {
     const existing = this.#open.get(id);
     return existing?.worker || (await this.open(id)).worker;
+  }
+
+  async archive(id: string): Promise<{ archived: boolean }> {
+    const open = this.#open.get(id);
+    const summary = open?.summary || (await this.listAll()).find((entry) => entry.id === id);
+    if (!summary) throw new Error("Session was not found in an allowlisted workspace");
+    if (open) {
+      await open.worker.close();
+      this.#open.delete(id);
+    }
+    const archiveDirectory = join(dirname(dirname(summary.path)), "archive", "sessions");
+    await mkdir(archiveDirectory, { recursive: true, mode: 0o700 });
+    await rename(summary.path, join(archiveDirectory, basename(summary.path)));
+    return { archived: true };
   }
 
   async closeAll(): Promise<void> {

@@ -1,9 +1,10 @@
 import { randomBytes } from "node:crypto";
 import { constants, createReadStream } from "node:fs";
-import { access, readFile, rm, stat } from "node:fs/promises";
+import { access, readFile, readdir, realpath, rm, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { isIP } from "node:net";
 import { dirname, extname, join, normalize, resolve } from "node:path";
+import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { SessionManager } from "./sessions.js";
 import type { HostEvent } from "./types.js";
@@ -201,6 +202,21 @@ export async function startWebHost(options: WebHostOptions = {}) {
         if (typeof input.path !== "string") throw new Error("Workspace path is required");
         return json(response, 201, { ok: true, result: await workspaces.add(input.path) });
       }
+      if (url.pathname === "/api/directories" && request.method === "GET") {
+        const requested = url.searchParams.get("path") || homedir();
+        const canonical = await realpath(requested);
+        const entries = await readdir(canonical, { withFileTypes: true });
+        return json(response, 200, {
+          ok: true,
+          result: {
+            path: canonical,
+            parent: dirname(canonical) === canonical ? null : dirname(canonical),
+            directories: entries.filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+              .map((entry) => ({ name: entry.name, path: join(canonical, entry.name) }))
+              .sort((a, b) => a.name.localeCompare(b.name)),
+          },
+        });
+      }
       const workspaceMatch = url.pathname.match(/^\/api\/workspaces\/([^/]+)$/);
       if (workspaceMatch && request.method === "DELETE") {
         const workspaceId = decodeURIComponent(workspaceMatch[1]);
@@ -230,7 +246,7 @@ export async function startWebHost(options: WebHostOptions = {}) {
       }
 
       const sessionMatch = url.pathname.match(
-        /^\/api\/sessions\/([^/]+)\/(open|fork|snapshot|rpc|events)$/);
+        /^\/api\/sessions\/([^/]+)\/(open|fork|archive|snapshot|rpc|events)$/);
       if (sessionMatch) {
         const id = decodeURIComponent(sessionMatch[1]);
         const action = sessionMatch[2];
@@ -249,6 +265,9 @@ export async function startWebHost(options: WebHostOptions = {}) {
             ok: true,
             result: { session: forked.summary, snapshot: forked.snapshot },
           });
+        }
+        if (action === "archive" && request.method === "POST") {
+          return json(response, 200, { ok: true, result: await sessions.archive(id) });
         }
         if (action === "snapshot" && request.method === "GET") {
           const worker = await sessions.worker(id);

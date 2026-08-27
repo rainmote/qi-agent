@@ -41,6 +41,13 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ name }),
       }),
+  archiveSession: (id: string) => request<{ archived: boolean }>(
+    `/api/sessions/${encodeURIComponent(id)}/archive`, { method: "POST", body: "{}" }),
+  listDirectories: (path?: string) => request<{
+    path: string;
+    parent: string | null;
+    directories: Array<{ name: string; path: string }>;
+  }>(`/api/directories${path ? `?path=${encodeURIComponent(path)}` : ""}`),
   rpc: <T>(id: string, method: string, params: Record<string, unknown> = {}) =>
     request<T>(`/api/sessions/${encodeURIComponent(id)}/rpc`, {
       method: "POST",

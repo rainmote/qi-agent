@@ -69,6 +69,7 @@
         session (kernel/require-service ctx :agent/session)
         models (kernel/service ctx :llm/registry)
         interactions (kernel/service ctx :interaction/remote)
+        approval-policy (kernel/service ctx :approval/policy)
         repl (kernel/service ctx :execution/repl)
         subagents (kernel/service ctx :subagents/runtime)
         durable-state (kernel/service ctx :agent/durable-state)]
@@ -81,6 +82,7 @@
                {:current (public-provider ((:current models)))
                 :providers ((:providers models))})
      :interactions (if interactions ((:pending interactions)) [])
+     :policy (when approval-policy ((:status approval-policy)))
      :children (if subagents ((:jobs subagents)) [])
      :repl (when repl
              (if-let [status (:status repl)]
@@ -222,6 +224,20 @@
                   (public-provider
                    ((:select! (kernel/require-service ctx :llm/registry))
                     (keyword provider)))))
+       (method! "policy.status" "Return the active per-session approval policy."
+                empty-params {:type "object"}
+                (fn [_]
+                  (if-let [policy (kernel/service ctx :approval/policy)]
+                    ((:status policy))
+                    {:mode :deny :modes []})))
+       (method! "policy.select" "Select the per-session approval policy."
+                (object-params {"mode" {:type "string"
+                                         :enum ["deny" "ask" "allow"]}}
+                               "mode")
+                {:type "object"}
+                (fn [{:keys [mode]}]
+                  ((:select! (kernel/require-service ctx :approval/policy))
+                   (keyword mode))))
        (method! "command.list" "List shared slash commands."
                 empty-params {:type "array"}
                 (fn [_] (command/commands ctx)))

@@ -1,13 +1,28 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type Bootstrap } from "./api";
-import { ApprovalDialog, SettingsDialog } from "./Dialogs";
+import { BrandMark } from "./BrandMark";
+import { ApprovalDialog, SettingsDialog, WorkspaceDialog } from "./Dialogs";
 import { Icon } from "./icons";
 import { applyHostEvent, fromSnapshot, type Projection } from "./projection";
 import { Timeline } from "./Timeline";
-import type { HostEvent, ModelEntry, RuntimeStatus, SessionSnapshot, SessionSummary, SubagentStatus, Workspace } from "./types";
+import type { HostEvent, ModelEntry, PolicyStatus, RuntimeStatus, SessionSnapshot, SessionSummary, SubagentStatus, Workspace } from "./types";
+
+type Theme = "dark" | "light" | "system";
+type ConversationView = "chat" | "trajectory";
 
 function phaseLabel(phase: string) {
   return ({ idle: "就绪", model: "模型响应", tool: "执行工具", retry: "正在重试", compacting: "整理上下文" } as Record<string, string>)[phase] || phase;
+}
+
+function resolvedTheme(theme: Theme): "dark" | "light" {
+  if (theme !== "system") return theme;
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function Brand({ collapsed = false }: { collapsed?: boolean }) {
+  return <div className="brand-identity"><BrandMark size={collapsed ? 24 : 23} />{!collapsed && <>
+    <strong>DAO</strong><span>HARNESS</span>
+  </>}</div>;
 }
 
 export function App() {
@@ -20,30 +35,69 @@ export function App() {
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
   const [subagents, setSubagents] = useState<SubagentStatus | null>(null);
   const [models, setModels] = useState<{ current: ModelEntry | null; providers: ModelEntry[] } | null>(null);
+  const [policy, setPolicy] = useState<PolicyStatus | null>(null);
   const [connected, setConnected] = useState(false);
   const [busy, setBusy] = useState(false);
   const [composer, setComposer] = useState("");
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [inspectorOpen, setInspectorOpen] = useState(true);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("dao.sidebar") === "collapsed");
+  const [mobileSidebar, setMobileSidebar] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const [sortBy, setSortBy] = useState<"recent" | "name">("recent");
+  const [viewMenuOpen, setViewMenuOpen] = useState(false);
+  const [sessionMenu, setSessionMenu] = useState<string | null>(null);
+  const [conversationView, setConversationView] = useState<ConversationView>("chat");
+  const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem("dao.theme") as Theme | null) || "system");
   const [resolving, setResolving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const sessions = useMemo(() => bootstrap?.catalogs
+  const allSessions = useMemo(() => bootstrap?.catalogs
     .find((catalog) => catalog.workspaceId === workspaceId)?.sessions || [], [bootstrap, workspaceId]);
+  const sessions = useMemo(() => {
+    const needle = search.trim().toLocaleLowerCase();
+    const filtered = needle ? allSessions.filter((session) =>
+      `${session.name || ""} ${session.label || ""}`.toLocaleLowerCase().includes(needle)) : allSessions;
+    return [...filtered].sort(sortBy === "name"
+      ? (a, b) => String(a.name).localeCompare(String(b.name), "zh-CN")
+      : (a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+  }, [allSessions, search, sortBy]);
 
   const showError = useCallback((error: unknown) => {
     setNotice(error instanceof Error ? error.message : "操作失败");
     window.setTimeout(() => setNotice(null), 5000);
   }, []);
 
+  useEffect(() => {
+    const apply = () => document.body.dataset.theme = resolvedTheme(theme);
+    apply();
+    localStorage.setItem("dao.theme", theme);
+    const query = window.matchMedia("(prefers-color-scheme: dark)");
+    query.addEventListener("change", apply);
+    return () => query.removeEventListener("change", apply);
+  }, [theme]);
+
   const loadRuntime = useCallback(async (id: string) => {
-    const [runtimeStatus, subagentStatus] = await Promise.all([
+    const fallbackPolicy: PolicyStatus = {
+      // Workers that predate policy.status still use agent.edn's shipped
+      // :allow default. Keep their composer truthful while they age out.
+      mode: "allow",
+      modes: [
+        { id: "deny", label: "Read Only" },
+        { id: "ask", label: "Workspace Write" },
+        { id: "allow", label: "Full Access" },
+      ],
+    };
+    const [runtimeStatus, subagentStatus, policyStatus] = await Promise.all([
       api.rpc<RuntimeStatus>(id, "runtime.status"),
       api.rpc<SubagentStatus>(id, "subagent.status"),
+      api.rpc<PolicyStatus>(id, "policy.status").catch(() => fallbackPolicy),
     ]);
     setRuntime(runtimeStatus);
     setSubagents(subagentStatus);
+    setPolicy(policyStatus);
   }, []);
 
   const acceptOpen = useCallback((session: SessionSummary, snapshot: SessionSnapshot) => {
@@ -51,17 +105,19 @@ export function App() {
     setWorkspaceId(session.workspaceId);
     setProjection(fromSnapshot(snapshot));
     setModels(snapshot.models);
-    setSidebarOpen(false);
+    setPolicy(snapshot.policy || null);
+    setMobileSidebar(false);
+    setSessionMenu(null);
     setNotice(null);
+    setConversationView("chat");
     void loadRuntime(session.id).catch(showError);
   }, [loadRuntime, showError]);
 
   const openSession = useCallback(async (session: SessionSummary) => {
     setBusy(true);
-    try {
-      const opened = await api.openSession(session.id);
-      acceptOpen(opened.session, opened.snapshot);
-    } catch (error) { showError(error); } finally { setBusy(false); }
+    try { const opened = await api.openSession(session.id); acceptOpen(opened.session, opened.snapshot); }
+    catch (error) { showError(error); }
+    finally { setBusy(false); }
   }, [acceptOpen, showError]);
 
   useEffect(() => {
@@ -76,7 +132,7 @@ export function App() {
   }, [openSession, showError]);
 
   useEffect(() => {
-    if (!activeSession) return;
+    if (!activeSession) { setConnected(false); return; }
     setConnected(false);
     return api.events(activeSession.id, (event: HostEvent) => {
       setProjection((current) => current ? applyHostEvent(current, event) : current);
@@ -95,48 +151,50 @@ export function App() {
   }, [projection?.events.length, projection?.state["partial-assistant"]]);
 
   const refreshCatalog = useCallback(async (targetWorkspace = workspaceId) => {
-    if (!targetWorkspace || !bootstrap) return;
+    if (!targetWorkspace) return;
     const next = await api.listSessions(targetWorkspace);
-    setBootstrap({ ...bootstrap, catalogs: bootstrap.catalogs.map((catalog) =>
-      catalog.workspaceId === targetWorkspace ? { ...catalog, sessions: next } : catalog) });
-  }, [bootstrap, workspaceId]);
+    setBootstrap((current) => current ? { ...current, catalogs: current.catalogs.map((catalog) =>
+      catalog.workspaceId === targetWorkspace ? { ...catalog, sessions: next } : catalog) } : current);
+  }, [workspaceId]);
 
-  const newSession = async () => {
-    if (!workspaceId) return;
-    setBusy(true);
-    try {
-      const created = await api.createSession(workspaceId);
-      acceptOpen(created.session, created.snapshot);
-      await refreshCatalog(workspaceId);
-    } catch (error) { showError(error); } finally { setBusy(false); }
+  const startNewSession = () => {
+    setActiveSession(null); setProjection(null); setConnected(false); setRuntime(null); setSubagents(null);
+    setPolicy(null); setComposer(""); setDetailsOpen(false); setMobileSidebar(false); setConversationView("chat");
   };
 
-  const refreshSnapshot = async () => {
-    if (!activeSession) return;
-    const snapshot = await api.rpc<SessionSnapshot>(activeSession.id, "session.snapshot");
+  const refreshSnapshot = async (id = activeSession?.id) => {
+    if (!id) return;
+    const snapshot = await api.rpc<SessionSnapshot>(id, "session.snapshot");
     setProjection(fromSnapshot(snapshot));
   };
 
   const send = async (mode: "auto" | "steer" = "auto") => {
-    if (!activeSession || !composer.trim() || busy) return;
+    if (!composer.trim() || busy || !workspaceId) return;
     const message = composer.trim();
-    setComposer("");
-    setBusy(true);
+    setComposer(""); setBusy(true);
+    let session = activeSession;
     try {
+      if (!session) {
+        const created = await api.createSession(workspaceId);
+        session = created.session;
+        acceptOpen(created.session, created.snapshot);
+        await refreshCatalog(workspaceId);
+      }
       if (message.startsWith("/")) {
-        const result = await api.rpc<{ output?: unknown; error?: string }>(activeSession.id,
+        const result = await api.rpc<{ output?: unknown; error?: string }>(session.id,
           "command.execute", { command: message });
         if (result.error) throw new Error(result.error);
         if (result.output != null) setNotice(typeof result.output === "string" ? result.output : JSON.stringify(result.output));
-        await refreshSnapshot();
+        await refreshSnapshot(session.id);
       } else if (mode === "steer") {
-        await api.rpc(activeSession.id, "turn.steer", { message });
+        await api.rpc(session.id, "turn.steer", { message });
       } else if (projection?.state.phase && projection.state.phase !== "idle") {
-        await api.rpc(activeSession.id, "turn.follow-up", { message });
+        await api.rpc(session.id, "turn.follow-up", { message });
       } else {
-        await api.rpc(activeSession.id, "turn.submit", { message });
+        await api.rpc(session.id, "turn.submit", { message });
       }
-    } catch (error) { setComposer(message); showError(error); } finally { setBusy(false); }
+    } catch (error) { setComposer(message); showError(error); }
+    finally { setBusy(false); }
   };
 
   const resolveApproval = async (decision: "allow" | "allow-session" | "deny") => {
@@ -145,36 +203,46 @@ export function App() {
     setResolving(true);
     try {
       await api.rpc(activeSession.id, "interaction.resolve", { id: interaction.id, decision });
-      setProjection((current) => current ? {
-        ...current, interactions: current.interactions.filter((entry) => entry.id !== interaction.id),
-      } : current);
-    } catch (error) { showError(error); } finally { setResolving(false); }
+      setProjection((current) => current ? { ...current,
+        interactions: current.interactions.filter((entry) => entry.id !== interaction.id) } : current);
+    } catch (error) { showError(error); }
+    finally { setResolving(false); }
   };
 
-  const renameSession = async () => {
-    if (!activeSession) return;
-    const name = window.prompt("会话名称", activeSession.name || "");
+  const renameSession = async (session = activeSession) => {
+    if (!session) return;
+    const name = window.prompt("会话名称", session.name || "");
     if (!name?.trim()) return;
     try {
-      await api.rpc(activeSession.id, "session.rename", { name: name.trim() });
-      setActiveSession({ ...activeSession, name: name.trim() });
-      await refreshCatalog(activeSession.workspaceId);
+      await api.rpc(session.id, "session.rename", { name: name.trim() });
+      if (session.id === activeSession?.id) setActiveSession({ ...activeSession, name: name.trim() });
+      await refreshCatalog(session.workspaceId);
     } catch (error) { showError(error); }
   };
 
-  const forkSession = async () => {
-    if (!activeSession) return;
+  const forkSession = async (session = activeSession) => {
+    if (!session) return;
     setBusy(true);
     try {
-      const forked = await api.forkSession(activeSession.id,
-        `${activeSession.name || "未命名会话"} · 分支`);
+      const forked = await api.forkSession(session.id, `${session.name || "未命名会话"} · 分支`);
       acceptOpen(forked.session, forked.snapshot);
-      await refreshCatalog(activeSession.workspaceId);
-    } catch (error) { showError(error); } finally { setBusy(false); }
+      await refreshCatalog(session.workspaceId);
+    } catch (error) { showError(error); }
+    finally { setBusy(false); }
+  };
+
+  const archiveSession = async (session: SessionSummary) => {
+    if (!window.confirm(`归档会话“${session.name || "未命名会话"}”？会话文件会移到工作区的归档目录。`)) return;
+    try {
+      await api.archiveSession(session.id);
+      if (activeSession?.id === session.id) startNewSession();
+      await refreshCatalog(session.workspaceId);
+      setNotice("会话已归档");
+    } catch (error) { showError(error); }
   };
 
   const selectModel = async (provider: string) => {
-    if (!activeSession || !projection) return;
+    if (!activeSession) return;
     try {
       const selected = await api.rpc<ModelEntry>(activeSession.id, "model.select", { provider });
       setModels((current) => current ? { ...current, current: selected } : current);
@@ -182,111 +250,181 @@ export function App() {
     } catch (error) { showError(error); }
   };
 
+  const selectPolicy = async (mode: PolicyStatus["mode"]) => {
+    if (!activeSession) return;
+    try {
+      await api.rpc(activeSession.id, "policy.select", { mode });
+      setPolicy((current) => current ? { ...current, mode } : current);
+    } catch (error) { showError(error); }
+  };
+
   const addWorkspace = async (path: string) => {
     const workspace = await api.addWorkspace(path);
     const data = await api.bootstrap();
-    setBootstrap(data);
-    setWorkspaceId(workspace.id);
+    setBootstrap(data); setWorkspaceId(workspace.id); startNewSession();
   };
 
   const removeWorkspace = async (workspace: Workspace) => {
-    if (!window.confirm(`从 WebUI 移除工作区“${workspace.name}”？不会删除任何项目文件。`)) return;
+    if (!window.confirm(`从 Web UI 移除工作区“${workspace.name}”？不会删除任何项目文件。`)) return;
     await api.removeWorkspace(workspace.id);
     const data = await api.bootstrap();
     setBootstrap(data);
-    if (workspace.id === workspaceId) {
-      setWorkspaceId(data.activeWorkspaceId);
-      setActiveSession(null);
-      setProjection(null);
-    }
+    if (workspace.id === workspaceId) { setWorkspaceId(data.activeWorkspaceId); startNewSession(); }
   };
 
   const activeWorkspace = bootstrap?.workspaces.find((entry) => entry.id === workspaceId);
   const phase = projection?.state.phase || "idle";
+  const commandSuggestions = runtime?.commands.filter((command) =>
+    composer.startsWith("/") && `/${command.name}`.startsWith(composer.split(/\s/, 1)[0])).slice(0, 7) || [];
 
-  return <div className="app-shell">
-    <aside className={`sidebar ${sidebarOpen ? "is-open" : ""}`}>
-      <div className="brand"><div className="brand-mark">bb</div><div><strong>bb-agent</strong><span>Local harness</span></div>
-        <button className="icon-button mobile-only" onClick={() => setSidebarOpen(false)} aria-label="关闭导航"><Icon name="x" /></button></div>
-      <button className="new-session button primary" type="button" onClick={newSession} disabled={!workspaceId || busy}>
-        <Icon name="plus" />新会话
-      </button>
-      <label className="workspace-select"><span>工作区</span><select value={workspaceId || ""}
-        onChange={(event) => setWorkspaceId(event.target.value)}>
-        {bootstrap?.workspaces.map((workspace) => <option value={workspace.id} key={workspace.id}>{workspace.name}</option>)}</select></label>
-      <nav className="session-nav" aria-label="会话列表">
-        <div className="nav-heading"><span>最近会话</span><button className="icon-button compact" type="button"
-          onClick={() => void refreshCatalog()} aria-label="刷新会话"><Icon name="refresh" /></button></div>
-        {sessions.length ? sessions.map((session) => <button type="button" key={session.id}
-          className={`session-link ${session.id === activeSession?.id ? "active" : ""}`} onClick={() => void openSession(session)}>
-          <span className="session-title">{session.name || "未命名会话"}</span>
-          <span className="session-meta">{session.messageCount} 条消息 · {session.updatedAt ? new Date(session.updatedAt).toLocaleDateString() : "刚刚"}</span>
-        </button>) : <div className="empty-nav">这个工作区还没有会话</div>}
-      </nav>
-      <button className="sidebar-settings" type="button" onClick={() => setSettingsOpen(true)}><Icon name="settings" />设置与插件</button>
-    </aside>
-    {sidebarOpen && <button className="mobile-scrim" aria-label="关闭导航" onClick={() => setSidebarOpen(false)} />}
+  const toggleSidebar = () => {
+    setSidebarCollapsed((current) => {
+      localStorage.setItem("dao.sidebar", current ? "expanded" : "collapsed");
+      return !current;
+    });
+  };
 
-    <main className="main-panel">
-      <header className="topbar">
-        <button className="icon-button mobile-only" type="button" onClick={() => setSidebarOpen(true)} aria-label="打开导航"><Icon name="menu" /></button>
-        <div className="session-heading"><div className={`connection-dot ${connected ? "online" : ""}`} />
-          <div><div className="title-row"><h1>{activeSession?.name || "新会话"}</h1>{activeSession &&
-            <><button className="icon-button compact" type="button" onClick={renameSession} aria-label="重命名会话"><Icon name="edit" /></button>
-              <button className="icon-button compact" type="button" onClick={forkSession} disabled={busy} aria-label="分叉会话"><Icon name="branch" /></button></>}</div>
-            <span>{activeWorkspace?.path || "选择一个工作区开始"}</span></div></div>
-        <div className="topbar-actions">
-          {activeSession && <select className="model-select" aria-label="选择模型"
+  const composerNode = <div className="composer-shell">
+    {commandSuggestions.length > 0 && <div className="command-menu" role="listbox" aria-label="命令建议">
+      {commandSuggestions.map((command) => <button type="button" role="option" key={command.name}
+        onClick={() => setComposer(`/${command.name} `)}><code>/{command.name}</code><span>{command.description}</span></button>)}
+    </div>}
+    <div className={`composer ${phase !== "idle" ? "is-active" : ""}`}>
+      <textarea rows={2} value={composer} disabled={!workspaceId} placeholder={workspaceId ? "给代理发送消息" : "选择一个工作区开始"}
+        onChange={(event) => setComposer(event.target.value)} onKeyDown={(event) => {
+          if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); }
+        }} aria-label="给代理发送消息" />
+      <div className="composer-footer">
+        <div className="composer-left">
+          <button type="button" className="toolbar-button command-button" aria-label="命令"
+            onClick={() => setComposer((value) => value.startsWith("/") ? value : "/")}><Icon name="command" /></button>
+          {activeSession && <select className="toolbar-select policy-select" aria-label="访问模式"
+            value={policy?.mode || "deny"} onChange={(event) => void selectPolicy(event.target.value as PolicyStatus["mode"])}>
+            {(policy?.modes.length ? policy.modes : [{ id: "deny" as const, label: "Read Only" }]).map((entry) =>
+              <option value={entry.id} key={entry.id}>{entry.label}</option>)}
+          </select>}
+          {phase !== "idle" && <span className="phase-copy">{phaseLabel(phase)} · 新消息将排队</span>}
+        </div>
+        <div className="composer-right">
+          {activeSession && <select className="toolbar-select model-select" aria-label="选择模型"
             value={models?.current?.id || ""} onChange={(event) => void selectModel(event.target.value)}>
             {models?.providers.map((model) => <option value={model.id} key={model.id}>{model.model || model.id}</option>)}
           </select>}
-          <button className={`icon-button desktop-only ${inspectorOpen ? "active" : ""}`} type="button"
-            onClick={() => setInspectorOpen((value) => !value)} aria-label="切换运行检查器"><Icon name="panel" /></button>
+          {phase !== "idle" && composer.trim() && <button type="button" className="steer-button" onClick={() => void send("steer")}>立即引导</button>}
+          {phase !== "idle" && activeSession ? <button type="button" className="send-button stop"
+            onClick={() => void api.rpc(activeSession.id, "turn.abort")} aria-label="停止运行"><Icon name="stop" /></button>
+            : <button type="button" className="send-button" disabled={!composer.trim() || busy || !workspaceId}
+              onClick={() => void send()} aria-label="发送消息"><Icon name="send" /></button>}
         </div>
-      </header>
-
-      <div className="workspace-body">
-        <section className="conversation" aria-label="会话内容">
-          <div className="timeline" ref={timeline} aria-live="polite">
-            {projection ? <Timeline projection={projection} /> : <div className="welcome-state">
-              <div className="welcome-icon"><Icon name="bot" /></div><h2>从本地工作区开始</h2>
-              <p>会话、工具执行、审批和子代理状态会在这里实时呈现。</p>
-              <button className="button primary" type="button" onClick={newSession} disabled={!workspaceId || busy}><Icon name="plus" />创建会话</button>
-            </div>}
-          </div>
-          <div className="composer-wrap">
-            <div className={`composer ${phase !== "idle" ? "is-active" : ""}`}>
-              <textarea rows={1} value={composer} disabled={!activeSession} placeholder={activeSession ? "描述任务，或输入 /commands…" : "先创建或打开一个会话"}
-                onChange={(event) => setComposer(event.target.value)} onKeyDown={(event) => {
-                  if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); }
-                }} aria-label="给代理发送消息" />
-              <div className="composer-footer"><span>{phase !== "idle" ? `${phaseLabel(phase)} · 新消息将排队` : "Enter 发送 · Shift+Enter 换行"}</span>
-                <div>{phase !== "idle" && <button type="button" className="button compact-button ghost" disabled={!composer.trim() || busy}
-                  onClick={() => void send("steer")}>立即引导</button>}
-                  {phase !== "idle" ? <button type="button" className="send-button stop" onClick={() => activeSession && void api.rpc(activeSession.id, "turn.abort")} aria-label="停止运行"><Icon name="stop" /></button>
-                    : <button type="button" className="send-button" disabled={!composer.trim() || busy || !activeSession} onClick={() => void send()} aria-label="发送"><Icon name="send" /></button>}</div></div>
-            </div>
-          </div>
-        </section>
-
-        {inspectorOpen && <aside className="inspector desktop-only">
-          <div className="inspector-section"><div className="inspector-heading"><Icon name="activity" /><h2>当前运行</h2></div>
-            <div className="run-card"><div><span className={`status-dot phase-${phase}`} />{phaseLabel(phase)}</div>
-              <dl><div><dt>连接</dt><dd>{connected ? "实时" : "重连中"}</dd></div><div><dt>事件</dt><dd>{projection?.events.length || 0}</dd></div><div><dt>尝试</dt><dd>{projection?.state.attempt ?? "—"}</dd></div></dl></div></div>
-          <div className="inspector-section"><div className="inspector-heading"><Icon name="branch" /><h2>子代理</h2><span>{subagents?.jobs.length || 0}</span></div>
-            {subagents?.jobs.length ? subagents.jobs.map((job) => <div className="subagent-card" key={job.id}>
-              <div><span className={`status-dot ${job.status === "running" ? "phase-model" : "phase-idle"}`} /><strong>{job.label}</strong></div><span>{job.provider} · {job.status}</span></div>) :
-              <div className="inspector-empty">暂无子代理任务</div>}</div>
-          <div className="inspector-section"><div className="inspector-heading"><Icon name="terminal" /><h2>能力</h2></div>
-            <div className="metric-grid"><div><strong>{runtime?.tools.length ?? "—"}</strong><span>工具</span></div><div><strong>{runtime?.plugins.length ?? "—"}</strong><span>插件</span></div></div></div>
-        </aside>}
       </div>
+    </div>
+  </div>;
+
+  return <div className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${detailsOpen ? "details-open" : ""}`}>
+    <aside className={`sidebar ${mobileSidebar ? "is-open" : ""}`}>
+      <div className="sidebar-brand-row">
+        <button type="button" className="brand-button" onClick={startNewSession} aria-label="新建会话"><Brand collapsed={sidebarCollapsed} /></button>
+        <button type="button" className="icon-button sidebar-toggle" onClick={toggleSidebar}
+          aria-label={sidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}><Icon name="panel" /></button>
+      </div>
+      <button className="new-session" type="button" onClick={startNewSession} disabled={!workspaceId || busy}>
+        <Icon name="plus" />{!sidebarCollapsed && <span>新会话</span>}
+      </button>
+      {!sidebarCollapsed && <>
+        <div className="workspace-heading"><span>工作区</span><div>
+          <button className={`icon-button compact ${searchOpen ? "active" : ""}`} type="button" onClick={() => setSearchOpen((value) => !value)} aria-label="搜索会话"><Icon name="search" /></button>
+          <button className={`icon-button compact ${viewMenuOpen ? "active" : ""}`} type="button" onClick={() => setViewMenuOpen((value) => !value)} aria-label="视图选项"><Icon name="sliders" /></button>
+          <button className="icon-button compact" type="button" onClick={() => setWorkspaceDialogOpen(true)} aria-label="添加工作区"><Icon name="folder" /></button>
+        </div></div>
+        {searchOpen && <input className="session-search" value={search} onChange={(event) => setSearch(event.target.value)}
+          placeholder="搜索会话…" aria-label="搜索会话" />}
+        {viewMenuOpen && <div className="view-menu" role="menu">
+          <button type="button" role="menuitem" className={sortBy === "recent" ? "active" : ""}
+            onClick={() => { setSortBy("recent"); setViewMenuOpen(false); }}>最近更新</button>
+          <button type="button" role="menuitem" className={sortBy === "name" ? "active" : ""}
+            onClick={() => { setSortBy("name"); setViewMenuOpen(false); }}>按名称</button>
+        </div>}
+        <label className="workspace-select"><select value={workspaceId || ""} aria-label="工作区"
+          onChange={(event) => { setWorkspaceId(event.target.value); startNewSession(); }}>
+          {bootstrap?.workspaces.map((workspace) => <option value={workspace.id} key={workspace.id}>{workspace.name}</option>)}</select></label>
+        <nav className="session-nav" aria-label="会话列表">
+          {sessions.length ? sessions.map((session) => <div className={`session-row ${session.id === activeSession?.id ? "active" : ""}`} key={session.id}>
+            <button type="button" className="session-link" onClick={() => void openSession(session)}>
+              <span className="session-title">{session.name || "未命名会话"}</span>
+              <span className="session-meta">{session.messageCount} 条消息 · {session.updatedAt ? new Date(session.updatedAt).toLocaleDateString() : "刚刚"}</span>
+            </button>
+            <button type="button" className="session-more" aria-label={`会话操作: ${session.name || "未命名会话"}`}
+              onClick={() => setSessionMenu((current) => current === session.id ? null : session.id)}><Icon name="more" /></button>
+            {sessionMenu === session.id && <div className="session-menu" role="menu">
+              <button type="button" role="menuitem" onClick={() => { setSessionMenu(null); void renameSession(session); }}><Icon name="edit" />重命名</button>
+              <button type="button" role="menuitem" onClick={() => { setSessionMenu(null); void forkSession(session); }}><Icon name="branch" />创建分支</button>
+              <button type="button" role="menuitem" onClick={() => { setSessionMenu(null); void archiveSession(session); }}><Icon name="archive" />归档</button>
+            </div>}
+          </div>) : <div className="empty-nav">{search ? "没有匹配的会话" : "暂无会话"}</div>}
+        </nav>
+      </>}
+      <button className="sidebar-settings" type="button" onClick={() => setSettingsOpen(true)} aria-label="设置"><Icon name="settings" />{!sidebarCollapsed && <span>设置</span>}</button>
+    </aside>
+    {mobileSidebar && <button className="mobile-scrim" aria-label="关闭导航" onClick={() => setMobileSidebar(false)} />}
+
+    <main className="main-panel">
+      {!activeSession ? <section className="new-session-view">
+        <button className="mobile-nav-button" type="button" onClick={() => setMobileSidebar(true)} aria-label="打开导航"><Icon name="menu" /></button>
+        <div className="new-session-center">
+          <div className="hero-title"><BrandMark size={34} /><h1>探索未至之境</h1><span>预览版</span></div>
+          <div className="new-session-options">
+            <label><Icon name="folder" /><select value={workspaceId || ""} aria-label="选择工作区"
+              onChange={(event) => setWorkspaceId(event.target.value)}>
+              <option value="" disabled>选择工作区</option>
+              {bootstrap?.workspaces.map((workspace) => <option value={workspace.id} key={workspace.id}>{workspace.name}</option>)}</select></label>
+            <button type="button" onClick={() => {
+              setNotice("当前项目仅配置了“标准模式”预设");
+              window.setTimeout(() => setNotice(null), 3000);
+            }}><Icon name="sparkles" />标准模式<Icon name="chevron" /></button>
+          </div>
+          {composerNode}
+        </div>
+      </section> : <section className="session-view">
+        <header className="session-header">
+          <button className="mobile-nav-button" type="button" onClick={() => setMobileSidebar(true)} aria-label="打开导航"><Icon name="menu" /></button>
+          <div className="session-header-title"><div className={`connection-dot ${connected ? "online" : ""}`} />
+            <button type="button" onClick={() => void renameSession()}>{activeSession.name || "未命名会话"}</button>
+            <span>标准模式</span></div>
+          <div className="session-header-actions">
+            {subagents?.jobs.length ? <span className="job-pill">{subagents.jobs.filter((job) => job.status === "running").length} 个后台任务</span> : null}
+            <button type="button" className={`header-action ${detailsOpen ? "active" : ""}`} onClick={() => setDetailsOpen((value) => !value)}>
+              会话日志<Icon name="chevron" /></button>
+          </div>
+        </header>
+        <div className="view-tabs" role="tablist"><button type="button" role="tab" aria-selected={conversationView === "chat"}
+          onClick={() => setConversationView("chat")}>对话</button><button type="button" role="tab" aria-selected={conversationView === "trajectory"}
+            onClick={() => setConversationView("trajectory")}>轨迹</button></div>
+        <div className="timeline" ref={timeline} aria-live="polite">
+          {conversationView === "chat" && projection && <Timeline projection={projection} />}
+          {conversationView === "trajectory" && <div className="trajectory-list">{projection?.events.map((event) => <div key={event.id}>
+            <span>{event.seq}</span><code>{event.type}</code><time>{new Date(event.at).toLocaleTimeString()}</time>
+            <pre>{JSON.stringify(event.data, null, 2)}</pre></div>)}</div>}
+        </div>
+        <div className="composer-wrap">{composerNode}</div>
+      </section>}
     </main>
+
+    {detailsOpen && activeSession && <aside className="details-panel">
+      <header><h2>会话日志</h2><button className="icon-button" type="button" onClick={() => setDetailsOpen(false)} aria-label="关闭详情"><Icon name="x" /></button></header>
+      <section><h3>会话</h3><dl><div><dt>工作区</dt><dd>{activeWorkspace?.name}</dd></div><div><dt>连接</dt><dd>{connected ? "实时" : "重连中"}</dd></div>
+        <div><dt>状态</dt><dd>{phaseLabel(phase)}</dd></div><div><dt>事件</dt><dd>{projection?.events.length || 0}</dd></div></dl></section>
+      <section><h3>子代理</h3>{subagents?.jobs.length ? subagents.jobs.map((job) => <div className="detail-job" key={job.id}>
+        <strong>{job.label}</strong><span>{job.provider} · {job.status}</span></div>) : <p>暂无子代理任务</p>}</section>
+      <section><h3>能力</h3><div className="detail-metrics"><span><strong>{runtime?.tools.length ?? "—"}</strong>工具</span>
+        <span><strong>{runtime?.plugins.length ?? "—"}</strong>插件</span></div></section>
+    </aside>}
+
     {projection?.interactions[0] && <ApprovalDialog interaction={projection.interactions[0]}
       resolving={resolving} onResolve={resolveApproval} />}
-    {settingsOpen && <SettingsDialog workspaces={bootstrap?.workspaces || []} runtime={runtime}
-      onClose={() => setSettingsOpen(false)} onAddWorkspace={addWorkspace}
-      onRemoveWorkspace={removeWorkspace} />}
+    {settingsOpen && <SettingsDialog workspaces={bootstrap?.workspaces || []} runtime={runtime} models={models}
+      theme={theme} onThemeChange={setTheme} onClose={() => setSettingsOpen(false)}
+      onAddWorkspace={() => { setSettingsOpen(false); setWorkspaceDialogOpen(true); }} onRemoveWorkspace={removeWorkspace} />}
+    {workspaceDialogOpen && <WorkspaceDialog initialPath={activeWorkspace?.path} onClose={() => setWorkspaceDialogOpen(false)} onSelect={addWorkspace} />}
     {notice && <div className="toast" role="status">{notice}</div>}
   </div>;
 }
