@@ -3400,6 +3400,48 @@
           (finally (kernel/dispose-all! ctx))))
       (finally (delete-tree! directory)))))
 
+(deftest web-provider-settings-preserves-chatgpt-subscription-auth
+  (let [directory (.toFile (java.nio.file.Files/createTempDirectory
+                            "dao-chatgpt-provider-settings-"
+                            (make-array java.nio.file.attribute.FileAttribute 0)))
+        auth-file (io/file directory "auth.json")
+        settings (io/file directory "providers.json")]
+    (try
+      (spit auth-file
+            (json/generate-string
+             {:auth_mode "chatgpt"
+              :tokens {:access_token "subscription-token"
+                       :account_id "subscription-account"}}))
+      (spit settings
+            (json/generate-string
+             {:version 1
+              :providers
+              [{:id "chatgpt"
+                :name "ChatGPT 订阅"
+                :protocol "chatgpt-subscription"
+                :baseUrl "https://chatgpt.com/backend-api/codex"
+                :models [{:id "gpt-5.6-sol" :name "gpt-5.6-sol"}
+                         {:id "gpt-5.6-terra" :name "gpt-5.6-terra"}]}]}))
+      (let [ctx (plugin/boot!
+                 {:plugins
+                  [{:ns 'agent.plugins.model-registry}
+                   {:ns 'agent.plugins.auth-store}
+                   {:ns 'agent.plugins.chatgpt
+                    :config {:model "gpt-5.6-sol"
+                             :auth-file (str auth-file)
+                             :check-permissions false}}
+                   {:ns 'agent.plugins.provider-settings
+                    :config {:path (str settings)}}]})]
+        (try
+          (let [registry (kernel/require-service ctx :llm/registry)
+                auth (kernel/require-service ctx :auth/store)]
+            (is (= #{:chatgpt} (set (map :id ((:providers registry))))))
+            (is (= {:access-token "subscription-token"
+                    :account-id "subscription-account"}
+                   ((:resolve! auth) :chatgpt))))
+          (finally (kernel/dispose-all! ctx))))
+      (finally (delete-tree! directory)))))
+
 (deftest omp-anchored-edits-reject-stale-and-overlapping-work
   (let [directory (.toFile (java.nio.file.Files/createTempDirectory
                             "bb-agent-omp-edit-"

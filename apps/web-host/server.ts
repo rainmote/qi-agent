@@ -243,7 +243,7 @@ export async function startWebHost(options: WebHostOptions = {}) {
       if (url.pathname === "/api/providers" && request.method === "GET") {
         return json(response, 200, {
           ok: true,
-          result: { providers: providers.list(), presets: providers.presets() },
+          result: { providers: await providers.list(), presets: providers.presets() },
         });
       }
       if (url.pathname === "/api/providers" && request.method === "POST") {

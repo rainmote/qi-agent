@@ -1,8 +1,12 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { isIP } from "node:net";
+import { homedir } from "node:os";
 import { join } from "node:path";
 
-export type ProviderProtocol = "openai-completions" | "openai-responses" | "anthropic-messages";
+export type ProviderProtocol = "openai-completions" | "openai-responses" | "anthropic-messages"
+  | "chatgpt-subscription";
+export type ProviderAuthType = "api-key" | "chatgpt-subscription";
+export type ProviderAuthStatus = "configured" | "missing" | "invalid" | "expired" | "insecure";
 
 export interface ProviderModelSettings {
   id: string;
@@ -23,6 +27,10 @@ export interface ProviderSettings {
 
 export interface PublicProviderSettings extends Omit<ProviderSettings, "apiKey"> {
   apiKeyConfigured: boolean;
+  authType: ProviderAuthType;
+  authStatus: ProviderAuthStatus;
+  authSource?: "settings" | "environment" | "codex-auth-cache";
+  authFile?: string;
 }
 
 interface ProviderState {
@@ -48,7 +56,7 @@ export const providerPresets: ProviderPreset[] = [
   { id: "mistral", name: "Mistral", protocol: "openai-completions", baseUrl: "https://api.mistral.ai/v1" },
   { id: "moonshotai", name: "Moonshot AI", protocol: "openai-completions", baseUrl: "https://api.moonshot.ai/v1" },
   { id: "nvidia", name: "NVIDIA", protocol: "openai-completions", baseUrl: "https://integrate.api.nvidia.com/v1" },
-  { id: "openai", name: "OpenAI", protocol: "openai-responses", baseUrl: "https://api.openai.com/v1" },
+  { id: "openai", name: "OpenAI API", protocol: "openai-responses", baseUrl: "https://api.openai.com/v1" },
   { id: "openrouter", name: "OpenRouter", protocol: "openai-completions", baseUrl: "https://openrouter.ai/api/v1" },
   { id: "together", name: "Together AI", protocol: "openai-completions", baseUrl: "https://api.together.xyz/v1" },
   { id: "xai", name: "xAI", protocol: "openai-completions", baseUrl: "https://api.x.ai/v1" },
@@ -58,10 +66,18 @@ export const providerPresets: ProviderPreset[] = [
 const defaultProviders: ProviderSettings[] = [
   {
     id: "openai",
-    name: "OpenAI",
+    name: "OpenAI API",
     protocol: "openai-responses",
     baseUrl: "https://api.openai.com/v1",
     apiKeyEnv: "OPENAI_API_KEY",
+    builtin: true,
+    models: [{ id: "gpt-5.6-sol", name: "gpt-5.6-sol", contextWindow: 128_000 }],
+  },
+  {
+    id: "chatgpt",
+    name: "ChatGPT 订阅",
+    protocol: "chatgpt-subscription",
+    baseUrl: "https://chatgpt.com/backend-api/codex",
     builtin: true,
     models: [{ id: "gpt-5.6-sol", name: "gpt-5.6-sol", contextWindow: 128_000 }],
   },
@@ -77,8 +93,11 @@ const defaultProviders: ProviderSettings[] = [
 ];
 
 const protocols = new Set<ProviderProtocol>([
-  "openai-completions", "openai-responses", "anthropic-messages",
+  "openai-completions", "openai-responses", "anthropic-messages", "chatgpt-subscription",
 ]);
+
+const builtinNames = new Map(defaultProviders.map((provider) => [provider.id, provider.name]));
+const builtinOrder = new Map([["deepseek", 0], ["openai", 1], ["chatgpt", 2]]);
 
 function validateIdentifier(value: string, label: string): string {
   const normalized = value.trim();
@@ -124,38 +143,105 @@ function normalizeProvider(input: ProviderSettings, existing?: ProviderSettings)
   const id = validateIdentifier(String(input.id || ""), "Provider ID");
   const protocol = input.protocol;
   if (!protocols.has(protocol)) throw new Error("不支持的 API 协议");
-  const name = String(input.name || "").trim();
+  if (protocol === "chatgpt-subscription" && id !== "chatgpt") {
+    throw new Error("ChatGPT 订阅登录只支持内置 chatgpt 提供方");
+  }
+  const name = builtinNames.get(id) || String(input.name || "").trim();
   if (!name) throw new Error("显示名称不能为空");
-  const apiKey = typeof input.apiKey === "string" && input.apiKey.trim()
-    ? input.apiKey.trim() : existing?.apiKey;
+  const apiKey = protocol === "chatgpt-subscription" ? undefined
+    : typeof input.apiKey === "string" && input.apiKey.trim() ? input.apiKey.trim() : existing?.apiKey;
+  const baseUrl = validateBaseUrl(String(input.baseUrl || ""));
+  if (protocol === "chatgpt-subscription" && baseUrl !== "https://chatgpt.com/backend-api/codex") {
+    throw new Error("ChatGPT 订阅凭据只能发送到官方 Codex 接口");
+  }
   return {
     id,
     name,
     protocol,
-    baseUrl: validateBaseUrl(String(input.baseUrl || "")),
+    baseUrl,
     ...(apiKey ? { apiKey } : {}),
-    ...(input.apiKeyEnv || existing?.apiKeyEnv ? { apiKeyEnv: input.apiKeyEnv || existing?.apiKeyEnv } : {}),
+    ...(protocol !== "chatgpt-subscription" && (input.apiKeyEnv || existing?.apiKeyEnv)
+      ? { apiKeyEnv: input.apiKeyEnv || existing?.apiKeyEnv } : {}),
     models: normalizeModels(input.models),
     builtin: Boolean(existing?.builtin || input.builtin),
   };
 }
 
-function publicProvider(provider: ProviderSettings): PublicProviderSettings {
+interface LoginInspection {
+  authStatus: ProviderAuthStatus;
+  authSource?: "codex-auth-cache";
+}
+
+function accessTokenExpired(token: string): boolean {
+  const payload = token.split(".")[1];
+  if (!payload) return false;
+  try {
+    const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { exp?: unknown };
+    return typeof claims.exp === "number" && claims.exp * 1000 <= Date.now();
+  } catch {
+    return false;
+  }
+}
+
+async function inspectChatGptLogin(authFile: string): Promise<LoginInspection> {
+  try {
+    const info = await stat(authFile);
+    if (!info.isFile()) return { authStatus: "missing" };
+    if (process.platform !== "win32" && (info.mode & 0o077) !== 0) {
+      return { authStatus: "insecure" };
+    }
+    const auth = JSON.parse(await readFile(authFile, "utf8")) as {
+      auth_mode?: unknown;
+      tokens?: { access_token?: unknown; account_id?: unknown };
+    };
+    const accessToken = auth.tokens?.access_token;
+    const accountId = auth.tokens?.account_id;
+    if (auth.auth_mode !== "chatgpt" || typeof accessToken !== "string" || !accessToken.trim()
+      || typeof accountId !== "string" || !accountId.trim()) {
+      return { authStatus: "invalid" };
+    }
+    if (accessTokenExpired(accessToken)) return { authStatus: "expired" };
+    return { authStatus: "configured", authSource: "codex-auth-cache" };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { authStatus: "missing" };
+    return { authStatus: "invalid" };
+  }
+}
+
+async function publicProvider(provider: ProviderSettings, authFile: string): Promise<PublicProviderSettings> {
   const { apiKey, ...safe } = provider;
+  if (provider.protocol === "chatgpt-subscription") {
+    const inspection = await inspectChatGptLogin(authFile);
+    return {
+      ...safe,
+      apiKeyConfigured: false,
+      authType: "chatgpt-subscription",
+      authFile,
+      ...inspection,
+    };
+  }
+  const environmentConfigured = Boolean(provider.apiKeyEnv && process.env[provider.apiKeyEnv]);
   return {
     ...safe,
-    apiKeyConfigured: Boolean(apiKey || (provider.apiKeyEnv && process.env[provider.apiKeyEnv])),
+    apiKeyConfigured: Boolean(apiKey || environmentConfigured),
+    authType: "api-key",
+    authStatus: apiKey || environmentConfigured ? "configured" : "missing",
+    ...(apiKey ? { authSource: "settings" as const }
+      : environmentConfigured ? { authSource: "environment" as const } : {}),
   };
 }
 
 export class ProviderRegistry {
   readonly stateDirectory: string;
   readonly statePath: string;
+  readonly codexAuthFile: string;
   #providers = new Map<string, ProviderSettings>();
 
-  constructor(stateDirectory: string) {
+  constructor(stateDirectory: string, options: { codexAuthFile?: string } = {}) {
     this.stateDirectory = stateDirectory;
     this.statePath = join(stateDirectory, "providers.json");
+    const codexHome = String(process.env.CODEX_HOME || "").trim() || join(homedir(), ".codex");
+    this.codexAuthFile = options.codexAuthFile || join(codexHome, "auth.json");
   }
 
   async load(): Promise<void> {
@@ -165,7 +251,8 @@ export class ProviderRegistry {
       const parsed = JSON.parse(await readFile(this.statePath, "utf8")) as ProviderState;
       for (const raw of parsed.providers || []) {
         const existing = this.#providers.get(String(raw.id || ""));
-        const provider = normalizeProvider(raw, existing);
+        const provider = normalizeProvider(existing?.builtin
+          ? { ...raw, name: existing.name, builtin: true } : raw, existing);
         this.#providers.set(provider.id, provider);
       }
     } catch (error) {
@@ -174,10 +261,12 @@ export class ProviderRegistry {
     await this.save();
   }
 
-  list(): PublicProviderSettings[] {
-    return [...this.#providers.values()]
-      .sort((a, b) => Number(Boolean(b.builtin)) - Number(Boolean(a.builtin)) || a.name.localeCompare(b.name))
-      .map(publicProvider);
+  async list(): Promise<PublicProviderSettings[]> {
+    const providers = [...this.#providers.values()]
+      .sort((a, b) => Number(Boolean(b.builtin)) - Number(Boolean(a.builtin))
+        || (builtinOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (builtinOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER)
+        || a.name.localeCompare(b.name));
+    return Promise.all(providers.map((provider) => publicProvider(provider, this.codexAuthFile)));
   }
 
   presets(): ProviderPreset[] {
@@ -189,7 +278,7 @@ export class ProviderRegistry {
     const provider = normalizeProvider(input, existing);
     this.#providers.set(provider.id, provider);
     await this.save();
-    return publicProvider(provider);
+    return publicProvider(provider, this.codexAuthFile);
   }
 
   async remove(id: string): Promise<boolean> {
@@ -203,6 +292,9 @@ export class ProviderRegistry {
 
   async discover(input: { providerId?: string; baseUrl?: string; apiKey?: string }): Promise<ProviderModelSettings[]> {
     const stored = input.providerId ? this.#providers.get(input.providerId) : undefined;
+    if (stored?.protocol === "chatgpt-subscription") {
+      throw new Error("ChatGPT 订阅模型由本地登录提供，无需调用 API 获取");
+    }
     const baseUrl = validateBaseUrl(String(input.baseUrl || stored?.baseUrl || ""));
     const key = String(input.apiKey || stored?.apiKey
       || (stored?.apiKeyEnv ? process.env[stored.apiKeyEnv] : "") || "").trim();

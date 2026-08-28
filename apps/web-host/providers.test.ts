@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,9 +9,14 @@ import { ProviderRegistry } from "./providers.js";
 test("provider registry persists secrets privately and returns redacted settings", async () => {
   const root = await mkdtemp(join(tmpdir(), "dao-provider-test-"));
   try {
-    const registry = new ProviderRegistry(root);
+    const authFile = join(root, "codex-auth.json");
+    const registry = new ProviderRegistry(root, { codexAuthFile: authFile });
     await registry.load();
-    assert.deepEqual(registry.list().slice(0, 2).map((provider) => provider.id), ["deepseek", "openai"]);
+    assert.deepEqual((await registry.list()).slice(0, 3).map((provider) => provider.id),
+      ["deepseek", "openai", "chatgpt"]);
+    const missingSubscription = (await registry.list()).find((provider) => provider.id === "chatgpt");
+    assert.equal(missingSubscription?.authType, "chatgpt-subscription");
+    assert.equal(missingSubscription?.authStatus, "missing");
 
     const saved = await registry.upsert({
       id: "acme",
@@ -31,7 +36,7 @@ test("provider registry persists secrets privately and returns redacted settings
 
     const restored = new ProviderRegistry(root);
     await restored.load();
-    assert.equal(restored.list().find((provider) => provider.id === "acme")?.apiKeyConfigured, true);
+    assert.equal((await restored.list()).find((provider) => provider.id === "acme")?.apiKeyConfigured, true);
     await restored.upsert({
       id: "acme",
       name: "Acme Updated",
@@ -39,10 +44,51 @@ test("provider registry persists secrets privately and returns redacted settings
       baseUrl: "https://gateway.example/v1",
       models: [{ id: "acme-chat", name: "Acme Chat" }],
     });
-    assert.equal(restored.list().find((provider) => provider.id === "acme")?.apiKeyConfigured, true,
+    assert.equal((await restored.list()).find((provider) => provider.id === "acme")?.apiKeyConfigured, true,
       "an empty key edit should preserve the stored key");
     assert.equal(await restored.remove("acme"), true);
     await assert.rejects(restored.remove("deepseek"), /内置提供方不能删除/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("provider registry discovers the local Codex ChatGPT login without exposing tokens", async () => {
+  const root = await mkdtemp(join(tmpdir(), "dao-provider-chatgpt-auth-test-"));
+  const authFile = join(root, "auth.json");
+  try {
+    await writeFile(authFile, JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: { access_token: "private-access-token", account_id: "private-account-id" },
+    }), { mode: 0o600 });
+    const registry = new ProviderRegistry(join(root, "state"), { codexAuthFile: authFile });
+    await registry.load();
+    const provider = (await registry.list()).find((entry) => entry.id === "chatgpt");
+    assert.equal(provider?.authStatus, "configured");
+    assert.equal(provider?.authSource, "codex-auth-cache");
+    assert.equal(provider?.authFile, authFile);
+    assert.equal(JSON.stringify(provider).includes("private-access-token"), false);
+    assert.equal(JSON.stringify(provider).includes("private-account-id"), false);
+
+    if (process.platform !== "win32") {
+      await chmod(authFile, 0o644);
+      assert.equal((await registry.list()).find((entry) => entry.id === "chatgpt")?.authStatus,
+        "insecure");
+      await chmod(authFile, 0o600);
+    }
+
+    const expiredToken = ["header", Buffer.from(JSON.stringify({ exp: 1 })).toString("base64url"),
+      "signature"].join(".");
+    await writeFile(authFile, JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: { access_token: expiredToken, account_id: "private-account-id" },
+    }));
+    assert.equal((await registry.list()).find((entry) => entry.id === "chatgpt")?.authStatus,
+      "expired");
+
+    await writeFile(authFile, JSON.stringify({ auth_mode: "apikey", tokens: {} }));
+    assert.equal((await registry.list()).find((entry) => entry.id === "chatgpt")?.authStatus,
+      "invalid");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -33,7 +33,10 @@ export interface ModelEntry {
   "settings-provider-id"?: string;
 }
 
-export type ProviderProtocol = "openai-completions" | "openai-responses" | "anthropic-messages";
+export type ProviderProtocol = "openai-completions" | "openai-responses" | "anthropic-messages"
+  | "chatgpt-subscription";
+export type ProviderAuthType = "api-key" | "chatgpt-subscription";
+export type ProviderAuthStatus = "configured" | "missing" | "invalid" | "expired" | "insecure";
 
 export interface ProviderModelSettings {
   id: string;
@@ -48,9 +51,16 @@ export interface ProviderSettings {
   baseUrl: string;
   apiKeyEnv?: string;
   apiKeyConfigured: boolean;
+  authType: ProviderAuthType;
+  authStatus: ProviderAuthStatus;
+  authSource?: "settings" | "environment" | "codex-auth-cache";
+  authFile?: string;
   models: ProviderModelSettings[];
   builtin?: boolean;
 }
+
+export type ProviderInput = Omit<ProviderSettings,
+  "apiKeyConfigured" | "authType" | "authStatus" | "authSource" | "authFile"> & { apiKey?: string };
 
 export interface ProviderPreset {
   id: string;

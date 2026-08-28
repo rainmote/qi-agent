@@ -1,4 +1,4 @@
-import type { HostEvent, ProviderModelSettings, ProviderPreset, ProviderSettings,
+import type { HostEvent, ProviderInput, ProviderModelSettings, ProviderPreset, ProviderSettings,
   SessionSnapshot, SessionSummary, Workspace } from "./types";
 
 interface ApiEnvelope<T> {
@@ -27,7 +27,7 @@ export interface Bootstrap {
 export const api = {
   bootstrap: () => request<Bootstrap>("/api/bootstrap"),
   listProviders: () => request<{ providers: ProviderSettings[]; presets: ProviderPreset[] }>("/api/providers"),
-  saveProvider: (provider: Omit<ProviderSettings, "apiKeyConfigured"> & { apiKey?: string }) =>
+  saveProvider: (provider: ProviderInput) =>
     request<ProviderSettings>("/api/providers", {
       method: "POST",
       body: JSON.stringify(provider),

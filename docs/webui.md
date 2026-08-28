@@ -100,6 +100,10 @@ Host 的边界：
 - session JSONL、工作区清单和凭据都不会打包进前端产物。
 - 模型 API 密钥只写入本机 Web Host 状态目录的 `providers.json`，文件权限为 `0600`；
   列表和保存响应只返回“是否已配置”，不会把密钥回传给浏览器。
+- OpenAI API 与 ChatGPT 订阅是两个独立提供方。前者使用 `OPENAI_API_KEY` 或 Web
+  保存的 API Key；后者自动检查 `$CODEX_HOME/auth.json`（默认 `~/.codex/auth.json`）的
+  本地 Codex 登录状态。Web 只返回状态和文件路径，不返回 access token、account id 或
+  refresh token；过期、格式无效及权限过宽会分别显示为不可用状态。
 - `/health/live` 只检查进程存活；`/health/ready` 还会检查静态产物、运行配置、daemon
   二进制和工作区可访问性。
 

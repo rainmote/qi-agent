@@ -125,10 +125,13 @@ bb agent --config examples/deepseek.edn --once "读取 README.md 并总结这个
 只向 `https://api.openai.com/v1/responses` 发送凭据。请求默认 `store=false`，支持 SSE、图片、
 并行 function call、完整 Responses output item 回放，以及对 408/409/429/5xx 的有界退避。
 
-`agent.plugins.chatgpt` 仍作为可选 adapter 保留。`examples/chatgpt.edn` 会在每次请求前读取
+默认 profile 同时注册独立的 `chatgpt` 订阅 provider；它不会复用 `openai` provider 的
+API Key。`agent.plugins.chatgpt` 与 `examples/chatgpt.edn` 会在每次请求前读取
 `$CODEX_HOME/auth.json`（未设置时为 `~/.codex/auth.json`），只取 access token 与
 account id，不缓存或记录 refresh token。登录失效后运行 `codex login`，无需修改
-agent 配置。为防止凭据外发，adapter 只接受 ChatGPT/Codex 官方订阅后端。
+agent 配置。Web 的“设置 → 模型”会自动显示这份本地登录的缺失、有效、过期、格式错误或
+权限不安全状态，但绝不会把 token 返回浏览器。为防止凭据外发，adapter 只接受
+ChatGPT/Codex 官方订阅后端。
 
 此方式复用的是 Codex 的 ChatGPT 订阅登录与内部传输协议，不是按量计费的 OpenAI
 API key。认证缓存位置是官方文档支持的，但订阅后端协议并不是稳定的公开 API，因而

@@ -1,25 +1,43 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "./api";
 import { Icon } from "./icons";
-import type { ProviderModelSettings, ProviderPreset, ProviderProtocol, ProviderSettings } from "./types";
+import type { ProviderInput, ProviderModelSettings, ProviderPreset, ProviderProtocol,
+  ProviderSettings } from "./types";
 
-type ProviderDraft = Omit<ProviderSettings, "apiKeyConfigured"> & { apiKey?: string };
+type ProviderDraft = ProviderInput;
 type Editor = {
   kind: "edit" | "preset" | "custom";
   draft: ProviderDraft;
   advanced: boolean;
   apiKeyConfigured?: boolean;
+  provider?: ProviderSettings;
 };
 
-const protocolLabels: Record<ProviderProtocol, string> = {
+const protocolLabels: Partial<Record<ProviderProtocol, string>> = {
   "openai-completions": "openai-completions",
   "openai-responses": "openai-responses",
   "anthropic-messages": "anthropic-messages",
 };
 
 function draftFromProvider(provider: ProviderSettings): ProviderDraft {
-  const { apiKeyConfigured: _configured, ...draft } = provider;
+  const { apiKeyConfigured: _configured, authType: _authType, authStatus: _authStatus,
+    authSource: _authSource, authFile: _authFile, ...draft } = provider;
   return { ...draft, models: provider.models.map((model) => ({ ...model })), apiKey: "" };
+}
+
+export function providerAuthSummary(provider: ProviderSettings): string {
+  if (provider.authType === "chatgpt-subscription") {
+    switch (provider.authStatus) {
+      case "configured": return "订阅方式 · 已发现本地登录";
+      case "expired": return "订阅方式 · 登录已过期";
+      case "insecure": return "订阅方式 · 凭据权限不安全";
+      case "invalid": return "订阅方式 · 登录状态无效";
+      default: return "订阅方式 · 未发现本地登录";
+    }
+  }
+  if (provider.authStatus !== "configured") return "API 方式 · API Key 未配置";
+  return provider.authSource === "environment"
+    ? "API 方式 · 已从环境变量读取" : "API 方式 · API Key 已配置";
 }
 
 function draftFromPreset(preset: ProviderPreset): ProviderDraft {
@@ -54,7 +72,7 @@ function validDraft(draft: ProviderDraft): boolean {
 function ModelCatalog({ models, onChange, onDiscover, discovering }: {
   models: ProviderModelSettings[];
   onChange: (models: ProviderModelSettings[]) => void;
-  onDiscover: () => void;
+  onDiscover?: () => void;
   discovering: boolean;
 }) {
   const update = (index: number, patch: Partial<ProviderModelSettings>) => {
@@ -63,8 +81,8 @@ function ModelCatalog({ models, onChange, onDiscover, discovering }: {
   return <section className="provider-model-catalog" aria-label="模型目录">
     <div className="provider-catalog-head"><div><strong>模型目录</strong>
       <span>{models.length ? `${models.length} 个可选模型` : "模型选择器中将不显示任何模型"}</span></div>
-      <button type="button" className="button ghost compact-button" disabled={discovering}
-        onClick={onDiscover}><Icon name="refresh" />{discovering ? "正在获取" : "获取可用模型"}</button></div>
+      {onDiscover && <button type="button" className="button ghost compact-button" disabled={discovering}
+        onClick={onDiscover}><Icon name="refresh" />{discovering ? "正在获取" : "获取可用模型"}</button>}</div>
     <div className="provider-model-list">
       {models.map((model, index) => <div className="provider-model-row" key={index}>
         <input aria-label={`模型 ID ${index + 1}`} placeholder="模型 ID" value={model.id}
@@ -95,6 +113,7 @@ function ProviderEditor({ editor, presets, onEditor, onSaved }: {
   const [discovering, setDiscovering] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const draft = editor.draft;
+  const subscription = draft.protocol === "chatgpt-subscription";
   const patch = (value: Partial<ProviderDraft>) => onEditor({ ...editor, draft: { ...draft, ...value } });
   const discover = async () => {
     if (!draft.baseUrl.trim()) return;
@@ -131,6 +150,14 @@ function ProviderEditor({ editor, presets, onEditor, onSaved }: {
     } catch (value) { setError(value instanceof Error ? value.message : "无法删除提供方"); }
     finally { setBusy(false); }
   };
+  const refreshLogin = async () => {
+    setBusy(true); setError(null);
+    try {
+      await onSaved();
+      onEditor(null);
+    } catch (value) { setError(value instanceof Error ? value.message : "无法刷新登录状态"); }
+    finally { setBusy(false); }
+  };
   return <div className="provider-editor">
     {editor.kind === "edit" && <div className="provider-editor-identity"><strong>{draft.name}</strong><span>{draft.id}</span></div>}
     {editor.kind !== "edit" && <div className="provider-editor-title">
@@ -146,14 +173,23 @@ function ProviderEditor({ editor, presets, onEditor, onSaved }: {
       <p className="provider-field-help">以小写字母开头的标识，在请求中唯一标识该提供方。</p></>}
     {editor.kind === "custom" && <label>显示名称<input aria-label="显示名称" value={draft.name}
       onChange={(event) => patch({ name: event.target.value })} /></label>}
-    {editor.kind !== "custom" && <label>API 密钥<input type="password" aria-label="API 密钥"
+    {subscription && editor.provider && <section className="subscription-login" aria-label="ChatGPT 本地登录状态">
+      <div className="subscription-login-head"><span className={`provider-status ${editor.provider.authStatus === "configured" ? "configured" : ""}`} />
+        <strong>{providerAuthSummary(editor.provider)}</strong></div>
+      <p>自动读取 Codex 的本地 ChatGPT 登录，不需要填写 OpenAI API Key，也不会向 Web 返回访问令牌。</p>
+      {editor.provider.authFile && <code>{editor.provider.authFile}</code>}
+      {editor.provider.authStatus !== "configured" && <p className="subscription-login-help">
+        请在终端运行 <code>codex login</code>，完成后刷新登录状态。
+      </p>}
+    </section>}
+    {editor.kind !== "custom" && !subscription && <label>API 密钥<input type="password" aria-label="API 密钥"
       placeholder={editor.apiKeyConfigured ? "已配置——输入新值可替换" : "输入 API 密钥，或留空使用环境认证"}
       value={draft.apiKey || ""} onChange={(event) => patch({ apiKey: event.target.value })} /></label>}
-    {editor.kind !== "custom" && <button type="button" className={`provider-advanced-toggle ${editor.advanced ? "open" : ""}`}
+    {editor.kind !== "custom" && !subscription && <button type="button" className={`provider-advanced-toggle ${editor.advanced ? "open" : ""}`}
       onClick={() => onEditor({ ...editor, advanced: !editor.advanced })}>
       <Icon name="chevron" />自定义设置
     </button>}
-    {(editor.kind === "custom" || editor.advanced) && <div className="provider-advanced-fields">
+    {!subscription && (editor.kind === "custom" || editor.advanced) && <div className="provider-advanced-fields">
       <label>API 地址<input aria-label="API 地址" placeholder="https://gateway.example/v1" value={draft.baseUrl}
         onChange={(event) => patch({ baseUrl: event.target.value })} /></label>
       <label className="provider-protocol-field">API 协议<select aria-label="API 协议" value={draft.protocol}
@@ -173,9 +209,11 @@ function ProviderEditor({ editor, presets, onEditor, onSaved }: {
       {editor.kind === "edit" && !draft.builtin && <button type="button" className="button danger provider-delete"
         disabled={busy} onClick={() => void remove()}>删除提供方</button>}
       <button type="button" className="button ghost" disabled={busy} onClick={() => onEditor(null)}>取消</button>
-      <button type="button" className="button primary" disabled={busy || !validDraft(draft)} onClick={() => void save()}>
+      {subscription ? <button type="button" className="button primary" disabled={busy} onClick={() => void refreshLogin()}>
+        <Icon name="refresh" />{busy ? "正在刷新" : "刷新登录状态"}
+      </button> : <button type="button" className="button primary" disabled={busy || !validDraft(draft)} onClick={() => void save()}>
         {editor.kind === "custom" ? "创建提供方" : "保存"}
-      </button>
+      </button>}
     </div>
   </div>;
 }
@@ -200,18 +238,18 @@ export function ProviderSettingsPanel({ onChanged }: { onChanged?: () => Promise
   const firstPreset = presets[0];
   return <section className="provider-settings-panel">
     <h2>模型</h2>
-    <p className="provider-settings-copy">填入各提供方的 API 密钥即可使用其模型。</p>
+    <p className="provider-settings-copy">API 提供方使用 API Key；ChatGPT 订阅会自动读取本机 Codex 登录状态。</p>
     {loading && !providers.length && <div className="settings-empty">正在读取提供方…</div>}
     {error && <p className="form-error">{error}</p>}
     <div className="provider-list" role="list">
       {providers.map((provider) => <div className={`provider-card ${activeProvider === provider.id ? "editing" : ""}`}
         role="listitem" key={provider.id}>
-        <div className="provider-summary"><div><strong>{provider.name}</strong>
-          <span className={`provider-status ${provider.apiKeyConfigured ? "configured" : ""}`} role="img"
-            aria-label={provider.apiKeyConfigured ? "API 密钥已配置" : "API 密钥未配置"} /></div>
+        <div className="provider-summary"><div className="provider-summary-copy"><div><strong>{provider.name}</strong>
+          <span className={`provider-status ${provider.authStatus === "configured" ? "configured" : ""}`} role="img"
+            aria-label={providerAuthSummary(provider)} /></div><small>{providerAuthSummary(provider)}</small></div>
           <button type="button" className="provider-edit-button" aria-label={`编辑 ${provider.name} (${provider.id})`}
             onClick={() => setEditor({ kind: "edit", draft: draftFromProvider(provider), advanced: false,
-              apiKeyConfigured: provider.apiKeyConfigured })}>编辑</button></div>
+              apiKeyConfigured: provider.apiKeyConfigured, provider })}>{provider.authType === "chatgpt-subscription" ? "查看" : "编辑"}</button></div>
         {activeProvider === provider.id && editor && <ProviderEditor editor={editor} presets={presets}
           onEditor={setEditor} onSaved={saved} />}
       </div>)}

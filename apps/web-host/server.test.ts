@@ -69,12 +69,16 @@ test("web host authenticates, catalogs, creates a real worker, and invokes RPC",
     const providersResponse = await fetch(`${base}/api/providers`, { headers: authorization });
     const providers = await providersResponse.json() as {
       ok: boolean;
-      result: { providers: Array<{ id: string; apiKeyConfigured: boolean }> };
+      result: { providers: Array<{ id: string; apiKeyConfigured: boolean; authType: string; authFile?: string }> };
     };
     assert.equal(providers.ok, true);
     assert.deepEqual(providers.result.providers.slice(0, 2).map((provider) => provider.id),
       ["deepseek", "openai"]);
+    assert.equal(providers.result.providers.find((provider) => provider.id === "chatgpt")?.authType,
+      "chatgpt-subscription");
     assert.equal(JSON.stringify(providers).includes("apiKey\""), false);
+    assert.equal(JSON.stringify(providers).includes("access_token"), false);
+    assert.equal(JSON.stringify(providers).includes("account_id"), false);
 
     const saveProviderResponse = await fetch(`${base}/api/providers`, {
       method: "POST",

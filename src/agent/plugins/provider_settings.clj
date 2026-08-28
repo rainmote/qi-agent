@@ -77,21 +77,26 @@
                    providers (read-providers path)]
                (dispose-all! effects)
                (doseq [provider providers]
-                 (let [provider-id (provider-keyword (:id provider))
-                       key (:apiKey provider)
-                       key-env (:apiKeyEnv provider)]
-                   (swap! effects conj
-                          ((:upsert! auth)
-                           provider-id
-                           (fn [] {:api-key (or key
-                                                (when key-env
-                                                  (System/getenv key-env)))})
-                           {:provider (keyword (:protocol provider))
-                            :source (if key :settings :environment)}))
-                   (doseq [[index model] (map-indexed vector (:models provider))]
+                 ;; ChatGPT subscription authentication and transport settings
+                 ;; are owned by agent.plugins.chatgpt. The Web catalog only
+                 ;; reports its local Codex login state; it must not replace
+                 ;; that dynamic auth resolver with an API-key resolver.
+                 (when-not (= "chatgpt-subscription" (:protocol provider))
+                   (let [provider-id (provider-keyword (:id provider))
+                         key (:apiKey provider)
+                         key-env (:apiKeyEnv provider)]
                      (swap! effects conj
-                            ((:upsert! registry)
-                             (model-entry ctx provider model index))))))
+                            ((:upsert! auth)
+                             provider-id
+                             (fn [] {:api-key (or key
+                                                  (when key-env
+                                                    (System/getenv key-env)))})
+                             {:provider (keyword (:protocol provider))
+                              :source (if key :settings :environment)}))
+                     (doseq [[index model] (map-indexed vector (:models provider))]
+                       (swap! effects conj
+                              ((:upsert! registry)
+                               (model-entry ctx provider model index)))))))
                (when (and selected-id
                           (some #(= selected-id (:id %)) ((:providers registry))))
                  ((:select! registry) selected-id))
