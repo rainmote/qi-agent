@@ -35,6 +35,8 @@ pub struct WorkerDescriptor {
     pub repository_root: PathBuf,
     pub config_path: PathBuf,
     #[serde(default)]
+    pub preset_id: Option<String>,
+    #[serde(default)]
     pub repl_backend: Option<String>,
     pub socket_path: PathBuf,
     pub token: String,
@@ -70,6 +72,7 @@ impl WorkerDescriptor {
             session_path,
             repository_root,
             config_path,
+            preset_id: None,
             repl_backend: None,
             token,
             generation: 1,
@@ -585,7 +588,7 @@ mod tests {
             client_id: root.join("state/client-id"),
         };
         paths.ensure().unwrap();
-        let value = WorkerDescriptor::new(
+        let mut value = WorkerDescriptor::new(
             &paths,
             "worker-1".into(),
             "agent-1".into(),
@@ -596,10 +599,12 @@ mod tests {
             root.join("agent.edn"),
             "secret".into(),
         );
+        value.preset_id = Some("standard".into());
         let path = paths.worker_descriptor("worker-1");
         write_descriptor(&path, &value).unwrap();
         let loaded = read_descriptor(&path).unwrap();
         assert_eq!(loaded.agent_id, "agent-1");
+        assert_eq!(loaded.preset_id.as_deref(), Some("standard"));
         assert_eq!(loaded.token, "secret");
         fs::remove_dir_all(root).unwrap();
     }

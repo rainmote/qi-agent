@@ -38,7 +38,7 @@ npm run web:start -- --workspace /absolute/project/path --port 3080
 WebUI 支持：
 
 - 工作区白名单的添加、移除和切换；
-- 会话目录、创建、恢复、重命名、清理与压缩；
+- 会话目录、创建、恢复、首轮自动命名、手动重命名、清理与压缩；
 - 持久消息、通用工具卡、实时输出、steer、follow-up 和 abort；
 - provider 切换、远程审批、subagent 任务与运行时插件/工具清单；
 - 与 DeepSeek Harness 对齐的“设置 → 模型”：添加预设或自定义提供方、编辑 API 地址与协议、

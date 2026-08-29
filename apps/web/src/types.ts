@@ -14,6 +14,16 @@ export interface SessionSummary {
   eventCount: number;
   messageCount: number;
   updatedAt: string | null;
+  presetId?: string;
+}
+
+export interface AgentPresetSummary {
+  id: string;
+  name: string;
+  description?: string;
+  order?: number;
+  trust: "system" | "user";
+  broken?: boolean;
 }
 
 export interface DurableEvent {
@@ -31,6 +41,18 @@ export interface ModelEntry {
   model?: string;
   "display-name"?: string;
   "settings-provider-id"?: string;
+  "context-window"?: number;
+  "thinking-levels"?: string[];
+  "thinking-level"?: string;
+}
+
+export interface ContextStatus {
+  used_tokens: number;
+  context_window: number;
+  percent: number;
+  system_tokens: number;
+  tool_tokens: number;
+  message_tokens: number;
 }
 
 export type ProviderProtocol = "openai-completions" | "openai-responses" | "anthropic-messages"
@@ -42,6 +64,8 @@ export interface ProviderModelSettings {
   id: string;
   name: string;
   contextWindow?: number;
+  thinkingLevels?: Array<"off" | "low" | "medium" | "high" | "max">;
+  defaultThinkingLevel?: "off" | "low" | "medium" | "high" | "max";
 }
 
 export interface ProviderSettings {
@@ -86,6 +110,7 @@ export interface SessionSnapshot {
   events: DurableEvent[];
   state: AgentState;
   models: { current: ModelEntry | null; providers: ModelEntry[] } | null;
+  context?: ContextStatus | null;
   interactions: Interaction[];
   policy?: PolicyStatus | null;
 }

@@ -1,10 +1,10 @@
 import type { SVGProps } from "react";
 
-type IconName = "menu" | "plus" | "settings" | "panel" | "send" | "stop" |
+export type IconName = "menu" | "plus" | "settings" | "panel" | "send" | "stop" |
   "terminal" | "chevron" | "bot" | "branch" | "folder" | "refresh" | "x" |
   "check" | "shield" | "activity" | "edit" | "search" | "sliders" | "archive" |
   "more" | "copy" | "moon" | "sun" | "command" | "sparkles" | "trash" |
-  "clock" | "squareMinus" | "squarePlus";
+  "clock" | "squareMinus" | "squarePlus" | "eye" | "folderEdit" | "shieldAlert";
 
 const paths: Record<IconName, React.ReactNode> = {
   menu: <><path d="M4 6h16M4 12h16M4 18h16" /></>,
@@ -37,6 +37,9 @@ const paths: Record<IconName, React.ReactNode> = {
   clock: <><circle cx="12" cy="12" r="8" /><path d="M12 7v5l3 2" /></>,
   squareMinus: <><rect x="4" y="4" width="16" height="16" rx="2" /><path d="M8 12h8" /></>,
   squarePlus: <><rect x="4" y="4" width="16" height="16" rx="2" /><path d="M8 12h8M12 8v8" /></>,
+  eye: <><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" /><circle cx="12" cy="12" r="2.5" /></>,
+  folderEdit: <><path d="M3 6h7l2 2h9v4" /><path d="M3 6v13h8" /><path d="m14 19 5.5-5.5a1.4 1.4 0 0 1 2 2L16 21l-3 .5Z" /></>,
+  shieldAlert: <><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z" /><path d="M12 8v5" /><path d="M12 17h.01" /></>,
 };
 
 export function Icon({ name, ...props }: { name: IconName } & SVGProps<SVGSVGElement>) {

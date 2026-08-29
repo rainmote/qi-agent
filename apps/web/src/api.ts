@@ -1,4 +1,4 @@
-import type { HostEvent, ProviderInput, ProviderModelSettings, ProviderPreset, ProviderSettings,
+import type { AgentPresetSummary, HostEvent, ProviderInput, ProviderModelSettings, ProviderPreset, ProviderSettings,
   SessionSnapshot, SessionSummary, Workspace } from "./types";
 
 interface ApiEnvelope<T> {
@@ -26,6 +26,7 @@ export interface Bootstrap {
 
 export const api = {
   bootstrap: () => request<Bootstrap>("/api/bootstrap"),
+  listPresets: () => request<AgentPresetSummary[]>("/api/presets"),
   listProviders: () => request<{ providers: ProviderSettings[]; presets: ProviderPreset[] }>("/api/providers"),
   saveProvider: (provider: ProviderInput) =>
     request<ProviderSettings>("/api/providers", {
@@ -41,10 +42,10 @@ export const api = {
     }),
   listSessions: (workspaceId: string) =>
     request<SessionSummary[]>(`/api/sessions?workspace=${encodeURIComponent(workspaceId)}`),
-  createSession: (workspaceId: string, name?: string) =>
+  createSession: (workspaceId: string, name?: string, presetId?: string) =>
     request<{ session: SessionSummary; snapshot: SessionSnapshot }>("/api/sessions", {
       method: "POST",
-      body: JSON.stringify({ workspaceId, name }),
+      body: JSON.stringify({ workspaceId, name, presetId }),
     }),
   openSession: (id: string) =>
     request<{ session: SessionSummary; snapshot: SessionSnapshot }>(

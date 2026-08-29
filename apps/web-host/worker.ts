@@ -37,9 +37,11 @@ export class AgentWorker extends EventEmitter {
   readonly sessionPath: string;
   readonly repositoryRoot: string;
   readonly daemonEnvironment: DaemonEnvironment;
+  readonly presetId?: string;
   #socket: Socket | null = null;
   #pending = new Map<string, PendingCall>();
   #snapshotTransfers = new Map<string, Array<string | undefined>>();
+  #connected: Promise<void> | null = null;
   #ready: Promise<WorkerMessage> | null = null;
   #hostSequence = 0;
   #events: HostEvent[] = [];
@@ -49,12 +51,13 @@ export class AgentWorker extends EventEmitter {
   #closed = false;
 
   constructor(workspaceRoot: string, sessionPath: string, repositoryRoot: string,
-    daemonEnvironment: DaemonEnvironment = {}) {
+    daemonEnvironment: DaemonEnvironment = {}, presetId?: string) {
     super();
     this.workspaceRoot = workspaceRoot;
     this.sessionPath = sessionPath;
     this.repositoryRoot = repositoryRoot;
     this.daemonEnvironment = daemonEnvironment;
+    this.presetId = presetId;
   }
 
   async start(): Promise<WorkerMessage> {
@@ -68,6 +71,12 @@ export class AgentWorker extends EventEmitter {
     timeoutMs = 30_000): Promise<unknown> {
     await this.start();
     return this.request(method, params, timeoutMs, this.#agentId);
+  }
+
+  async callDaemon(method: string, params: Record<string, unknown> = {},
+    timeoutMs = 10_000): Promise<unknown> {
+    await this.connect();
+    return this.request(method, params, timeoutMs, null);
   }
 
   eventsAfter(sequence = 0): HostEvent[] {
@@ -87,28 +96,21 @@ export class AgentWorker extends EventEmitter {
   async close(): Promise<void> {
     this.#closed = true;
     if (!this.#socket) return;
-    try {
-      await this.request("agent.detach", {}, 1_500, this.#agentId);
-    } catch {
-      // Socket EOF has the same detach semantics.
+    if (this.#agentId) {
+      try {
+        await this.request("agent.detach", {}, 1_500, this.#agentId);
+      } catch {
+        // Socket EOF has the same detach semantics.
+      }
     }
     this.#socket.destroy();
     this.#socket = null;
+    this.#connected = null;
     this.#ready = null;
   }
 
   private async initialize(): Promise<WorkerMessage> {
-    this.#socket = await this.connectOrLaunch();
-    this.#socket.setEncoding("utf8");
-    const lines = createInterface({ input: this.#socket, crlfDelay: Infinity });
-    lines.on("line", (line) => this.handleLine(line));
-    this.#socket.on("error", (error) => this.fail(error));
-    this.#socket.on("close", () => {
-      this.fail(new Error("DAO daemon connection closed"));
-      if (!this.#closed) this.emit("exit", { code: null, signal: null });
-    });
-
-    await this.request("daemon.hello", {}, 10_000, null);
+    await this.connect();
     const agents = await this.request("agent.list", {}, 10_000, null) as Array<{
       agent_id?: string;
       session_path?: string;
@@ -123,6 +125,7 @@ export class AgentWorker extends EventEmitter {
       const created = await this.request("agent.create", {
         workspace: this.workspaceRoot,
         session_path: this.sessionPath,
+        ...(this.presetId ? { preset_id: this.presetId } : {}),
       }, 30_000, null) as {
         agent?: { agent_id?: string };
         snapshot?: unknown;
@@ -143,6 +146,32 @@ export class AgentWorker extends EventEmitter {
       session_id: snapshot?.session_id,
       agent_id: this.#agentId,
     };
+  }
+
+  private async connect(): Promise<void> {
+    if (this.#connected) return this.#connected;
+    this.#connected = this.initializeConnection();
+    try {
+      await this.#connected;
+    } catch (error) {
+      this.#connected = null;
+      throw error;
+    }
+  }
+
+  private async initializeConnection(): Promise<void> {
+    this.#socket = await this.connectOrLaunch();
+    this.#socket.setEncoding("utf8");
+    const lines = createInterface({ input: this.#socket, crlfDelay: Infinity });
+    lines.on("line", (line) => this.handleLine(line));
+    this.#socket.on("error", (error) => this.fail(error));
+    this.#socket.on("close", () => {
+      this.fail(new Error("DAO daemon connection closed"));
+      this.#connected = null;
+      if (!this.#closed) this.emit("exit", { code: null, signal: null });
+    });
+
+    await this.request("daemon.hello", {}, 10_000, null);
   }
 
   private request(method: string, params: Record<string, unknown>, timeoutMs: number,

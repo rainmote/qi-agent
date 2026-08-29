@@ -499,6 +499,10 @@
               :model (:model config)
               :context-window (:context-window config)
               :thinking-levels [:low :medium :high]
+              :default-thinking-level
+              (or (:default-thinking-level config)
+                  (some-> (get-in config [:extra-body :reasoning :effort])
+                          keyword))
               :input-modalities (or (:input-modalities config)
                                     #{:text :image})
               :experimental true

@@ -6,6 +6,10 @@
             [agent.api :as api]
             [agent.kernel :as kernel]
             [agent.plugin :as plugin]
+            [agent.presets-test]
+            [agent.runtime-inspect-test]
+            [agent.runtime-lab-test]
+            [agent.session-title-test]
             [agent.protocol :as protocol]
             [agent.sandbox :as sandbox]
             [agent.ui :as ui]
@@ -57,12 +61,15 @@
         prune-build-stage! (var-get (ns-resolve 'agent.install
                                                 'prune-build-stage!))]
     (try
-      (doseq [directory ["src/agent" "plugins/example" "apps/tui-rs/src"
+      (doseq [directory ["src/agent" "plugins/example" "presets/standard"
+                         "apps/tui-rs/src"
                          "apps/tui-rs/target/debug" "apps/web/src"]]
         (.mkdirs (io/file source directory)))
       (doseq [[path value]
               [["src/agent/cli.clj" "runtime"]
                ["plugins/example/tool.clj" "plugin"]
+               ["presets/standard/preset.edn" "{:name \"Standard\"}"]
+               ["presets/standard/agent.edn" "{:plugins []}"]
                ["apps/tui-rs/src/main.rs" "fn main() {}"]
                ["apps/tui-rs/Cargo.toml" "[package]"]
                ["apps/tui-rs/Cargo.lock" "# lock"]
@@ -73,6 +80,7 @@
         (spit (io/file source path) value))
       (copy-source! source stage)
       (is (.isFile (io/file stage "src/agent/cli.clj")))
+      (is (.isFile (io/file stage "presets/standard/agent.edn")))
       (is (.isFile (io/file stage "apps/tui-rs/src/main.rs")))
       (is (not (.exists (io/file stage "apps/tui-rs/target"))))
       (is (not (.exists (io/file stage "apps/web"))))
@@ -1223,6 +1231,41 @@
                    (get-in body [:messages 1 :content 1 :image_url :url])))
             (is (= "auto" (:tool_choice body)))
             (is (true? (:stream body))))
+          (finally
+            (kernel/dispose-all! ctx)))))))
+
+(deftest openai-compatible-stream-preserves-whitespace-deltas
+  (let [stream-events (atom [])
+        chunks ["##" " " "标题" "\n\n" "|问题|说明|" "\n"
+                "|---|---|" "\n" "|空格|换行|"]
+        body (str (apply str
+                         (for [content chunks]
+                           (str "data: "
+                                (json/generate-string
+                                 {:choices [{:delta {:content content}}]})
+                                "\n\n")))
+                  "data: "
+                  (json/generate-string
+                   {:choices [{:delta {} :finish_reason "stop"}]})
+                  "\n\n")]
+    (with-redefs [http/post (fn [_ _] {:status 200 :body body})]
+      (let [ctx (plugin/boot!
+                 {:plugins
+                  [{:ns 'agent.plugins.openai
+                    :config {:base-url "https://llm.example/v1"
+                             :model "demo-model"
+                             :api-key "test-key"}}]})]
+        (try
+          (kernel/on! (kernel/plugin-context ctx :test/openai-whitespace)
+                      :llm/stream
+                      (fn [_ event] (swap! stream-events conj event)))
+          (let [response ((kernel/require-service ctx :llm/generate)
+                          {:messages [{:role "user" :content "hello"}]})]
+            (is (= (apply str chunks) (get-in response [:message :content])))
+            (is (= chunks
+                   (->> @stream-events
+                        (filter #(= :text/delta (:type %)))
+                        (mapv :delta)))))
           (finally
             (kernel/dispose-all! ctx)))))))
 
@@ -3343,6 +3386,68 @@
         (dispose-a))
       (finally (kernel/dispose-all! ctx)))))
 
+(deftest model-registry-applies-selectable-thinking-levels
+  (let [requests (atom [])
+        ctx (plugin/boot! {:plugins [{:ns 'agent.plugins.model-registry}]})]
+    (try
+      (let [registry (kernel/require-service ctx :llm/registry)]
+        ((:register! registry)
+         {:id :deepseek
+          :provider :openai-compatible
+          :model "deepseek-v4-flash"
+          :thinking-levels [:off :low :high :max]
+          :default-thinking-level :off
+          :generate (fn [request]
+                      (swap! requests conj request)
+                      {:message {:content "ok"}})})
+        (is (= :off (:thinking-level ((:current registry)))))
+        (is (nil? (:generate (first ((:providers registry))))))
+        ((:generate registry) {:options {}})
+        (is (= {:thinking {:type "disabled"}}
+               (:options (last @requests))))
+        ((:select-thinking! registry) "high")
+        ((:generate registry) {:options {:temperature 0}})
+        (is (= {:thinking {:type "enabled"}
+                :reasoning_effort "high"
+                :temperature 0}
+               (:options (last @requests))))
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                              #"not supported"
+                              ((:select-thinking! registry) :ultra))))
+      (finally (kernel/dispose-all! ctx)))))
+
+(deftest remote-context-status-estimates-model-visible-budget
+  (let [ctx (plugin/boot!
+             {:plugins
+              [{:ns 'agent.plugins.session}
+               {:ns 'agent.plugins.model-registry}
+               {:ns 'agent.plugins.context-manager
+                :config {:context-window 10000 :reserve-tokens 100
+                         :chars-per-token 4.0}}]})]
+    (try
+      (let [store (kernel/require-service ctx :session/store)
+            registry (kernel/require-service ctx :llm/registry)
+            status! (deref (ns-resolve 'agent.plugins.remote-api
+                                       'context-status))]
+        ((:register! registry)
+         {:id :large-context
+          :context-window 1000000
+          :generate (fn [_] {:message {:content "ok"}})})
+        ((:append! store) "context/snapshot"
+         {:content "You are a careful coding agent."})
+        ((:append! store) "message"
+         {:message {:role "user" :content "Inspect the project."}})
+        (let [status (status! ctx)]
+          (is (= 1000000 (:context_window status)))
+          (is (pos? (:system_tokens status)))
+          (is (pos? (:message_tokens status)))
+          (is (= (+ (:system_tokens status)
+                    (:tool_tokens status)
+                    (:message_tokens status))
+                 (:used_tokens status)))
+          (is (<= 0 (:percent status) 100))))
+      (finally (kernel/dispose-all! ctx)))))
+
 (deftest web-provider-settings-reload-models-and-credentials-at-runtime
   (let [directory (.toFile (java.nio.file.Files/createTempDirectory
                             "dao-provider-settings-"
@@ -3358,7 +3463,9 @@
          :protocol "openai-completions"
          :baseUrl "https://gateway.example/v1"
          :apiKey "acme-secret"
-         :models [{:id "acme-chat" :name "Acme Chat" :contextWindow 32000}
+         :models [{:id "acme-chat" :name "Acme Chat" :contextWindow 32000
+                   :thinkingLevels ["off" "low" "high"]
+                   :defaultThinkingLevel "off"}
                   {:id "acme-reason" :name "Acme Reason"}]}])
       (let [ctx (plugin/boot!
                  {:plugins
@@ -3372,6 +3479,7 @@
                 settings-service (kernel/require-service ctx :provider/settings)]
             (is (= #{:acme :acme--2} (set (map :id ((:providers registry))))))
             (is (= "Acme Chat" (:display-name ((:current registry)))))
+            (is (= :off (:thinking-level ((:current registry)))))
             (is (= {:api-key "acme-secret"} ((:resolve! auth) :acme)))
             ((:select! registry) :acme--2)
             (write-settings!
@@ -3766,6 +3874,8 @@
 
 (defn -main []
   (let [{:keys [fail error]}
-        (run-tests 'agent.test-runner 'agent.web-test)]
+        (run-tests 'agent.test-runner 'agent.web-test 'agent.presets-test
+                   'agent.runtime-inspect-test 'agent.runtime-lab-test
+                   'agent.session-title-test)]
     (when (pos? (+ fail error))
       (throw (ex-info "Tests failed" {:fail fail :error error})))))

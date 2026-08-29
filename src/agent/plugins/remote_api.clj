@@ -64,6 +64,43 @@
      :activity (if (= :idle (:phase ((:state session)))) :idle :working)
      :last_activity_at_ms (session-last-activity-ms store events)}))
 
+(defn- latest-system-prompt [events]
+  (some (fn [event]
+          (when (contains? #{"context/snapshot" :context/snapshot}
+                           (:type event))
+            (get-in event [:data :content])))
+        (reverse events)))
+
+(defn- context-status [ctx]
+  (when-let [manager (kernel/service ctx :context/manager)]
+    (let [store (kernel/require-service ctx :session/store)
+          models (kernel/service ctx :llm/registry)
+          events ((:events store))
+          messages ((:messages store))
+          system-prompt (latest-system-prompt events)
+          tools (kernel/tool-schemas ctx)
+          estimate! (:estimate! manager)
+          system-tokens (if (seq system-prompt)
+                          (estimate! system-prompt)
+                          0)
+          tool-tokens (if (seq tools) (estimate! tools) 0)
+          message-tokens (if (seq messages) (estimate! messages) 0)
+          used-tokens (+ system-tokens tool-tokens message-tokens)
+          context-window (or (when models
+                               (some-> ((:current models)) :context-window))
+                             (:context-window manager))
+          percent (if (and (number? context-window) (pos? context-window))
+                    (min 100 (long (Math/round
+                                    (* 100.0 (/ used-tokens
+                                                (double context-window))))))
+                    0)]
+      {:used_tokens used-tokens
+       :context_window context-window
+       :percent percent
+       :system_tokens system-tokens
+       :tool_tokens tool-tokens
+       :message_tokens message-tokens})))
+
 (defn- session-snapshot [ctx]
   (let [store (kernel/require-service ctx :session/store)
         session (kernel/require-service ctx :agent/session)
@@ -81,6 +118,7 @@
      :models (when models
                {:current (public-provider ((:current models)))
                 :providers ((:providers models))})
+     :context (context-status ctx)
      :interactions (if interactions ((:pending interactions)) [])
      :policy (when approval-policy ((:status approval-policy)))
      :children (if subagents ((:jobs subagents)) [])
@@ -224,6 +262,19 @@
                   (public-provider
                    ((:select! (kernel/require-service ctx :llm/registry))
                     (keyword provider)))))
+       (method! "model.thinking.select"
+                "Select the reasoning effort used by future turns."
+                (object-params {"level" {:type "string" :minLength 1}}
+                               "level")
+                {:type "object"}
+                (fn [{:keys [level]}]
+                  (public-provider
+                   ((:select-thinking!
+                     (kernel/require-service ctx :llm/registry))
+                    (keyword level)))))
+       (method! "context.status" "Estimate current model context usage."
+                empty-params {:type "object"}
+                (fn [_] (or (context-status ctx) {})))
        (method! "provider.settings.reload"
                 "Reload persistent provider settings into this agent."
                 empty-params {:type "object"}

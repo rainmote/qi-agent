@@ -623,6 +623,7 @@ fn entrypoint() -> Result<()> {
     let args: Vec<String> = env::args().skip(1).collect();
     let repository_root = option_path(&args, "--repository-root");
     let config_path = option_path(&args, "--config");
+    let preset_id = value_after(&args, "--preset");
     let repl_backend = value_after(&args, "--repl-backend");
     let terminal_mode = if args
         .iter()
@@ -681,9 +682,27 @@ fn entrypoint() -> Result<()> {
                 repository_root.as_deref(),
                 config_path.as_deref(),
                 None,
+                None,
             )?;
             let result = attached.connection.call("agent.stop", json!({}))?;
             print_json(&result)
+        }
+        Some("new") => {
+            let selected = match preset_id {
+                Some(value) => value.to_owned(),
+                None => {
+                    choose_preset_interactive(repository_root.as_deref(), config_path.as_deref())?
+                }
+            };
+            run_tui(
+                client::create_and_attach(
+                    repository_root.as_deref(),
+                    config_path.as_deref(),
+                    &selected,
+                    repl_backend,
+                )?,
+                terminal_mode,
+            )
         }
         Some("run") => {
             let prompt = value_after(tail, "--detach")
@@ -694,6 +713,7 @@ fn entrypoint() -> Result<()> {
                 requested_agent,
                 repository_root.as_deref(),
                 config_path.as_deref(),
+                preset_id,
                 repl_backend,
             )?;
             let result = attached
@@ -718,6 +738,7 @@ fn entrypoint() -> Result<()> {
                     repository_root.as_deref(),
                     config_path.as_deref(),
                     None,
+                    None,
                 )?,
                 terminal_mode,
             )
@@ -733,6 +754,7 @@ fn entrypoint() -> Result<()> {
                 None,
                 repository_root.as_deref(),
                 config_path.as_deref(),
+                preset_id,
                 repl_backend,
             )?,
             terminal_mode,
@@ -745,7 +767,7 @@ fn command_and_tail(args: &[String]) -> (Option<&str>, &[String]) {
     while index < args.len() {
         if matches!(
             args[index].as_str(),
-            "--config" | "--repository-root" | "--repl-backend"
+            "--config" | "--preset" | "--repository-root" | "--repl-backend"
         ) {
             index += 2;
             continue;
@@ -765,9 +787,68 @@ fn command_and_tail(args: &[String]) -> (Option<&str>, &[String]) {
     (None, &[])
 }
 
+fn choose_preset_interactive(
+    repository_root: Option<&Path>,
+    config_path: Option<&Path>,
+) -> Result<String> {
+    let presets = client::list_presets(repository_root, config_path)?;
+    let mut tty = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/tty")
+        .context("dao new requires a terminal; pass --preset ID for automation")?;
+    writeln!(tty, "选择新会话的 Agent 模式：")?;
+    for (index, preset) in presets.iter().enumerate() {
+        let state = if preset.broken { " [不可用]" } else { "" };
+        writeln!(
+            tty,
+            "  {}. {} ({}){}",
+            index + 1,
+            preset.name,
+            preset.id,
+            state,
+        )?;
+        if let Some(description) = preset.description.as_deref() {
+            writeln!(tty, "     {description}")?;
+        }
+    }
+    write!(tty, "请选择编号 [默认 standard]: ")?;
+    tty.flush()?;
+    let mut input = String::new();
+    BufReader::new(tty.try_clone()?).read_line(&mut input)?;
+    let choices = presets
+        .iter()
+        .map(|preset| (preset.id.clone(), preset.broken))
+        .collect::<Vec<_>>();
+    select_preset_id(&choices, &input)
+}
+
+fn select_preset_id(presets: &[(String, bool)], input: &str) -> Result<String> {
+    if input.trim().is_empty() {
+        return presets
+            .iter()
+            .find(|(id, broken)| id == "standard" && !broken)
+            .or_else(|| presets.iter().find(|(_, broken)| !broken))
+            .map(|(id, _)| id.clone())
+            .context("no usable presets are available");
+    }
+    let index = input
+        .trim()
+        .parse::<usize>()
+        .context("preset selection must be a number")?;
+    let (id, broken) = presets
+        .get(index.saturating_sub(1))
+        .with_context(|| format!("preset selection is out of range: {index}"))?;
+    if *broken {
+        bail!("the selected preset is broken")
+    }
+    Ok(id.clone())
+}
+
 const USAGE: &str = "Daemon-backed Clojure agent runtime
 
   dao                              attach/create and open the Rust TUI
+  dao new [--preset ID]            choose a mode and create a distinct Agent/Session
   dao agents                       list saved and resident agents
   dao attach AGENT_ID              attach the TUI to an agent
   dao run --detach PROMPT          submit background work and return
@@ -784,7 +865,8 @@ const USAGE: &str = "Daemon-backed Clojure agent runtime
   dao daemon serve                 run the supervisor in the foreground
 
 Options:
-  --config PATH                    worker profile (default: agent.edn)
+  --config PATH                    trusted daemon default profile (default: agent.edn)
+  --preset ID                      registered Preset for a newly created Agent
   --native-scrollback              use terminal scrollback instead of virtual history
   --repl-backend BACKEND           babashka (default) or jvm-clojure
   --repository-root PATH           dao runtime source root";
@@ -807,7 +889,7 @@ fn run_repl(
     config_path: Option<&Path>,
 ) -> Result<()> {
     let mut attached =
-        client::attach_or_create(Some(agent_id), repository_root, config_path, None)?;
+        client::attach_or_create(Some(agent_id), repository_root, config_path, None, None)?;
     println!("Clojure REPL for {agent_id}. Ctrl-D exits without stopping the agent.");
     let stdin = io::stdin();
     loop {
@@ -858,7 +940,7 @@ fn positional(args: &[String], index: usize) -> Option<&str> {
             }
             if matches!(
                 argument.as_str(),
-                "--config" | "--repository-root" | "--repl-backend" | "--agent"
+                "--config" | "--preset" | "--repository-root" | "--repl-backend" | "--agent"
             ) {
                 skip_next = true;
                 return false;
@@ -918,6 +1000,38 @@ mod tests {
             value_after(&values, "--config"),
             Some("/workspace/jvm-clojure.edn")
         );
+    }
+
+    #[test]
+    fn preset_is_a_global_agent_creation_option() {
+        let values = args(&[
+            "--repository-root",
+            "/installed/dao",
+            "--config",
+            "/installed/dao/agent.edn",
+            "--preset",
+            "standard",
+            "run",
+            "--detach",
+            "hello",
+        ]);
+        let (command, tail) = command_and_tail(&values);
+        assert_eq!(command, Some("run"));
+        assert_eq!(value_after(&values, "--preset"), Some("standard"));
+        assert_eq!(value_after(tail, "--detach"), Some("hello"));
+    }
+
+    #[test]
+    fn new_session_preset_selection_defaults_to_standard_and_rejects_broken_modes() {
+        let presets = vec![
+            ("standard".to_owned(), false),
+            ("creator".to_owned(), false),
+            ("broken".to_owned(), true),
+        ];
+        assert_eq!(select_preset_id(&presets, "").unwrap(), "standard");
+        assert_eq!(select_preset_id(&presets, "2").unwrap(), "creator");
+        assert!(select_preset_id(&presets, "3").is_err());
+        assert!(select_preset_id(&presets, "9").is_err());
     }
 
     #[test]

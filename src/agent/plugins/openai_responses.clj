@@ -338,6 +338,9 @@
      :settings-provider-id (:settings-provider-id config)
      :context-window (:context-window config)
      :thinking-levels (or (:thinking-levels config) [:low :medium :high])
+     :default-thinking-level
+     (or (:default-thinking-level config)
+         (some-> (get-in config [:extra-body :reasoning :effort]) keyword))
      :input-modalities (or (:input-modalities config) #{:text :image})
      :generate (partial generate ctx (assoc config :base-url base-url))}))
 

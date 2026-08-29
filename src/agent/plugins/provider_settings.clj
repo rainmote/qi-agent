@@ -46,6 +46,10 @@
                 :model (:id model)
                 :display-name (or (:name model) (:id model))
                 :context-window (:contextWindow model)
+                :thinking-levels (some->> (:thinkingLevels model)
+                                          (mapv keyword))
+                :default-thinking-level
+                (some-> (:defaultThinkingLevel model) keyword)
                 :timeout-ms 180000}]
     (case (:protocol provider)
       "openai-completions" (openai/provider-entry ctx config)

@@ -11,9 +11,11 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
+    fmt,
     fs::{self, OpenOptions},
     io::{BufRead, BufReader, BufWriter, Write},
     os::unix::{
+        fs::OpenOptionsExt,
         net::{UnixListener, UnixStream},
         process::CommandExt,
     },
@@ -34,7 +36,7 @@ const ATTACHMENT_QUEUE_LIMIT: usize = 256;
 const SNAPSHOT_INLINE_LIMIT: usize = 256 * 1024;
 const SNAPSHOT_CHUNK_CHARS: usize = 64 * 1024;
 const WORKER_RPC_TIMEOUT: Duration = Duration::from_secs(60);
-const SCHEMA_REVISION: i64 = 3;
+const SCHEMA_REVISION: i64 = 4;
 const DEFAULT_LOG_MAX_BYTES: u64 = 10 * 1024 * 1024;
 const DEFAULT_LOG_BACKUPS: usize = 3;
 const DEFAULT_MAX_WORKER_LOGS: usize = 100;
@@ -49,6 +51,7 @@ struct AgentRecord {
     session_id: Option<String>,
     session_path: PathBuf,
     worker_id: String,
+    preset_id: Option<String>,
     name: Option<String>,
     status: String,
     controller_client_id: Option<String>,
@@ -56,6 +59,27 @@ struct AgentRecord {
     lifecycle: String,
     last_activity_at_ms: Option<u128>,
     inactive_reason: Option<String>,
+}
+
+#[derive(Debug)]
+struct PublicApiError {
+    code: String,
+    message: String,
+}
+
+impl fmt::Display for PublicApiError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for PublicApiError {}
+
+fn api_error(code: impl Into<String>, message: impl Into<String>) -> anyhow::Error {
+    anyhow::Error::new(PublicApiError {
+        code: code.into(),
+        message: message.into(),
+    })
 }
 
 struct WorkerConnection {
@@ -327,6 +351,7 @@ impl Database {
               session_id TEXT,
               session_path TEXT NOT NULL UNIQUE,
               worker_id TEXT NOT NULL UNIQUE,
+              preset_id TEXT,
               name TEXT,
               status TEXT NOT NULL,
               controller_client_id TEXT,
@@ -422,6 +447,12 @@ impl Database {
             ensure_column(
                 &connection,
                 "agents",
+                "preset_id",
+                "ALTER TABLE agents ADD COLUMN preset_id TEXT",
+            )?;
+            ensure_column(
+                &connection,
+                "agents",
                 "lifecycle",
                 "ALTER TABLE agents ADD COLUMN lifecycle TEXT NOT NULL DEFAULT 'draft'",
             )?;
@@ -496,12 +527,13 @@ impl Database {
         self.connection()?.execute(
             "INSERT INTO agents
              (agent_id, root_agent_id, workspace_id, workspace_path, session_id,
-              session_path, worker_id, name, status, controller_client_id,
+              session_path, worker_id, preset_id, name, status, controller_client_id,
               created_at_ms, updated_at_ms, lifecycle, last_activity_at_ms,
               inactive_reason)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)
              ON CONFLICT(agent_id) DO UPDATE SET
               session_id=excluded.session_id, status=excluded.status,
+              preset_id=excluded.preset_id,
               controller_client_id=excluded.controller_client_id,
               lifecycle=excluded.lifecycle,
               last_activity_at_ms=excluded.last_activity_at_ms,
@@ -515,6 +547,7 @@ impl Database {
                 agent.session_id,
                 agent.session_path.to_string_lossy(),
                 agent.worker_id,
+                agent.preset_id,
                 agent.name,
                 agent.status,
                 agent.controller_client_id,
@@ -566,7 +599,7 @@ impl Database {
         let connection = self.connection()?;
         let mut statement = connection.prepare(
             "SELECT agent_id,root_agent_id,workspace_id,workspace_path,session_id,
-             session_path,worker_id,name,status,controller_client_id,created_at_ms,
+             session_path,worker_id,preset_id,name,status,controller_client_id,created_at_ms,
              lifecycle,last_activity_at_ms,inactive_reason
              FROM agents ORDER BY created_at_ms DESC",
         )?;
@@ -579,15 +612,16 @@ impl Database {
                 session_id: row.get(4)?,
                 session_path: PathBuf::from(row.get::<_, String>(5)?),
                 worker_id: row.get(6)?,
-                name: row.get(7)?,
-                status: row.get(8)?,
-                controller_client_id: row.get(9)?,
-                created_at_ms: row.get::<_, i64>(10)?.max(0) as u128,
-                lifecycle: row.get(11)?,
+                preset_id: row.get(7)?,
+                name: row.get(8)?,
+                status: row.get(9)?,
+                controller_client_id: row.get(10)?,
+                created_at_ms: row.get::<_, i64>(11)?.max(0) as u128,
+                lifecycle: row.get(12)?,
                 last_activity_at_ms: row
-                    .get::<_, Option<i64>>(12)?
+                    .get::<_, Option<i64>>(13)?
                     .map(|value| value.max(0) as u128),
-                inactive_reason: row.get(13)?,
+                inactive_reason: row.get(14)?,
             })
         })?;
         Ok(rows.filter_map(Result::ok).collect())
@@ -1406,6 +1440,130 @@ pub fn serve(repository_root: Option<&Path>, config_path: Option<&Path>) -> Resu
 }
 
 impl Runtime {
+    fn list_presets(&self) -> Result<Value> {
+        let expression = r#"
+(require '[agent.presets :as presets]
+         '[cheshire.core :as json]
+         '[clojure.java.io :as io])
+(let [root (System/getenv "DAO_REPOSITORY_ROOT")
+      registry (presets/create-registry
+                {:system-roots [(str (io/file root "presets"))]
+                 :user-root (or (System/getenv "DAO_PRESET_USER_ROOT")
+                                (str (io/file (System/getProperty "user.home")
+                                              ".dao" "agent-presets")))})
+      public-preset (fn [preset]
+                      (cond-> (select-keys preset [:id :name :description :order :trust])
+                        (:broken preset) (assoc :broken true)))]
+  (print (json/generate-string
+          (mapv public-preset (presets/list-presets registry)))))
+"#;
+        let output = Command::new("bb")
+            .arg("-cp")
+            .arg(self.repository_root.join("src"))
+            .arg("-e")
+            .arg(expression)
+            .current_dir(&self.repository_root)
+            .env("DAO_REPOSITORY_ROOT", &self.repository_root)
+            .output()
+            .context("could not invoke the Preset registry")?;
+        if !output.status.success() {
+            let detail = String::from_utf8_lossy(&output.stderr);
+            return Err(api_error(
+                "preset_registry_unavailable",
+                format!("Presets could not be listed: {}", detail.trim()),
+            ));
+        }
+        serde_json::from_slice(&output.stdout)
+            .context("Preset registry returned an invalid list response")
+    }
+
+    fn materialize_preset_config(&self, preset_id: &str, worker_id: &str) -> Result<PathBuf> {
+        if preset_id.len() > 128 || !valid_preset_id(preset_id) {
+            return Err(api_error(
+                "invalid_preset_id",
+                format!("invalid preset_id: {preset_id}"),
+            ));
+        }
+        let expression = r#"
+(require '[agent.presets :as presets]
+         '[cheshire.core :as json]
+         '[clojure.java.io :as io])
+(let [root (System/getenv "DAO_REPOSITORY_ROOT")
+      registry (presets/create-registry
+                {:system-roots [(str (io/file root "presets"))]
+                 :user-root (or (System/getenv "DAO_PRESET_USER_ROOT")
+                                (str (io/file (System/getProperty "user.home")
+                                              ".dao" "agent-presets")))})]
+  (print
+   (json/generate-string
+    (try
+      {:ok true
+       :result (presets/materialize-preset registry
+                                           (System/getenv "DAO_PRESET_ID"))}
+      (catch Throwable error
+        {:ok false
+         :error {:type (some-> (ex-data error) :type name)
+                 :message (ex-message error)}})))))
+"#;
+        let output = Command::new("bb")
+            .arg("-cp")
+            .arg(self.repository_root.join("src"))
+            .arg("-e")
+            .arg(expression)
+            .current_dir(&self.repository_root)
+            .env("DAO_REPOSITORY_ROOT", &self.repository_root)
+            .env("DAO_PRESET_ID", preset_id)
+            .output()
+            .context("could not invoke the Preset registry")?;
+        if !output.status.success() {
+            let detail = String::from_utf8_lossy(&output.stderr);
+            return Err(api_error(
+                "preset_registry_unavailable",
+                format!("preset_id could not be resolved: {}", detail.trim()),
+            ));
+        }
+        let response: Value = serde_json::from_slice(&output.stdout)
+            .context("Preset registry returned an invalid materialization response")?;
+        if response.get("ok").and_then(Value::as_bool) != Some(true) {
+            let error = response.get("error").unwrap_or(&Value::Null);
+            let code = error
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or("preset_resolution_failed")
+                .replace('-', "_");
+            let message = error
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Preset registry rejected the requested preset");
+            return Err(api_error(code, message));
+        }
+        let materialized = response.get("result").unwrap_or(&Value::Null);
+        let config = materialized
+            .get("config")
+            .and_then(Value::as_str)
+            .context("Preset registry did not return a config snapshot")?;
+        if config.len() > 1_048_576 {
+            return Err(api_error(
+                "preset_config_too_large",
+                "materialized Preset config is too large",
+            ));
+        }
+        let snapshot = self
+            .paths
+            .workers_dir
+            .join(format!("{worker_id}.agent.edn"));
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(&snapshot)
+            .with_context(|| format!("could not create Preset snapshot {}", snapshot.display()))?;
+        file.write_all(config.as_bytes())?;
+        file.flush()?;
+        set_owner_only_file(&snapshot)?;
+        canonical(snapshot)
+    }
+
     fn restore_agents(&self) -> Result<()> {
         let values = self.database.load_agents()?;
         let mut agents = self.agents.lock().expect("agents mutex poisoned");
@@ -1566,19 +1724,25 @@ impl Runtime {
             .map(PathBuf::from)
             .unwrap_or(std::env::current_dir()?);
         let workspace_path = canonical(workspace_value)?;
-        let config_path = parameters
+        if parameters
             .get("config_path")
-            .and_then(Value::as_str)
-            .map(PathBuf::from)
-            .map(|path| {
-                if path.is_absolute() {
-                    canonical(path)
-                } else {
-                    canonical(workspace_path.join(path))
-                }
-            })
-            .transpose()?
-            .unwrap_or_else(|| self.config_path.clone());
+            .is_some_and(|value| !value.is_null())
+        {
+            return Err(api_error(
+                "config_path_not_allowed",
+                "agent.create does not accept config_path; use preset_id",
+            ));
+        }
+        let preset_id = match parameters.get("preset_id") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(id)) => Some(id.clone()),
+            Some(_) => {
+                return Err(api_error(
+                    "invalid_preset_id_type",
+                    "preset_id must be a string",
+                ));
+            }
+        };
         let repl_backend = parameters
             .get("repl_backend")
             .and_then(Value::as_str)
@@ -1614,6 +1778,12 @@ impl Runtime {
         if let Some(parent) = session_path.parent() {
             fs::create_dir_all(parent)?;
         }
+        let config_path = preset_id
+            .as_deref()
+            .map(|id| self.materialize_preset_config(id, &worker_id))
+            .transpose()?
+            .unwrap_or_else(|| self.config_path.clone());
+        let preset_snapshot = preset_id.as_ref().map(|_| config_path.clone());
         let token = format!("{}{}", Uuid::new_v4(), Uuid::new_v4());
         let mut descriptor = WorkerDescriptor::new(
             &self.paths,
@@ -1626,9 +1796,15 @@ impl Runtime {
             config_path,
             token,
         );
+        descriptor.preset_id = preset_id.clone();
         descriptor.repl_backend = repl_backend;
         let descriptor_path = self.paths.worker_descriptor(&worker_id);
-        write_descriptor(&descriptor_path, &descriptor)?;
+        if let Err(error) = write_descriptor(&descriptor_path, &descriptor) {
+            if let Some(path) = &preset_snapshot {
+                let _ = fs::remove_file(path);
+            }
+            return Err(error);
+        }
         let agent = AgentRecord {
             agent_id: agent_id.clone(),
             root_agent_id: agent_id.clone(),
@@ -1637,6 +1813,7 @@ impl Runtime {
             session_id: None,
             session_path,
             worker_id: worker_id.clone(),
+            preset_id,
             name: parameters
                 .get("name")
                 .and_then(Value::as_str)
@@ -1650,6 +1827,9 @@ impl Runtime {
         };
         if let Err(error) = self.database.upsert_agent(&agent) {
             let _ = fs::remove_file(&descriptor_path);
+            if let Some(path) = &preset_snapshot {
+                let _ = fs::remove_file(path);
+            }
             return Err(error);
         }
         self.agents
@@ -1679,6 +1859,9 @@ impl Runtime {
                     .database
                     .remove_failed_agent_start(&agent_id, &worker_id);
                 terminate_failed_worker_start(&descriptor_path, true, spawned_pid);
+                if let Some(path) = &preset_snapshot {
+                    let _ = fs::remove_file(path);
+                }
                 return Err(error).context("could not start resident worker");
             }
         };
@@ -1768,7 +1951,18 @@ impl Runtime {
 
     fn list_agents(&self) -> Vec<Value> {
         let agents = self.agents.lock().expect("agents mutex poisoned");
-        let mut values: Vec<_> = agents.values().map(public_agent_value).collect();
+        let mut values: Vec<_> = agents
+            .values()
+            .map(|agent| {
+                let mut value = public_agent_value(agent);
+                if let Ok(descriptor) =
+                    read_descriptor(&self.paths.worker_descriptor(&agent.worker_id))
+                {
+                    decorate_public_agent_descriptor(&mut value, &descriptor);
+                }
+                value
+            })
+            .collect();
         drop(agents);
         let workers: Vec<_> = self
             .workers
@@ -2851,8 +3045,11 @@ fn handle_client(runtime: Arc<Runtime>, stream: UnixStream) -> Result<()> {
             Err(error) => {
                 let uncertain =
                     wire::mutation(&command.method) && uncertain_worker_failure(&error.to_string());
+                let public_error = error.downcast_ref::<PublicApiError>();
                 let error_data = if uncertain {
                     json!({"status": "uncertain"})
+                } else if let Some(public) = public_error {
+                    json!({"type": public.code})
                 } else {
                     Value::Null
                 };
@@ -2904,12 +3101,14 @@ fn dispatch(
         "daemon.hello" => Ok(json!({
             "protocol_version": PROTOCOL_VERSION,
             "daemon_version": env!("CARGO_PKG_VERSION"),
+            "default_config_path": runtime.config_path,
             "capabilities": [
                 "agent.attach", "cursor.generation", "command.idempotency",
                 "controller.lease", "worker.adoption", "repl.v1",
                 "repl.backend-selection.v1", "schedule.v1", "goal.v1",
                 "durable.messaging.v1", "session.lifecycle.v1",
-                "worker.idle-eviction.v1", "database.backup.v1"
+                "worker.idle-eviction.v1", "database.backup.v1",
+                "agent.preset-selection.v1", "preset.discovery.v1"
             ]
         })),
         "daemon.status" => Ok(json!({
@@ -2948,6 +3147,7 @@ fn dispatch(
             }))
         }
         "daemon.shutdown" => Ok(json!({"shutting_down": true})),
+        "preset.list" => runtime.list_presets(),
         "agent.list" => Ok(Value::Array(runtime.list_agents())),
         "agent.create" => runtime.create_agent(&command.params),
         "agent.attach" => {
@@ -4037,6 +4237,12 @@ fn require_agent_id(command: &PublicCommand) -> Result<&str> {
         .context("agent_id is required")
 }
 
+fn valid_preset_id(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    matches!(bytes.next(), Some(b'a'..=b'z' | b'0'..=b'9'))
+        && bytes.all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'-'))
+}
+
 fn public_agent_value(agent: &AgentRecord) -> Value {
     let residency = match agent.status.as_str() {
         "inactive" => "inactive",
@@ -4051,6 +4257,7 @@ fn public_agent_value(agent: &AgentRecord) -> Value {
         "session_id": agent.session_id,
         "session_path": agent.session_path,
         "worker_id": agent.worker_id,
+        "preset_id": agent.preset_id,
         "name": agent.name,
         "status": agent.status,
         "lifecycle": agent.lifecycle,
@@ -4064,18 +4271,8 @@ fn public_agent_value(agent: &AgentRecord) -> Value {
 }
 
 fn decorate_public_agent_runtime(value: &mut Value, worker: &WorkerConnection) {
+    decorate_public_agent_descriptor(value, &worker.descriptor);
     if let Some(object) = value.as_object_mut() {
-        object.insert("config_path".into(), json!(worker.descriptor.config_path));
-        object.insert(
-            "repl_backend".into(),
-            json!(
-                worker
-                    .descriptor
-                    .repl_backend
-                    .as_deref()
-                    .unwrap_or("babashka")
-            ),
-        );
         object.insert(
             "generation".into(),
             json!(worker.generation.load(Ordering::SeqCst)),
@@ -4092,6 +4289,17 @@ fn decorate_public_agent_runtime(value: &mut Value, worker: &WorkerConnection) {
         );
         object.insert("residency".into(), json!("resident"));
         object.insert("inactive_reason".into(), Value::Null);
+    }
+}
+
+fn decorate_public_agent_descriptor(value: &mut Value, descriptor: &WorkerDescriptor) {
+    if let Some(object) = value.as_object_mut() {
+        object.insert("config_path".into(), json!(descriptor.config_path));
+        object.insert("preset_id".into(), json!(descriptor.preset_id));
+        object.insert(
+            "repl_backend".into(),
+            json!(descriptor.repl_backend.as_deref().unwrap_or("babashka")),
+        );
     }
 }
 
@@ -4411,6 +4619,7 @@ mod tests {
             session_path: PathBuf::from("/workspace/session.jsonl"),
             repository_root: PathBuf::from("/repo"),
             config_path: PathBuf::from("/repo/agent.edn"),
+            preset_id: None,
             repl_backend: None,
             socket_path: PathBuf::from("/tmp/worker.sock"),
             token: "secret".into(),
@@ -4538,6 +4747,7 @@ mod tests {
             session_path: PathBuf::from("/workspace/session.jsonl"),
             repository_root: PathBuf::from("/repo"),
             config_path: PathBuf::from("/repo/agent.edn"),
+            preset_id: None,
             repl_backend: None,
             socket_path: PathBuf::from("/tmp/worker.sock"),
             token: "secret".into(),

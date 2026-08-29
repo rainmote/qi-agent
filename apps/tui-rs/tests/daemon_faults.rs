@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use std::{
     fs,
     io::{BufRead, BufReader, BufWriter, Write},
-    os::unix::net::UnixStream,
+    os::unix::{fs::PermissionsExt, net::UnixStream},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{Mutex, MutexGuard},
@@ -145,49 +145,361 @@ impl Harness {
 
 impl Drop for Harness {
     fn drop(&mut self) {
-        if let Ok(mut connection) = TestClient::connect(&self.socket, "cleanup") {
-            let _ = connection.call(None, "daemon.shutdown", json!({}), Some("cleanup"));
+        if self.child.try_wait().ok().flatten().is_none()
+            && let Ok(mut stream) = UnixStream::connect(&self.socket)
+        {
+            let _ = serde_json::to_writer(
+                &mut stream,
+                &json!({
+                    "version": 1,
+                    "type": "command",
+                    "request_id": "cleanup-request",
+                    "client_id": "cleanup",
+                    "command_id": "cleanup",
+                    "agent_id": null,
+                    "method": "daemon.shutdown",
+                    "params": {}
+                }),
+            );
+            let _ = stream.write_all(b"\n");
+            let _ = stream.flush();
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
+            let mut response = String::new();
+            let _ = BufReader::new(stream).read_line(&mut response);
         }
-        let _ = self.child.wait();
+        let started = Instant::now();
+        loop {
+            match self.child.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) if started.elapsed() < Duration::from_secs(5) => {
+                    thread::sleep(Duration::from_millis(25));
+                }
+                Ok(None) => {
+                    let _ = self.child.kill();
+                    let _ = self.child.wait();
+                    break;
+                }
+                Err(_) => break,
+            }
+        }
         let _ = fs::remove_dir_all(&self.root);
     }
 }
 
 #[test]
-fn agent_create_can_select_a_config_independent_of_the_daemon_default() {
+fn preset_list_exposes_safe_display_metadata_for_mode_selection() {
     let harness = Harness::start();
-    let alternate_config = harness.repository.join("examples/daemon-goal-mock.edn");
-    let mut client = TestClient::connect(&harness.socket, "per-agent-config-client").unwrap();
+    let mut client = TestClient::connect(&harness.socket, "preset-list-client").unwrap();
+    let presets = client.call(None, "preset.list", json!({}), None).unwrap();
+    let presets = presets.as_array().unwrap();
+
+    assert_eq!(
+        presets
+            .iter()
+            .map(|preset| preset.get("id").and_then(Value::as_str).unwrap())
+            .collect::<Vec<_>>(),
+        vec!["standard", "creator"]
+    );
+    assert_eq!(
+        presets[0].get("name").and_then(Value::as_str),
+        Some("标准模式")
+    );
+    assert_eq!(
+        presets[1].get("name").and_then(Value::as_str),
+        Some("创造模式")
+    );
+    assert!(presets.iter().all(|preset| {
+        preset.get("description").and_then(Value::as_str).is_some()
+            && preset.get("trust").and_then(Value::as_str) == Some("system")
+            && preset.get("broken").is_none()
+            && preset.get("directory").is_none()
+            && preset.get("config_path").is_none()
+    }));
+}
+
+#[test]
+fn preset_list_marks_broken_user_entries_without_exposing_registry_details() {
+    let root = PathBuf::from("/tmp").join(format!(
+        "dao-preset-list-{}",
+        &Uuid::new_v4().simple().to_string()[..8]
+    ));
+    let broken = root.join("broken");
+    fs::create_dir_all(&broken).unwrap();
+    fs::write(broken.join("preset.edn"), "{:name \"Broken local mode\"}").unwrap();
+    fs::write(broken.join("agent.edn"), "{:plugins [").unwrap();
+
+    let harness = Harness::start_with_env(
+        "examples/tui-mock.edn",
+        &[("DAO_PRESET_USER_ROOT", root.to_str().unwrap())],
+    );
+    let mut client = TestClient::connect(&harness.socket, "broken-preset-list-client").unwrap();
+    let presets = client.call(None, "preset.list", json!({}), None).unwrap();
+    let entry = presets
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|preset| preset.get("id").and_then(Value::as_str) == Some("broken"))
+        .unwrap();
+    assert_eq!(entry.get("broken"), Some(&Value::Bool(true)));
+    assert!(entry.get("directory").is_none());
+    assert!(entry.get("config_path").is_none());
+    assert!(!entry.to_string().contains(root.to_string_lossy().as_ref()));
+
+    drop(client);
+    drop(harness);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn creator_and_standard_sessions_are_isolated_and_survive_restart() {
+    let mut harness = Harness::start();
+    let mut client = TestClient::connect(&harness.socket, "creator-isolation-client").unwrap();
+    let workspace = harness.workspace();
+    let standard = client
+        .call(
+            None,
+            "agent.create",
+            json!({"workspace": workspace, "preset_id": "standard"}),
+            Some("create-standard-profile"),
+        )
+        .unwrap();
+    let creator = client
+        .call(
+            None,
+            "agent.create",
+            json!({"workspace": workspace, "preset_id": "creator"}),
+            Some("create-creator-profile"),
+        )
+        .unwrap();
+
+    let standard_id = standard
+        .pointer("/agent/agent_id")
+        .and_then(Value::as_str)
+        .unwrap();
+    let creator_id = creator
+        .pointer("/agent/agent_id")
+        .and_then(Value::as_str)
+        .unwrap();
+    assert_ne!(standard_id, creator_id);
+    let standard_snapshot = PathBuf::from(
+        standard
+            .pointer("/agent/config_path")
+            .and_then(Value::as_str)
+            .unwrap(),
+    );
+    let creator_snapshot = PathBuf::from(
+        creator
+            .pointer("/agent/config_path")
+            .and_then(Value::as_str)
+            .unwrap(),
+    );
+    assert_ne!(standard_snapshot, creator_snapshot);
+    assert!(
+        !fs::read_to_string(&standard_snapshot)
+            .unwrap()
+            .contains("agent.plugins.runtime-inspect")
+    );
+    assert!(
+        fs::read_to_string(&creator_snapshot)
+            .unwrap()
+            .contains("agent.plugins.runtime-inspect")
+    );
+
+    drop(client);
+    harness.kill_and_restart_daemon();
+    let mut restarted = TestClient::connect(&harness.socket, "creator-restart-client").unwrap();
+    let agents = restarted.call(None, "agent.list", json!({}), None).unwrap();
+    for (id, preset_id, snapshot) in [
+        (standard_id, "standard", &standard_snapshot),
+        (creator_id, "creator", &creator_snapshot),
+    ] {
+        assert!(agents.as_array().unwrap().iter().any(|agent| {
+            agent.get("agent_id").and_then(Value::as_str) == Some(id)
+                && agent.get("preset_id").and_then(Value::as_str) == Some(preset_id)
+                && agent.get("config_path").and_then(Value::as_str)
+                    == Some(snapshot.to_string_lossy().as_ref())
+        }));
+    }
+}
+
+#[test]
+fn agent_create_resolves_and_persists_a_preset_id() {
+    let mut harness = Harness::start();
+    let mut client = TestClient::connect(&harness.socket, "preset-client").unwrap();
     let created = client
         .call(
             None,
             "agent.create",
             json!({
                 "workspace": harness.workspace(),
-                "config_path": alternate_config,
+                "preset_id": "standard",
                 "repl_backend": "babashka",
             }),
-            Some("create-with-alternate-config"),
+            Some("create-with-preset"),
         )
         .unwrap();
 
     assert_eq!(
+        created.pointer("/agent/preset_id").and_then(Value::as_str),
+        Some("standard")
+    );
+    let snapshot_config = PathBuf::from(
         created
             .pointer("/agent/config_path")
-            .and_then(Value::as_str),
-        Some(alternate_config.to_string_lossy().as_ref())
+            .and_then(Value::as_str)
+            .unwrap(),
+    );
+    assert!(snapshot_config.starts_with(fs::canonicalize(harness.root.join("s/workers")).unwrap()));
+    assert!(snapshot_config.is_file());
+    assert!(
+        fs::read_to_string(&snapshot_config)
+            .unwrap()
+            .contains(":plugins")
+    );
+
+    harness.kill_and_restart_daemon();
+    let mut restarted = TestClient::connect(&harness.socket, "preset-restart-client").unwrap();
+    let agents = restarted.call(None, "agent.list", json!({}), None).unwrap();
+    assert!(agents.as_array().unwrap().iter().any(|agent| {
+        agent.get("preset_id").and_then(Value::as_str) == Some("standard")
+            && agent.get("config_path").and_then(Value::as_str)
+                == Some(snapshot_config.to_string_lossy().as_ref())
+    }));
+}
+
+#[test]
+fn user_preset_is_snapshotted_before_the_agent_starts() {
+    let suffix = Uuid::new_v4().simple().to_string();
+    let home = PathBuf::from("/tmp").join(format!("dao-preset-home-{}", &suffix[..8]));
+    let preset = home.join(".dao/agent-presets/custom");
+    fs::create_dir_all(&preset).unwrap();
+    fs::write(preset.join("preset.edn"), "{:name \"Custom\"}").unwrap();
+    let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .unwrap()
+        .to_path_buf();
+    let original = fs::read_to_string(repository.join("presets/standard/agent.edn")).unwrap();
+    fs::write(preset.join("agent.edn"), &original).unwrap();
+
+    let harness = Harness::start_with_env(
+        "examples/tui-mock.edn",
+        &[(
+            "DAO_PRESET_USER_ROOT",
+            preset.parent().unwrap().to_str().unwrap(),
+        )],
+    );
+    let mut client = TestClient::connect(&harness.socket, "user-preset-client").unwrap();
+    let created = client
+        .call(
+            None,
+            "agent.create",
+            json!({"workspace_path": harness.root.join("user-preset-workspace"), "preset_id": "custom"}),
+            Some("create-user-preset"),
+        )
+        .unwrap();
+    let snapshot = PathBuf::from(
+        created
+            .pointer("/agent/config_path")
+            .and_then(Value::as_str)
+            .unwrap(),
+    );
+    let snapshotted = fs::read_to_string(&snapshot).unwrap();
+    assert_eq!(
+        fs::metadata(&snapshot).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    fs::write(preset.join("agent.edn"), "{:plugins [false]}").unwrap();
+    assert_eq!(fs::read_to_string(&snapshot).unwrap(), snapshotted);
+    assert_ne!(
+        snapshotted,
+        fs::read_to_string(preset.join("agent.edn")).unwrap()
+    );
+    let rejected = client
+        .call(
+            None,
+            "agent.create",
+            json!({"workspace_path": harness.root.join("invalid-user-preset-workspace"), "preset_id": "custom"}),
+            Some("reject-invalid-user-preset"),
+        )
+        .unwrap_err();
+    assert_eq!(
+        rejected.pointer("/data/type"),
+        Some(&json!("preset_validation_failed"))
+    );
+
+    drop(client);
+    drop(harness);
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn agent_create_rejects_arbitrary_config_paths() {
+    let harness = Harness::start();
+    let alternate_config = harness.repository.join("examples/daemon-goal-mock.edn");
+    let mut client = TestClient::connect(&harness.socket, "unsafe-config-client").unwrap();
+    let error = client
+        .call(
+            None,
+            "agent.create",
+            json!({
+                "workspace": harness.workspace(),
+                "config_path": alternate_config,
+            }),
+            Some("reject-arbitrary-config"),
+        )
+        .unwrap_err();
+    assert!(
+        error
+            .get("message")
+            .and_then(Value::as_str)
+            .is_some_and(|message| message.contains("preset_id"))
     );
     assert_eq!(
-        created
-            .pointer("/agent/repl_backend")
-            .and_then(Value::as_str),
-        Some("babashka")
+        error.pointer("/data/type"),
+        Some(&json!("config_path_not_allowed"))
     );
-    let agents = client.call(None, "agent.list", json!({}), None).unwrap();
-    assert!(agents.as_array().unwrap().iter().any(|agent| {
-        agent.get("config_path").and_then(Value::as_str)
-            == Some(alternate_config.to_string_lossy().as_ref())
-    }));
+}
+
+#[test]
+fn agent_create_rejects_invalid_and_unknown_preset_ids() {
+    let harness = Harness::start();
+    let mut client = TestClient::connect(&harness.socket, "invalid-preset-client").unwrap();
+    for (command_id, preset_id, expected_type) in [
+        ("reject-traversal-preset", "../agent", "invalid_preset_id"),
+        ("reject-unknown-preset", "not-installed", "unknown_preset"),
+    ] {
+        let error = client
+            .call(
+                None,
+                "agent.create",
+                json!({"workspace": harness.workspace(), "preset_id": preset_id}),
+                Some(command_id),
+            )
+            .unwrap_err();
+        assert!(
+            error.pointer("/data/type").and_then(Value::as_str) == Some(expected_type),
+            "unexpected error: {error}"
+        );
+    }
+    let type_error = client
+        .call(
+            None,
+            "agent.create",
+            json!({"workspace": harness.workspace(), "preset_id": 42}),
+            Some("reject-non-string-preset"),
+        )
+        .unwrap_err();
+    assert!(
+        type_error
+            .get("message")
+            .and_then(Value::as_str)
+            .is_some_and(|message| message.contains("must be a string"))
+    );
+    assert_eq!(
+        type_error.pointer("/data/type"),
+        Some(&json!("invalid_preset_id_type"))
+    );
 }
 
 struct TestClient {

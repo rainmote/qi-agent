@@ -47,6 +47,31 @@ export function ApprovalDialog({ interaction, resolving, onResolve }: {
   </DialogFrame>;
 }
 
+export function FullAccessDialog({ onClose, onConfirm }: {
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const [acknowledged, setAcknowledged] = useState(false);
+  return <DialogFrame title="确认启用 Full Access？" onClose={onClose}
+    className="full-access-dialog" dangerous>
+    <div className="full-access-warning">
+      <span><Icon name="shieldAlert" /></span>
+      <div><strong>这会扩大代理的操作范围</strong>
+        <p>代理将能修改工作区外的文件、执行敏感操作和外部命令。仅在你信任当前任务与项目内容时启用。</p></div>
+    </div>
+    <label className="full-access-ack">
+      <input type="checkbox" checked={acknowledged}
+        onChange={(event) => setAcknowledged(event.target.checked)} />
+      <span>我已了解风险，并愿意继续</span>
+    </label>
+    <div className="dialog-actions">
+      <button type="button" className="button ghost" onClick={onClose}>取消</button>
+      <button type="button" className="button danger-button" disabled={!acknowledged}
+        onClick={onConfirm}>启用 Full Access</button>
+    </div>
+  </DialogFrame>;
+}
+
 export function WorkspaceDialog({ initialPath, onClose, onSelect }: {
   initialPath?: string; onClose: () => void; onSelect: (path: string) => Promise<void>;
 }) {

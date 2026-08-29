@@ -10,6 +10,12 @@
 
 (def ^:private skill-name-pattern #"[A-Za-z0-9][A-Za-z0-9._-]*")
 
+(defn- source-repository-root []
+  (when-let [resource (io/resource "agent/plugins/resources.clj")]
+    (when (= "file" (.getProtocol resource))
+      (some-> resource io/file .getCanonicalFile
+              .getParentFile .getParentFile .getParentFile .getParentFile str))))
+
 (defn- regular-paths [directory]
   (let [root (.toPath (io/file directory))]
     (if-not (Files/isDirectory root (make-array LinkOption 0))
@@ -192,6 +198,7 @@
 
 (defn- discover [user-dir project-dir trusted? skill-options]
   (let [{:keys [enabled enable-user enable-project custom-directories
+                bundled-directories
                 enable-agents-user agents-user-directories
                 require-description]} skill-options
         user (scope-resources :user user-dir false
@@ -207,6 +214,10 @@
                  (skills-from-directories :custom custom-directories
                                           require-description)
                  [])
+        bundled (if enabled
+                  (skills-from-directories :bundled bundled-directories
+                                           require-description)
+                  [])
         agents-user
         (if (and enabled enable-agents-user)
           (skills-from-directories :agents-user agents-user-directories
@@ -217,7 +228,7 @@
         ;; skill with a name wins and collisions remain observable.
         selected (dedupe-skills
                   (filter-skills
-                   (vec (concat custom (:skills project) (:skills user)
+                   (vec (concat bundled custom (:skills project) (:skills user)
                                 agents-user))
                    skill-options))
         skills (vec (sort-by :name (:skills selected)))
@@ -372,6 +383,15 @@
                (str (if (.isAbsolute file)
                       file
                       (io/file (str workspace) path)))))
+           repository-root (or (System/getenv "DAO_REPOSITORY_ROOT")
+                               (source-repository-root)
+                               (System/getProperty "user.dir"))
+           resolve-bundled
+           (fn [path]
+             (let [file (io/file path)]
+               (str (if (.isAbsolute file)
+                      file
+                      (io/file repository-root path)))))
            skill-options
            (merge {:enabled true :enable-user true :enable-project true
                    :enable-agents-user true
@@ -380,10 +400,12 @@
                    ;; defaults to the cross-agent global skills directory.
                    :agents-user-directories
                    (if user-dir [] [(str (io/file user-home ".agents" "skills"))])
-                   :custom-directories [] :include [] :ignore []
+                   :custom-directories [] :bundled-directories []
+                   :include [] :ignore []
                    :require-description true :enable-commands true}
                   skills)
            _ (doseq [key [:include :ignore :custom-directories
+                          :bundled-directories
                           :agents-user-directories]]
                (when-not (and (sequential? (get skill-options key))
                               (every? string? (get skill-options key)))
@@ -400,6 +422,7 @@
            skill-options
            (-> skill-options
                (update :custom-directories #(mapv resolve-custom %))
+               (update :bundled-directories #(mapv resolve-bundled %))
                (update :agents-user-directories #(mapv resolve-custom %)))
            trust (kernel/require-service ctx :project/trust)
            scan! #(assoc (discover user-root project-root ((:trusted? trust))

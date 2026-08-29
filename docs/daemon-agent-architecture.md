@@ -2,7 +2,7 @@
 
 状态：Implemented  
 首次整理：2026-08-23  
-最后更新：2026-08-25
+最后更新：2026-08-28
 
 实施结果：阶段 0–6 已落地。Rust `dao` 是唯一 TUI 与 supervisor 入口；WebUI 和 headless client
 使用同一 public socket；resident worker、per-agent REPL、retained child、durable messaging、
@@ -369,9 +369,55 @@ cold → starting → ready → busy → ready
 
 默认 backend 是 Babashka。新建 agent 时可通过
 `dao --repl-backend jvm-clojure` 选择原生 JVM Clojure；选择值写入 owner-only worker
-descriptor 并由 worker proxy 传给 resident worker。daemon 的 `agent.list` 同时返回
-`config_path` 和 `repl_backend`，客户端只复用 workspace、profile 和显式 backend 均匹配的
-agent，因此同一 daemon 下两种 backend 可以并存。已有 agent 不会因后续命令行选项而换 backend。
+descriptor 并由 worker proxy 传给 resident worker。新会话还可通过 `dao --preset ID`
+选择注册表中的 Agent Preset。公共 `agent.create` 只接受 `preset_id`，不接受客户端提交的
+任意 `config_path`；daemon 通过 Clojure Preset 注册表按系统优先、用户其次的受控根目录
+解析并完成 structural validation，然后把配置序列化到 owner-only runtime snapshot。Worker
+始终从该不可变快照启动，因此创建后修改或删除用户 Preset 不会改变既有 Session 的行为。
+解析后的 `preset_id` 和快照 `config_path` 同时写入 worker descriptor，其中 `preset_id` 还
+持久化到 SQLite session/agent 记录。拒绝结果在 `error.data.type` 返回稳定类型（如
+`unknown_preset`、`broken_preset`、`preset_validation_failed`）。`--config PATH` 仅用于可信的
+daemon 启动默认配置；安装版 launcher 会固定提供该参数，而 `--preset` 只决定新 Agent
+使用的注册 Preset。
+
+daemon 的 `agent.list` 返回 `preset_id`、`config_path` 和 `repl_backend`，客户端只复用
+workspace、Preset/默认 profile 和显式 backend 均匹配的 agent。因此同一 daemon 下不同
+Preset 和两种 backend 可以并存；已有 agent 不会因后续命令行选项而切换 Preset 或 backend。
+
+#### 9.2.1 Creator Profile 与模式选择
+
+`preset.list` 是 daemon-scoped、只读的 discovery API，并通过
+`preset.discovery.v1` capability 发布。它只返回 `id`、展示名称、描述、排序、信任级别以及可选的
+`broken` 布尔值，不返回 Preset 目录、`config_path`、配置正文或解析错误细节。TUI 的
+`dao new` 在任何 `agent.create` 发生之前调用该 API 并从 `/dev/tty` 选择模式；
+`dao new --preset creator` 用于非交互自动化。该路径始终新建 Agent，不复用匹配的旧 Agent。
+WebUI 同样先调用 `/api/presets`，新 Session 第一次提交时才发送 `presetId`；Web Host 明确拒绝
+`configPath`/`config_path` 与空值、超长或格式非法的 Preset ID，并只透传安全的
+`error.data.type` 机器错误类型。现有 Session 的 open/attach 不接受 UI 模式切换，fork 继承源
+Session 的持久化 `presetId`。
+
+内置 `creator` Preset 是 `standard` 的能力超集，增加三组受限工具：
+
+- `runtime_inspect`：返回确定性、只读的 Kernel 插件、工具、命令、hook 和 service 所有权元数据；
+  不返回 service value、handler、disposer、配置正文或可执行对象。
+- `runtime_plugin`：支持 Host 代码中审核过的内置插件目录（当前开放
+  `agent.plugins.math`），也支持 Clojure EDN Blueprint。Blueprint 是宿主编译的纯数据 AST，
+  可声明带 JSON Schema 的工具、词法变量、条件/集合变换和有界 Session 状态，但不能解析
+  symbol/Var、namespace、Java interop、文件、网络、线程、`eval` 或 `load-string`。除兼容的
+  activate/deactivate/status 外，二者共享不可变 Package 的 define/inspect/run/update/stop/undefine，
+  保留 current/next 指针、精确源码、包级失败诊断；更新时保留逻辑插件状态，失败不推进 current，
+  并尽力恢复上一运行版本。Creator Plugin dispose 时会回收所有动态工具和状态。
+- `preset_guide`、`preset_inspect`、`preset_author`：指导并执行用户 Preset 的 roster 检查、源码读取、
+  复制、完整 EDN 原子更新、结构校验和删除。系统 Preset 永远只读，变更只在新 Session 的不可变
+  snapshot 中生效。`creating-agent-presets` 与 `creating-runtime-blueprints` 两个 progressive skill
+  随 Creator Preset 分发，复制 Preset 时会和其他 skill/assets 一起复制。
+
+第一阶段仍故意不支持任意 `load-string`、模型提供的 Clojure 源码、任意 namespace/path 或卸载
+Preset 基础插件。EDN Blueprint 用 Clojure 的数据/闭包/Atom/可撤销注册机制获得动态定义、热替换、
+状态保留和失败回滚效果，不把主 worker 变成通用代码执行器。系统 Preset 仍只读；用户修改流程必须
+先复制为用户 Preset，并在创建新的 Agent/Session 时重新经过 structural validation 与不可变
+snapshot。与 DeepSeek Harness 创造模式的逐项差距和后续边界见
+[创造模式对齐分析](deepseek-creator-gap-analysis.md)。
 
 也可在 profile 中显式加载：
 

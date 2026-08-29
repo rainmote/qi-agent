@@ -429,6 +429,7 @@ src/agent/plugins/openai.clj    DeepSeek/OpenAI-compatible adapter
 src/agent/plugins/openai_responses.clj 官方 OpenAI Responses adapter
 src/agent/plugins/chatgpt.clj   ChatGPT subscription/Codex auth adapter
 src/agent/plugins/session.clj   可恢复、可 fork/compact 的 append-only session
+src/agent/plugins/session_title.clj 首轮完成后自动生成确定性会话标题
 src/agent/protocol.clj          version 1 JSON event 与 stdin/stdout RPC
 src/agent/api.clj               稳定的公开 Clojure embedding API
 src/agent/command.clj           line/TUI 共用的 slash command dispatcher

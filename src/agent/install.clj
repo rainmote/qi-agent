@@ -55,7 +55,7 @@
        (fs/path (System/getProperty "user.home") ".local" "bin"))))
 
 (defn- require-source-root! [root]
-  (doseq [path ["bb.edn" "agent.edn" "src" "plugins"
+  (doseq [path ["bb.edn" "agent.edn" "src" "plugins" "presets"
                 "apps/tui-rs/Cargo.toml"]]
     (when-not (fs/exists? (fs/path root path))
       (throw (ex-info (str "Run bb install from the dao repository root; missing "
@@ -100,7 +100,7 @@
                     {:launcher (str launcher)}))))
 
 (defn- copy-source! [source stage]
-  (doseq [name ["src" "plugins" "apps/tui-rs/src"]]
+  (doseq [name ["src" "plugins" "presets" "apps/tui-rs/src"]]
     (fs/copy-tree (fs/path source name) (fs/path stage name)))
   (doseq [name ["bb.edn" "agent.edn" "LICENSE" "README.md"
                 "apps/tui-rs/Cargo.toml" "apps/tui-rs/Cargo.lock"]]

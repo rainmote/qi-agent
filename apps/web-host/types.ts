@@ -14,6 +14,16 @@ export interface SessionSummary {
   eventCount: number;
   messageCount: number;
   updatedAt: string | null;
+  presetId?: string;
+}
+
+export interface AgentPresetSummary {
+  id: string;
+  name: string;
+  description?: string;
+  order?: number;
+  trust: "system" | "user";
+  broken?: boolean;
 }
 
 export interface WorkerMessage {

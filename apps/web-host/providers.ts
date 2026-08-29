@@ -12,6 +12,8 @@ export interface ProviderModelSettings {
   id: string;
   name: string;
   contextWindow?: number;
+  thinkingLevels?: Array<"off" | "low" | "medium" | "high" | "max">;
+  defaultThinkingLevel?: "off" | "low" | "medium" | "high" | "max";
 }
 
 export interface ProviderSettings {
@@ -71,7 +73,8 @@ const defaultProviders: ProviderSettings[] = [
     baseUrl: "https://api.openai.com/v1",
     apiKeyEnv: "OPENAI_API_KEY",
     builtin: true,
-    models: [{ id: "gpt-5.6-sol", name: "gpt-5.6-sol", contextWindow: 128_000 }],
+    models: [{ id: "gpt-5.6-sol", name: "gpt-5.6-sol", contextWindow: 128_000,
+      thinkingLevels: ["low", "medium", "high"], defaultThinkingLevel: "medium" }],
   },
   {
     id: "chatgpt",
@@ -79,7 +82,8 @@ const defaultProviders: ProviderSettings[] = [
     protocol: "chatgpt-subscription",
     baseUrl: "https://chatgpt.com/backend-api/codex",
     builtin: true,
-    models: [{ id: "gpt-5.6-sol", name: "gpt-5.6-sol", contextWindow: 128_000 }],
+    models: [{ id: "gpt-5.6-sol", name: "gpt-5.6-sol", contextWindow: 128_000,
+      thinkingLevels: ["low", "medium", "high"], defaultThinkingLevel: "medium" }],
   },
   {
     id: "deepseek",
@@ -88,7 +92,8 @@ const defaultProviders: ProviderSettings[] = [
     baseUrl: "https://api.deepseek.com",
     apiKeyEnv: "DEEPSEEK_API_KEY",
     builtin: true,
-    models: [{ id: "deepseek-v4-flash", name: "deepseek-v4-flash", contextWindow: 1_000_000 }],
+    models: [{ id: "deepseek-v4-flash", name: "deepseek-v4-flash", contextWindow: 1_000_000,
+      thinkingLevels: ["off", "low", "high", "max"], defaultThinkingLevel: "off" }],
   },
 ];
 
@@ -135,7 +140,17 @@ function normalizeModels(models: ProviderModelSettings[]): ProviderModelSettings
     if (contextWindow !== undefined && (!Number.isInteger(contextWindow) || contextWindow <= 0)) {
       throw new Error(`模型 ${id} 的上下文容量无效`);
     }
-    return { id, name, ...(contextWindow ? { contextWindow } : {}) };
+    const allowedLevels = new Set(["off", "low", "medium", "high", "max"]);
+    const thinkingLevels = (model.thinkingLevels?.map(String)
+      .filter((level, levelIndex, entries) => allowedLevels.has(level)
+        && entries.indexOf(level) === levelIndex)) as ProviderModelSettings["thinkingLevels"];
+    const defaultThinkingLevel = model.defaultThinkingLevel;
+    if (defaultThinkingLevel && !thinkingLevels?.includes(defaultThinkingLevel)) {
+      throw new Error(`模型 ${id} 的默认推力强度不在可选范围内`);
+    }
+    return { id, name, ...(contextWindow ? { contextWindow } : {}),
+      ...(thinkingLevels?.length ? { thinkingLevels } : {}),
+      ...(defaultThinkingLevel ? { defaultThinkingLevel } : {}) };
   });
 }
 
@@ -154,6 +169,10 @@ function normalizeProvider(input: ProviderSettings, existing?: ProviderSettings)
   if (protocol === "chatgpt-subscription" && baseUrl !== "https://chatgpt.com/backend-api/codex") {
     throw new Error("ChatGPT 订阅凭据只能发送到官方 Codex 接口");
   }
+  const models = input.models.map((model) => {
+    const previous = existing?.models.find((entry) => entry.id === model.id);
+    return previous ? { ...previous, ...model } : model;
+  });
   return {
     id,
     name,
@@ -162,7 +181,7 @@ function normalizeProvider(input: ProviderSettings, existing?: ProviderSettings)
     ...(apiKey ? { apiKey } : {}),
     ...(protocol !== "chatgpt-subscription" && (input.apiKeyEnv || existing?.apiKeyEnv)
       ? { apiKeyEnv: input.apiKeyEnv || existing?.apiKeyEnv } : {}),
-    models: normalizeModels(input.models),
+    models: normalizeModels(models),
     builtin: Boolean(existing?.builtin || input.builtin),
   };
 }

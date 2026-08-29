@@ -2,6 +2,8 @@
  [{:ns agent.plugins.session
    :config {:path nil}}
 
+  {:ns agent.plugins.session-title}
+
   {:ns agent.plugins.session-catalog}
 
   {:ns agent.plugins.auth-store}
@@ -23,6 +25,7 @@
             :api-key-env "DEEPSEEK_API_KEY"
             :model "deepseek-v4-flash"
             :context-window 1000000
+            :thinking-levels [:off :low :high :max]
             :timeout-ms 180000
             :proxy {:host "192.168.90.9" :port 7893}
             :extra-body {:thinking {:type "disabled"}}}}
@@ -135,6 +138,7 @@
                 :api-key-env "DEEPSEEK_API_KEY"
                 :model "deepseek-v4-flash"
                 :context-window 1000000
+                :thinking-levels [:off :low :high :max]
                 :timeout-ms 180000
                 :proxy {:host "192.168.90.9" :port 7893}
                 :extra-body {:thinking {:type "disabled"}}}}
@@ -188,6 +192,9 @@
 
   {:ns agent.plugins.resources
    :config {:root "."}}
+
+  ;; System presets ship with DAO; user-authored copies live under ~/.dao.
+  {:ns agent.plugins.presets}
 
   ;; Remote methods are frontend-neutral. RPC mode inserts a remote interaction
   ;; bridge before approval so the worker never reads prompts from stdin.

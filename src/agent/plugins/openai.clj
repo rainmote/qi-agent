@@ -60,12 +60,16 @@
                 (let [choice (first (:choices event))
                       delta (:delta choice)
                       content (:content delta)]
-                  (when-not (str/blank? content)
+                  ;; Providers such as DeepSeek may stream spaces and newlines as
+                  ;; standalone deltas. They are significant output, especially
+                  ;; for Markdown headings, lists, and tables.
+                  (when (and (string? content) (not (empty? content)))
                     (kernel/emit! ctx :llm/stream
                                   {:type :text/delta
                                    :provider :openai-compatible
                                    :delta content}))
-                  (when-not (str/blank? (:reasoning_content delta))
+                  (when (and (string? (:reasoning_content delta))
+                             (not (empty? (:reasoning_content delta))))
                     (kernel/emit! ctx :llm/stream
                                   {:type :reasoning/delta
                                    :provider :openai-compatible
@@ -75,7 +79,7 @@
                     (:usage event) (assoc :usage (:usage event))
                     (:finish_reason choice)
                     (assoc :finish-reason (:finish_reason choice))
-                    (not (str/blank? content))
+                    (and (string? content) (not (empty? content)))
                     (update :content conj content)
                     (seq (:tool_calls delta))
                     (update :tool-calls
@@ -196,6 +200,11 @@
    :settings-provider-id (:settings-provider-id config)
    :context-window (:context-window config)
    :thinking-levels (:thinking-levels config)
+   :default-thinking-level
+   (or (:default-thinking-level config)
+       (when (= "disabled" (get-in config [:extra-body :thinking :type]))
+         :off)
+       (some-> (get-in config [:extra-body :reasoning_effort]) keyword))
    :input-modalities (or (:input-modalities config) #{:text})
    :generate (partial generate ctx config)})
 

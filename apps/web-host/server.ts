@@ -93,7 +93,15 @@ function json(response: ServerResponse, status: number, value: unknown): void {
 
 function errorResponse(response: ServerResponse, error: unknown, status = 400): void {
   const message = error instanceof Error ? error.message : "Unexpected error";
-  json(response, status, { ok: false, error: { message } });
+  const rawData = error instanceof Error && "data" in error
+    ? (error as Error & { data?: unknown }).data : null;
+  const type = rawData && typeof rawData === "object" && !Array.isArray(rawData)
+    && typeof (rawData as { type?: unknown }).type === "string"
+    ? String((rawData as { type: string }).type) : null;
+  json(response, status, {
+    ok: false,
+    error: { message, ...(type ? { data: { type } } : {}) },
+  });
 }
 
 async function body(request: IncomingMessage): Promise<Record<string, unknown>> {
@@ -240,6 +248,9 @@ export async function startWebHost(options: WebHostOptions = {}) {
           result: { workspaces: roots, catalogs, activeWorkspaceId: roots[0]?.id || null },
         });
       }
+      if (url.pathname === "/api/presets" && request.method === "GET") {
+        return json(response, 200, { ok: true, result: await sessions.listPresets() });
+      }
       if (url.pathname === "/api/providers" && request.method === "GET") {
         return json(response, 200, {
           ok: true,
@@ -309,9 +320,20 @@ export async function startWebHost(options: WebHostOptions = {}) {
       }
       if (url.pathname === "/api/sessions" && request.method === "POST") {
         const input = await body(request);
+        if ("configPath" in input || "config_path" in input) {
+          throw new Error("Session creation accepts presetId, not config paths");
+        }
         if (typeof input.workspaceId !== "string") throw new Error("workspaceId is required");
-        const opened = await sessions.create(input.workspaceId,
-          typeof input.name === "string" ? input.name : undefined);
+        if (input.presetId !== undefined
+          && (typeof input.presetId !== "string" || input.presetId.length > 128
+            || !/^[a-z0-9][a-z0-9_-]*$/.test(input.presetId))) {
+          throw new Error("presetId must be a valid Preset identifier");
+        }
+        const opened = await sessions.create(
+          input.workspaceId,
+          typeof input.name === "string" ? input.name : undefined,
+          typeof input.presetId === "string" ? input.presetId : undefined,
+        );
         return json(response, 201, {
           ok: true,
           result: { session: opened.summary, snapshot: opened.snapshot },

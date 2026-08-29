@@ -1,16 +1,18 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, type Bootstrap } from "./api";
 import { BrandMark } from "./BrandMark";
-import { ApprovalDialog, SettingsDialog, WorkspaceDialog } from "./Dialogs";
+import { ContextMeter, ModelControl, PermissionControl } from "./ComposerControls";
+import { ApprovalDialog, FullAccessDialog, SettingsDialog, WorkspaceDialog } from "./Dialogs";
 import { Icon } from "./icons";
 import { applyHostEvent, fromSnapshot, type Projection } from "./projection";
 import { Timeline } from "./Timeline";
 import { Trajectory } from "./Trajectory";
-import type { HostEvent, ModelEntry, PolicyStatus, RuntimeStatus, SessionSnapshot, SessionSummary, SubagentStatus, Workspace } from "./types";
+import type { AgentPresetSummary, ContextStatus, HostEvent, ModelEntry, PolicyStatus, RuntimeStatus, SessionSnapshot, SessionSummary, SubagentStatus, Workspace } from "./types";
 
 type Theme = "dark" | "light" | "system";
 type ConversationView = "chat" | "trajectory";
 type CommandResult = { output?: unknown; error?: string; ui?: string };
+type AgentPresetId = string;
 
 function phaseLabel(phase: string) {
   return ({ idle: "就绪", model: "模型响应", tool: "执行工具", retry: "正在重试", compacting: "整理上下文" } as Record<string, string>)[phase] || phase;
@@ -37,6 +39,81 @@ export function matchingCommands(commands: RuntimeStatus["commands"] | undefined
   return commands.filter((command) => `/${command.name}`.startsWith(composer)).slice(0, 7);
 }
 
+export function selectablePresets(presets: AgentPresetSummary[]): AgentPresetSummary[] {
+  return presets.filter((preset) => !preset.broken).sort((left, right) =>
+    (left.order ?? Number.MAX_SAFE_INTEGER) - (right.order ?? Number.MAX_SAFE_INTEGER)
+      || left.name.localeCompare(right.name, "zh-CN"));
+}
+
+export function defaultPresetId(presets: AgentPresetSummary[]): string | null {
+  return presets.find((preset) => preset.id === "standard")?.id || presets[0]?.id || null;
+}
+
+export function creatorDraftPresetId(presets: AgentPresetSummary[]): string | null {
+  return presets.find((preset) => preset.id === "creator" && !preset.broken)?.id || null;
+}
+
+export function PresetSelector({ presets, value, onChange }: {
+  presets: AgentPresetSummary[];
+  value: AgentPresetId;
+  onChange: (value: AgentPresetId) => void;
+}) {
+  return <select className="toolbar-select preset-select" aria-label="Agent 模式" value={value}
+    onChange={(event) => onChange(event.target.value as AgentPresetId)}>
+    {presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
+  </select>;
+}
+
+function presetDescription(preset: AgentPresetSummary): string {
+  if (preset.description) return preset.description;
+  if (preset.id === "creator") return "创建、检查并迭代 Agent preset 与运行时能力";
+  if (preset.id === "standard") return "适合编码、分析与日常项目协作";
+  return "使用此 Agent 配置开始新会话";
+}
+
+export function PresetCards({ presets, value, onChange }: {
+  presets: AgentPresetSummary[];
+  value: AgentPresetId;
+  onChange: (value: AgentPresetId) => void;
+}) {
+  return <div className="preset-cards" role="radiogroup" aria-label="选择 Agent 模式">
+    {presets.map((preset) => {
+      const selected = value === preset.id;
+      return <button type="button" role="radio" aria-checked={selected} key={preset.id}
+        className={`preset-card ${selected ? "selected" : ""}`} onClick={() => onChange(preset.id)}>
+        <span className="preset-card-icon"><Icon name={preset.id === "creator" ? "sparkles" : "bot"} /></span>
+        <span className="preset-card-copy"><strong>{preset.name}</strong><small>{presetDescription(preset)}</small></span>
+        <span className="preset-card-check"><Icon name="check" /></span>
+      </button>;
+    })}
+  </div>;
+}
+
+export function WorkspaceSelector({ workspaces, value, onChange, onAdd }: {
+  workspaces: Workspace[];
+  value: string;
+  onChange: (value: string) => void;
+  onAdd: () => void;
+}) {
+  return <div className="new-session-context">
+    <div className="workspace-context-field">
+      <span className="workspace-context-label">工作区</span>
+      <div className="workspace-context-row">
+        <label className="workspace-context-select">
+          <Icon name="folder" />
+          <select value={value} aria-label="选择工作区" onChange={(event) => onChange(event.target.value)}>
+            <option value="" disabled>选择工作区</option>
+            {workspaces.map((workspace) => <option value={workspace.id} key={workspace.id}>{workspace.name}</option>)}
+          </select>
+          <Icon name="chevron" />
+        </label>
+        <button type="button" className="workspace-context-add" onClick={onAdd}
+          aria-label="添加新的工作区"><Icon name="plus" /><span>添加工作区</span></button>
+      </div>
+    </div>
+  </div>;
+}
+
 function Brand({ collapsed = false }: { collapsed?: boolean }) {
   return <div className="brand-identity"><BrandMark size={collapsed ? 24 : 23} />{!collapsed && <>
     <strong>DAO</strong><span>HARNESS</span>
@@ -49,6 +126,7 @@ export function App() {
   const composerInput = useRef<HTMLTextAreaElement>(null);
   const noticeTimer = useRef<number | null>(null);
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null);
+  const [presets, setPresets] = useState<AgentPresetSummary[]>([]);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [activeSession, setActiveSession] = useState<SessionSummary | null>(null);
   const [draftSession, setDraftSession] = useState<SessionSummary | null>(null);
@@ -57,17 +135,21 @@ export function App() {
   const [subagents, setSubagents] = useState<SubagentStatus | null>(null);
   const [models, setModels] = useState<{ current: ModelEntry | null; providers: ModelEntry[] } | null>(null);
   const [policy, setPolicy] = useState<PolicyStatus | null>(null);
+  const [contextStatus, setContextStatus] = useState<ContextStatus | null>(null);
   const [connected, setConnected] = useState(false);
   const [busy, setBusy] = useState(false);
   const [composer, setComposer] = useState("");
   const [commandIndex, setCommandIndex] = useState(0);
   const [pendingModel, setPendingModel] = useState<string | null>(null);
+  const [pendingThinking, setPendingThinking] = useState<string | null>(null);
   const [pendingPolicy, setPendingPolicy] = useState<PolicyStatus["mode"] | null>(null);
+  const [pendingPreset, setPendingPreset] = useState<AgentPresetId>("standard");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("dao.sidebar") === "collapsed");
   const [mobileSidebar, setMobileSidebar] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
+  const [fullAccessDialogOpen, setFullAccessDialogOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState<"recent" | "name">("recent");
@@ -156,7 +238,9 @@ export function App() {
     setProjection(fromSnapshot(snapshot));
     setModels(snapshot.models);
     setPolicy(snapshot.policy || null);
+    setContextStatus(snapshot.context || null);
     setPendingModel(snapshot.models?.current?.id || null);
+    setPendingThinking(snapshot.models?.current?.["thinking-level"] || null);
     setPendingPolicy(snapshot.policy?.mode || null);
     setMobileSidebar(false);
     setSessionMenu(null);
@@ -175,24 +259,16 @@ export function App() {
   useEffect(() => {
     if (started.current) return;
     started.current = true;
-    void api.bootstrap().then((data) => {
+    void Promise.all([api.bootstrap(), api.listPresets()]).then(([data, discovered]) => {
+      const available = selectablePresets(discovered);
+      const initialPreset = defaultPresetId(available);
+      if (!initialPreset) throw new Error("没有可用的 Agent 模式");
       setBootstrap(data);
+      setPresets(available);
+      setPendingPreset(initialPreset);
       setWorkspaceId(data.activeWorkspaceId);
       const first = data.catalogs.find((entry) => entry.workspaceId === data.activeWorkspaceId)?.sessions[0];
       if (first) void openSession(first);
-      else if (data.activeWorkspaceId) {
-        // A brand-new workspace still needs real model, policy, and command
-        // metadata before its first message. Keep this initialized session as
-        // the draft that the composer will submit into.
-        void api.createSession(data.activeWorkspaceId).then((created) => {
-          setDraftSession(created.session);
-          setModels(created.snapshot.models);
-          setPolicy(created.snapshot.policy || null);
-          setPendingModel(created.snapshot.models?.current?.id || null);
-          setPendingPolicy(created.snapshot.policy?.mode || null);
-          return loadRuntime(created.session.id);
-        }).catch(showError);
-      }
     }).catch(showError);
   }, [loadRuntime, openSession, showError]);
 
@@ -202,10 +278,21 @@ export function App() {
     return api.events(activeSession.id, (event: HostEvent) => {
       setProjection((current) => current ? applyHostEvent(current, event) : current);
       if (event.durable && event.event === "session/name" && typeof event.data?.name === "string") {
-        setActiveSession((current) => current ? { ...current, name: String(event.data?.name) } : current);
+        const name = String(event.data.name);
+        setActiveSession((current) => current ? { ...current, name } : current);
+        setBootstrap((current) => current ? { ...current, catalogs: current.catalogs.map((catalog) => ({
+          ...catalog,
+          sessions: catalog.sessions.map((session) => session.id === activeSession.id
+            ? { ...session, name }
+            : session),
+        })) } : current);
       }
       if (event.event?.startsWith("subagent/")) {
         void api.rpc<SubagentStatus>(activeSession.id, "subagent.status").then(setSubagents).catch(() => undefined);
+      }
+      if (event.durable && ["message", "context/snapshot", "session/compaction", "session/clear"]
+        .includes(event.event || "")) {
+        void api.rpc<ContextStatus>(activeSession.id, "context.status").then(setContextStatus).catch(() => undefined);
       }
     }, setConnected);
   }, [activeSession?.id]);
@@ -229,8 +316,10 @@ export function App() {
 
   const startNewSession = () => {
     setPendingModel(models?.current?.id || null);
+    setPendingThinking(models?.current?.["thinking-level"] || null);
     setPendingPolicy(policy?.mode || null);
-    setActiveSession(null); setProjection(null); setConnected(false); setSubagents(null);
+    setPendingPreset(defaultPresetId(presets) || "standard");
+    setActiveSession(null); setDraftSession(null); setProjection(null); setConnected(false); setSubagents(null); setContextStatus(null);
     setComposer(""); setCommandIndex(0); setDetailsOpen(false); setMobileSidebar(false); setConversationView("chat");
     const source = activeSession;
     if (source) {
@@ -240,15 +329,27 @@ export function App() {
         api.rpc<PolicyStatus>(source.id, "policy.status"),
       ]).then(([nextRuntime, nextModels, nextPolicy]) => {
         setRuntime(nextRuntime); setModels(nextModels); setPolicy(nextPolicy);
-        setPendingModel(nextModels.current?.id || null); setPendingPolicy(nextPolicy.mode);
+        setPendingModel(nextModels.current?.id || null);
+        setPendingThinking(nextModels.current?.["thinking-level"] || null);
+        setPendingPolicy(nextPolicy.mode);
       }).catch(showError);
     }
+  };
+
+  const startCreatorDraft = () => {
+    const creator = creatorDraftPresetId(presets);
+    if (!creator) return;
+    startNewSession();
+    setPendingPreset(creator);
+    setComposer("帮我创建一个自定义 Agent preset。请先加载 creating-agent-presets skill 并调用 preset_guide，再检查现有模式并从合适的基础模式复制。");
+    requestAnimationFrame(() => composerInput.current?.focus());
   };
 
   const refreshSnapshot = async (id = activeSession?.id) => {
     if (!id) return;
     const snapshot = await api.rpc<SessionSnapshot>(id, "session.snapshot");
     setProjection(fromSnapshot(snapshot));
+    setContextStatus(snapshot.context || null);
   };
 
   const send = async (mode: "auto" | "steer" = "auto") => {
@@ -257,12 +358,21 @@ export function App() {
     setComposer(""); setBusy(true);
     let session = activeSession || draftSession;
     try {
+      if (!activeSession && session && session.presetId !== pendingPreset) {
+        await api.archiveSession(session.id);
+        const created = await api.createSession(workspaceId, undefined, pendingPreset);
+        session = created.session;
+        setDraftSession(created.session);
+        setModels(created.snapshot.models);
+        setPolicy(created.snapshot.policy || null);
+      }
       if (!session) {
-        const created = await api.createSession(workspaceId);
+        const created = await api.createSession(workspaceId, undefined, pendingPreset);
         session = created.session;
       }
       if (!activeSession) {
         if (pendingModel) await api.rpc(session.id, "model.select", { provider: pendingModel });
+        if (pendingThinking) await api.rpc(session.id, "model.thinking.select", { level: pendingThinking });
         if (pendingPolicy) await api.rpc(session.id, "policy.select", { mode: pendingPolicy });
         const snapshot = await api.rpc<SessionSnapshot>(session.id, "session.snapshot");
         acceptOpen(session, snapshot);
@@ -277,6 +387,7 @@ export function App() {
           if (Array.isArray(output.providers)) {
             setModels({ current: output.current || null, providers: output.providers });
             setPendingModel(output.current?.id || null);
+            setPendingThinking(output.current?.["thinking-level"] || null);
           }
           flashNotice("请从模型菜单中选择本会话使用的模型");
         } else if (result.output != null) {
@@ -341,6 +452,7 @@ export function App() {
   const selectModel = async (provider: string) => {
     const local = models?.providers.find((entry) => entry.id === provider) || null;
     setPendingModel(provider);
+    setPendingThinking(local?.["thinking-level"] || null);
     if (!activeSession && !draftSession) {
       if (local) setModels((current) => current ? { ...current, current: local } : current);
       return;
@@ -349,7 +461,28 @@ export function App() {
       const selected = await api.rpc<ModelEntry>((activeSession || draftSession)!.id,
         "model.select", { provider });
       setModels((current) => current ? { ...current, current: selected } : current);
+      setPendingThinking(selected["thinking-level"] || null);
+      void api.rpc<ContextStatus>((activeSession || draftSession)!.id, "context.status")
+        .then(setContextStatus).catch(() => undefined);
       flashNotice(`已切换到 ${selected.model || provider}`);
+    } catch (error) { showError(error); }
+  };
+
+  const selectThinking = async (level: string) => {
+    setPendingThinking(level);
+    const applyLocal = (entry: ModelEntry) => ({ ...entry, "thinking-level": level });
+    setModels((current) => current ? {
+      current: current.current ? applyLocal(current.current) : null,
+      providers: current.providers.map((entry) => entry.id === (pendingModel || current.current?.id)
+        ? applyLocal(entry) : entry),
+    } : current);
+    if (!activeSession && !draftSession) return;
+    try {
+      const selected = await api.rpc<ModelEntry>((activeSession || draftSession)!.id,
+        "model.thinking.select", { level });
+      setModels((current) => current ? { ...current, current: selected,
+        providers: current.providers.map((entry) => entry.id === selected.id ? selected : entry) } : current);
+      flashNotice(`推力强度已设为 ${level}`);
     } catch (error) { showError(error); }
   };
 
@@ -365,10 +498,19 @@ export function App() {
     } catch (error) { showError(error); }
   };
 
+  const requestPolicy = (mode: PolicyStatus["mode"]) => {
+    if (mode === "allow" && (pendingPolicy || policy?.mode) !== "allow") {
+      setFullAccessDialogOpen(true);
+      return;
+    }
+    void selectPolicy(mode);
+  };
+
   const addWorkspace = async (path: string) => {
     const workspace = await api.addWorkspace(path);
     const data = await api.bootstrap();
     setBootstrap(data); setWorkspaceId(workspace.id); startNewSession();
+    flashNotice(`已添加并切换到工作区“${workspace.name}”`);
   };
 
   const removeWorkspace = async (workspace: Workspace) => {
@@ -382,8 +524,27 @@ export function App() {
   const activeWorkspace = bootstrap?.workspaces.find((entry) => entry.id === workspaceId);
   const phase = projection?.state.phase || "idle";
   const commandSuggestions = matchingCommands(runtime?.commands, composer);
+  const selectedModel = models?.providers.find((entry) => entry.id === pendingModel)
+    || models?.current || null;
+  const composerContext = contextStatus?.context_window ? contextStatus : (selectedModel?.["context-window"] ? {
+    used_tokens: 0,
+    context_window: selectedModel["context-window"],
+    percent: 0,
+    system_tokens: 0,
+    tool_tokens: 0,
+    message_tokens: 0,
+  } : null);
 
   useEffect(() => setCommandIndex(0), [composer.split(/\s/, 1)[0], commandSuggestions.length]);
+
+  useLayoutEffect(() => {
+    const input = composerInput.current;
+    if (!input) return;
+    input.style.height = "0px";
+    const nextHeight = Math.max(44, Math.min(input.scrollHeight, 180));
+    input.style.height = `${nextHeight}px`;
+    input.style.overflowY = input.scrollHeight > 180 ? "auto" : "hidden";
+  }, [activeSession?.id, composer]);
 
   const chooseCommand = (index = commandIndex) => {
     const command = commandSuggestions[index];
@@ -407,8 +568,8 @@ export function App() {
         onMouseEnter={() => setCommandIndex(index)} onClick={() => chooseCommand(index)}>
         <code>{command.name}</code><span>{command.description}</span></button>)}
     </div>}
-    <div className={`composer ${phase !== "idle" ? "is-active" : ""}`}>
-      <textarea ref={composerInput} rows={2} value={composer} disabled={!workspaceId} placeholder={workspaceId ? "给代理发送消息" : "选择一个工作区开始"}
+    <div className={`composer ${phase !== "idle" ? "is-active" : ""} ${composer.trim() ? "has-content" : ""}`} aria-busy={busy}>
+      <textarea ref={composerInput} rows={1} value={composer} disabled={!workspaceId} placeholder={workspaceId ? "描述目标、问题或想创建的能力…" : "选择一个工作区开始"}
         aria-controls={commandSuggestions.length ? "command-suggestions" : undefined}
         onChange={(event) => setComposer(event.target.value)} onKeyDown={(event) => {
           if (commandSuggestions.length && event.key === "ArrowDown") {
@@ -428,28 +589,25 @@ export function App() {
       <div className="composer-footer">
         <div className="composer-left">
           <button type="button" className="toolbar-button command-button" aria-label="命令"
-            onClick={() => { setComposer((value) => value.startsWith("/") ? value : "/"); requestAnimationFrame(() => composerInput.current?.focus()); }}><Icon name="command" /></button>
-          {policy && <select className="toolbar-select policy-select" aria-label="访问模式"
-            value={policy?.mode || "deny"} onChange={(event) => void selectPolicy(event.target.value as PolicyStatus["mode"])}>
-            {(policy?.modes.length ? policy.modes : [{ id: "deny" as const, label: "Read Only" }]).map((entry) =>
-              <option value={entry.id} key={entry.id}>{entry.label}</option>)}
-          </select>}
+            onClick={() => { setComposer((value) => value.startsWith("/") ? value : "/"); requestAnimationFrame(() => composerInput.current?.focus()); }}><Icon name="plus" /></button>
+          {policy && <PermissionControl policy={policy} onChange={requestPolicy} />}
           {phase !== "idle" && <span className="phase-copy">{phaseLabel(phase)} · 新消息将排队</span>}
         </div>
         <div className="composer-right">
-          {!!models?.providers.length && <select className="toolbar-select model-select" aria-label="选择模型"
-            value={pendingModel || models.current?.id || ""} onChange={(event) => void selectModel(event.target.value)}>
-            {models?.providers.map((model) => <option value={model.id} key={model.id}>
-              {model["display-name"] || model.model || model.id}</option>)}
-          </select>}
+          {!!models?.providers.length && <ModelControl models={models.providers}
+            selectedId={pendingModel || models.current?.id || null} thinkingLevel={pendingThinking}
+            onSelectModel={(provider) => void selectModel(provider)}
+            onSelectThinking={(level) => void selectThinking(level)} />}
+          {composerContext && <ContextMeter status={composerContext} />}
           {phase !== "idle" && composer.trim() && <button type="button" className="steer-button" onClick={() => void send("steer")}>立即引导</button>}
           {phase !== "idle" && activeSession ? <button type="button" className="send-button stop"
             onClick={() => void api.rpc(activeSession.id, "turn.abort")} aria-label="停止运行"><Icon name="stop" /></button>
-            : <button type="button" className="send-button" disabled={!composer.trim() || busy || !workspaceId}
-              onClick={() => void send()} aria-label="发送消息"><Icon name="send" /></button>}
+            : <button type="button" className={`send-button ${busy ? "loading" : ""}`} disabled={!composer.trim() || busy || !workspaceId}
+              aria-busy={busy} onClick={() => void send()} aria-label={busy ? "正在发送" : "发送消息"}><Icon name="send" /></button>}
         </div>
       </div>
     </div>
+    <div className="composer-hint"><span>Enter 发送 · Shift + Enter 换行 · / 使用命令</span></div>
   </div>;
 
   return <div className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${detailsOpen ? "details-open" : ""}`}>
@@ -503,28 +661,39 @@ export function App() {
       {!activeSession ? <section className="new-session-view">
         <button className="mobile-nav-button" type="button" onClick={() => setMobileSidebar(true)} aria-label="打开导航"><Icon name="menu" /></button>
         <div className="new-session-center">
-          <div className="hero-title"><BrandMark size={34} /><h1>探索未至之境</h1><span>预览版</span></div>
-          <div className="new-session-options">
-            <label><Icon name="folder" /><select value={workspaceId || ""} aria-label="选择工作区"
-              onChange={(event) => setWorkspaceId(event.target.value)}>
-              <option value="" disabled>选择工作区</option>
-              {bootstrap?.workspaces.map((workspace) => <option value={workspace.id} key={workspace.id}>{workspace.name}</option>)}</select></label>
-            <button type="button" onClick={() => {
-              flashNotice("当前项目仅配置了“标准模式”预设", 3_000);
-            }}><Icon name="sparkles" />标准模式<Icon name="chevron" /></button>
+          <div className="welcome-copy">
+            <div className="welcome-eyebrow"><BrandMark size={24} /><span>DAO WORKSPACE</span></div>
+            <h1>今天想完成什么？</h1>
+            <p>选择工作区与 Agent 模式，然后描述目标。DAO 会在项目上下文中持续执行并汇报进展。</p>
           </div>
+          <WorkspaceSelector workspaces={bootstrap?.workspaces || []} value={workspaceId || ""}
+            onChange={setWorkspaceId} onAdd={() => setWorkspaceDialogOpen(true)} />
+          <div className="mode-heading"><span>Agent 模式</span><small>会话创建后保持不变</small></div>
+          <PresetCards presets={presets} value={pendingPreset} onChange={setPendingPreset} />
           {composerNode}
+          <div className="starter-actions" aria-label="快捷开始">
+            <button type="button" onClick={() => { setComposer("分析当前项目结构，指出最值得优先处理的问题，并给出执行建议。"); requestAnimationFrame(() => composerInput.current?.focus()); }}>
+              <Icon name="search" /><span><strong>分析项目</strong><small>快速了解结构与风险</small></span>
+            </button>
+            <button type="button" onClick={() => { setComposer("检查当前项目中的失败测试和明显缺陷，定位根因并修复。"); requestAnimationFrame(() => composerInput.current?.focus()); }}>
+              <Icon name="activity" /><span><strong>定位问题</strong><small>检查测试与明显缺陷</small></span>
+            </button>
+            {creatorDraftPresetId(presets) && <button type="button" className="creator-draft-button"
+              onClick={startCreatorDraft}><Icon name="sparkles" /><span><strong>创建 Agent</strong><small>用创造模式起草 preset</small></span></button>}
+          </div>
         </div>
       </section> : <section className="session-view">
         <header className="session-header">
           <button className="mobile-nav-button" type="button" onClick={() => setMobileSidebar(true)} aria-label="打开导航"><Icon name="menu" /></button>
-          <div className="session-header-title"><div className={`connection-dot ${connected ? "online" : ""}`} />
+          <div className="session-header-title"><span className={`connection-status ${connected ? "online" : ""}`} title={connected ? "实时连接" : "正在重连"}>
+            <span className="connection-dot" />{connected ? "已连接" : "重连中"}</span>
             <button type="button" onClick={() => void renameSession()}>{activeSession.name || "未命名会话"}</button>
-            <span>标准模式</span></div>
+            <span>{presets.find((preset) => preset.id === activeSession.presetId)?.name
+              || activeSession.presetId || "旧版默认模式"}</span></div>
           <div className="session-header-actions">
             {subagents?.jobs.length ? <span className="job-pill">{subagents.jobs.filter((job) => job.status === "running").length} 个后台任务</span> : null}
             <button type="button" className={`header-action ${detailsOpen ? "active" : ""}`} onClick={() => setDetailsOpen((value) => !value)}>
-              Session log<Icon name="chevron" /></button>
+              会话信息<Icon name="chevron" /></button>
           </div>
         </header>
         <div className="view-tabs" role="tablist"><button type="button" role="tab" aria-selected={conversationView === "chat"}
@@ -550,6 +719,8 @@ export function App() {
 
     {projection?.interactions[0] && <ApprovalDialog interaction={projection.interactions[0]}
       resolving={resolving} onResolve={resolveApproval} />}
+    {fullAccessDialogOpen && <FullAccessDialog onClose={() => setFullAccessDialogOpen(false)}
+      onConfirm={() => { setFullAccessDialogOpen(false); void selectPolicy("allow"); }} />}
     {settingsOpen && <SettingsDialog workspaces={bootstrap?.workspaces || []} runtime={runtime}
       theme={theme} onThemeChange={setTheme} onClose={() => setSettingsOpen(false)}
       onProvidersChanged={async () => {
@@ -559,6 +730,7 @@ export function App() {
         setModels(next);
         if (!next.providers.some((entry) => entry.id === pendingModel)) {
           setPendingModel(next.current?.id || null);
+          setPendingThinking(next.current?.["thinking-level"] || null);
         }
       }}
       onAddWorkspace={() => { setSettingsOpen(false); setWorkspaceDialogOpen(true); }} onRemoveWorkspace={removeWorkspace} />}

@@ -66,6 +66,17 @@ test("web host authenticates, catalogs, creates a real worker, and invokes RPC",
     assert.equal(bootstrap.ok, true);
     assert.equal(JSON.stringify(bootstrap).includes("test-token"), false);
 
+    const agentPresetsResponse = await fetch(`${base}/api/presets`, { headers: authorization });
+    const agentPresets = await agentPresetsResponse.json() as {
+      ok: boolean;
+      result: Array<{ id: string; name: string; broken?: boolean }>;
+    };
+    assert.equal(agentPresetsResponse.status, 200, JSON.stringify(agentPresets));
+    assert.deepEqual(agentPresets.result.map((preset) => preset.id), ["standard", "creator"]);
+    assert.equal(agentPresets.result[1]?.name, "创造模式");
+    assert.equal(JSON.stringify(agentPresets).includes("config_path"), false);
+    assert.equal(JSON.stringify(agentPresets).includes("directory"), false);
+
     const providersResponse = await fetch(`${base}/api/providers`, { headers: authorization });
     const providers = await providersResponse.json() as {
       ok: boolean;
@@ -111,21 +122,83 @@ test("web host authenticates, catalogs, creates a real worker, and invokes RPC",
     assert.equal(directories.ok, true);
     assert.deepEqual(directories.result.directories.map((entry) => entry.name), ["visible-child"]);
 
+    const forbiddenConfigResponse = await fetch(`${base}/api/sessions`, {
+      method: "POST",
+      headers: { ...authorization, "Content-Type": "application/json", Origin: base },
+      body: JSON.stringify({
+        workspaceId: bootstrap.result.activeWorkspaceId,
+        presetId: "creator",
+        configPath: "/tmp/untrusted-agent.edn",
+      }),
+    });
+    assert.equal(forbiddenConfigResponse.status, 400);
+
+    const emptyPresetResponse = await fetch(`${base}/api/sessions`, {
+      method: "POST",
+      headers: { ...authorization, "Content-Type": "application/json", Origin: base },
+      body: JSON.stringify({
+        workspaceId: bootstrap.result.activeWorkspaceId,
+        presetId: "",
+      }),
+    });
+    assert.equal(emptyPresetResponse.status, 400);
+
+    const underscorePresetResponse = await fetch(`${base}/api/sessions`, {
+      method: "POST",
+      headers: { ...authorization, "Content-Type": "application/json", Origin: base },
+      body: JSON.stringify({
+        workspaceId: bootstrap.result.activeWorkspaceId,
+        presetId: "invalid_mode",
+      }),
+    });
+    assert.equal(underscorePresetResponse.status, 400);
+
+    const unknownPresetResponse = await fetch(`${base}/api/sessions`, {
+      method: "POST",
+      headers: { ...authorization, "Content-Type": "application/json", Origin: base },
+      body: JSON.stringify({
+        workspaceId: bootstrap.result.activeWorkspaceId,
+        presetId: "missing-mode",
+      }),
+    });
+    const unknownPreset = await unknownPresetResponse.json() as {
+      error?: { data?: { type?: string } };
+    };
+    assert.equal(unknownPresetResponse.status, 400);
+    assert.equal(unknownPreset.error?.data?.type, "unknown_preset");
+
     const createResponse = await fetch(`${base}/api/sessions`, {
       method: "POST",
       headers: { ...authorization, "Content-Type": "application/json", Origin: base },
-      body: JSON.stringify({ workspaceId: bootstrap.result.activeWorkspaceId, name: "E2E" }),
+      body: JSON.stringify({
+        workspaceId: bootstrap.result.activeWorkspaceId,
+        name: "E2E",
+        presetId: "creator",
+      }),
     });
     const created = await createResponse.json() as {
       result: {
-        session: { id: string; name: string };
+        session: { id: string; name: string; presetId: string };
         snapshot: { cursor: { generation: number; sequence: number } };
       };
     };
     assert.equal(createResponse.status, 201, JSON.stringify(created));
     assert.equal(created.result.session.name, "E2E");
+    assert.equal(created.result.session.presetId, "creator");
     assert.ok(created.result.snapshot.cursor.generation >= 1);
     assert.ok(created.result.snapshot.cursor.sequence >= 0);
+
+    const creatorCatalogResponse = await fetch(
+      `${base}/api/sessions?workspace=${encodeURIComponent(bootstrap.result.activeWorkspaceId)}`,
+      { headers: authorization },
+    );
+    const creatorCatalog = await creatorCatalogResponse.json() as {
+      result: Array<{ id: string; presetId?: string }>;
+    };
+    assert.equal(
+      creatorCatalog.result.find((session) => session.id === created.result.session.id)?.presetId,
+      "creator",
+    );
 
     const rpcResponse = await fetch(
       `${base}/api/sessions/${created.result.session.id}/rpc`, {
@@ -186,13 +259,14 @@ test("web host authenticates, catalogs, creates a real worker, and invokes RPC",
       });
     const forked = await forkResponse.json() as {
       result: {
-        session: { id: string; name: string };
+        session: { id: string; name: string; presetId?: string };
         snapshot: { cursor: { generation: number; sequence: number } };
       };
     };
     assert.equal(forkResponse.status, 201);
     assert.notEqual(forked.result.session.id, created.result.session.id);
     assert.equal(forked.result.session.name, "E2E branch");
+    assert.equal(forked.result.session.presetId, "creator");
     assert.ok(forked.result.snapshot.cursor.generation >= 1);
 
     const unsafeFork = await fetch(

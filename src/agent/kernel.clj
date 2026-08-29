@@ -224,6 +224,45 @@
 (defn loaded-plugins [ctx]
   (:loaded @(:state ctx)))
 
+(defn runtime-snapshot
+  "Return deterministic, read-only runtime metadata for inspection.
+
+  Service values, handlers, disposers, and executable functions are excluded."
+  [ctx]
+  (let [{:keys [commands hooks loaded services tools]} @(:state ctx)
+        public-definition
+        (fn [[name {:keys [owner definition]}]]
+          (cond-> {:name (str name)
+                   :owner (str owner)}
+            (:description definition)
+            (assoc :description (:description definition))))]
+    {:plugins (->> loaded
+                   (map #(select-keys % [:id :namespace :description]))
+                   (map #(update % :id str))
+                   (sort-by :id)
+                   vec)
+     :services (->> services
+                    (map (fn [[key {:keys [owner]}]]
+                           {:key (str key)
+                            :owner (str owner)}))
+                    (sort-by :key)
+                    vec)
+     :tools (->> tools
+                 (map public-definition)
+                 (sort-by :name)
+                 vec)
+     :commands (->> commands
+                    (map public-definition)
+                    (sort-by :name)
+                    vec)
+     :hooks (->> hooks
+                 (map (fn [[event entries]]
+                        {:event (str event)
+                         :observers (count (filter (comp #{:observer} :kind) entries))
+                         :interceptors (count (filter (comp #{:interceptor} :kind) entries))}))
+                 (sort-by :event)
+                 vec)}))
+
 (defn dispose-all! [ctx]
   (doseq [plugin-id (reverse (map :id (loaded-plugins ctx)))]
     (dispose-plugin! ctx plugin-id))
