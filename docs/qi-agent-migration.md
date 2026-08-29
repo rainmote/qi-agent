@@ -5,6 +5,8 @@ ASCII `qi-agent`，Clojure 命名空间使用 `qi.*`。
 
 | 范围 | 新标识 | 兼容行为 |
 |---|---|---|
+| 页面 / 中文品牌 | `qì agent` / `器` | 工程标识中不使用 Unicode |
+| GitHub 仓库 | `rainmote/qi-agent` | GitHub 为原 `rainmote/dao` 地址提供跳转 |
 | CLI | `qi-agent` | `dao` 保留为同实现别名 |
 | Babashka task | `bb qi-agent` | `bb agent` 继续可用 |
 | 用户数据 | `$QI_AGENT_HOME`，默认 `~/.qi-agent` | 旧 trust、resource 与 preset 目录在新目录不存在时回退读取 |
@@ -17,7 +19,7 @@ ASCII `qi-agent`，Clojure 命名空间使用 `qi.*`。
 `agent.edn` 仍是 profile 文件名：这里的 “agent” 表达文件职责，不是旧品牌。preset 内的
 `agent.edn` 同理保持不变，避免把格式迁移与品牌迁移耦合。
 
-GitHub 仓库改名为 `rainmote/qi-agent` 后，再更新本地远端：
+GitHub 仓库与本地 `origin` 现已使用 `rainmote/qi-agent`。已有 clone 若仍指向旧地址，可执行：
 
 ```bash
 git remote set-url origin git@github.com:rainmote/qi-agent.git
