@@ -133,7 +133,7 @@ export class AgentWorker extends EventEmitter {
       this.#agentId = created.agent?.agent_id || null;
       createSnapshot = created.snapshot;
     }
-    if (!this.#agentId) throw new Error("DAO did not return an agent id");
+    if (!this.#agentId) throw new Error("qì agent did not return an agent id");
     const attached = await this.request("agent.attach", {
       agent_id: this.#agentId,
     }, 30_000, this.#agentId) as {
@@ -166,7 +166,7 @@ export class AgentWorker extends EventEmitter {
     lines.on("line", (line) => this.handleLine(line));
     this.#socket.on("error", (error) => this.fail(error));
     this.#socket.on("close", () => {
-      this.fail(new Error("DAO daemon connection closed"));
+      this.fail(new Error("qì agent daemon connection closed"));
       this.#connected = null;
       if (!this.#closed) this.emit("exit", { code: null, signal: null });
     });
@@ -177,14 +177,14 @@ export class AgentWorker extends EventEmitter {
   private request(method: string, params: Record<string, unknown>, timeoutMs: number,
     agentId: string | null): Promise<unknown> {
     if (!this.#socket || this.#socket.destroyed) {
-      return Promise.reject(new Error("DAO daemon connection is unavailable"));
+      return Promise.reject(new Error("qì agent daemon connection is unavailable"));
     }
     const id = `web-request-${randomUUID()}`;
     const commandId = mutationMethods.has(method) ? `web-command-${randomUUID()}` : null;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.#pending.delete(id);
-        reject(new Error(`DAO method timed out: ${method}`));
+        reject(new Error(`qì agent method timed out: ${method}`));
       }, timeoutMs);
       timer.unref();
       this.#pending.set(id, { resolve, reject, timer });
@@ -218,23 +218,30 @@ export class AgentWorker extends EventEmitter {
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
     }
-    throw new Error(`DAO daemon did not start: ${String(lastError)}`);
+    throw new Error(`qì agent daemon did not start: ${String(lastError)}`);
   }
 
   private daemonSocketPath(): string {
     const runtime = this.daemonEnvironment.runtimeDirectory
+      || process.env.QI_AGENT_RUNTIME_DIR
       || process.env.DAO_RUNTIME_DIR
       || (process.env.XDG_RUNTIME_DIR
-        ? join(process.env.XDG_RUNTIME_DIR, "dao")
-        : join(tmpdir(), `dao-${process.getuid?.() ?? 0}`));
+        ? join(process.env.XDG_RUNTIME_DIR, "qi-agent")
+        : join(tmpdir(), `qi-agent-${process.getuid?.() ?? 0}`));
     return join(runtime, "daemon.sock");
   }
 
   private launchDaemon(): void {
-    const release = join(this.repositoryRoot, "apps/tui-rs/target/release/dao");
-    const debug = join(this.repositoryRoot, "apps/tui-rs/target/debug/dao");
-    const executable = process.env.DAO_BIN
-      || (existsSync(release) ? release : existsSync(debug) ? debug : "dao");
+    const release = join(this.repositoryRoot, "apps/tui-rs/target/release/qi-agent");
+    const debug = join(this.repositoryRoot, "apps/tui-rs/target/debug/qi-agent");
+    const legacyRelease = join(this.repositoryRoot, "apps/tui-rs/target/release/dao");
+    const legacyDebug = join(this.repositoryRoot, "apps/tui-rs/target/debug/dao");
+    const executable = process.env.QI_AGENT_BIN
+      || process.env.DAO_BIN
+      || (existsSync(release) ? release
+        : existsSync(debug) ? debug
+          : existsSync(legacyRelease) ? legacyRelease
+            : existsSync(legacyDebug) ? legacyDebug : "qi-agent");
     const child = spawn(executable, [
       "daemon", "serve",
       "--repository-root", this.repositoryRoot,
@@ -245,11 +252,14 @@ export class AgentWorker extends EventEmitter {
       env: {
         ...process.env,
         ...(this.daemonEnvironment.runtimeDirectory
-          ? { DAO_RUNTIME_DIR: this.daemonEnvironment.runtimeDirectory } : {}),
+          ? { QI_AGENT_RUNTIME_DIR: this.daemonEnvironment.runtimeDirectory,
+            DAO_RUNTIME_DIR: this.daemonEnvironment.runtimeDirectory } : {}),
         ...(this.daemonEnvironment.stateDirectory
-          ? { DAO_STATE_DIR: this.daemonEnvironment.stateDirectory } : {}),
+          ? { QI_AGENT_STATE_DIR: this.daemonEnvironment.stateDirectory,
+            DAO_STATE_DIR: this.daemonEnvironment.stateDirectory } : {}),
         ...(this.daemonEnvironment.providerSettingsPath
-          ? { DAO_PROVIDER_SETTINGS_FILE: this.daemonEnvironment.providerSettingsPath } : {}),
+          ? { QI_AGENT_PROVIDER_SETTINGS_FILE: this.daemonEnvironment.providerSettingsPath,
+            DAO_PROVIDER_SETTINGS_FILE: this.daemonEnvironment.providerSettingsPath } : {}),
       },
       stdio: "ignore",
     });
@@ -291,7 +301,7 @@ export class AgentWorker extends EventEmitter {
         }
       } else {
         pending.reject(Object.assign(
-          new Error(message.error?.message || "DAO request failed"),
+          new Error(message.error?.message || "qì agent request failed"),
           { data: message.error?.data }));
       }
       return;
@@ -313,7 +323,7 @@ export class AgentWorker extends EventEmitter {
     const chunks = this.#snapshotTransfers.get(transferId);
     this.#snapshotTransfers.delete(transferId);
     if (!chunks || chunks.some((chunk) => chunk === undefined)) {
-      throw new Error(`Incomplete DAO snapshot transfer: ${transferId}`);
+      throw new Error(`Incomplete qì agent snapshot transfer: ${transferId}`);
     }
     const snapshot = JSON.parse(chunks.join(""));
     if (Object.keys(value).length === 1) return snapshot;

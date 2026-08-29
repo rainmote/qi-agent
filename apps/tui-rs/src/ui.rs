@@ -2300,7 +2300,7 @@ mod tests {
             },
         ];
         let mut app = App::with_projection(projection);
-        app.cwd = "/workspace/dao".into();
+        app.cwd = "/workspace/qi-agent".into();
         app
     }
 
@@ -2464,7 +2464,7 @@ mod tests {
     fn idle_frame_matches_qwen_shell_at_160x44() {
         let output = frame(&fixture(), 160, 44);
         assert!(output.contains("___ ___     _   ___ ___ _  _ _____"));
-        assert!(output.contains(">_ bb-agent (v0.1.0)"));
+        assert!(output.contains(">_ qì agent (v0.1.0)"));
         assert!(output.contains("Tips: Type / to see all available commands."));
         assert!(output.contains("> hello"));
         assert!(output.contains("◆ TUI is ready. Ctrl+N inserts a newline; Enter submits."));
@@ -2477,7 +2477,7 @@ mod tests {
     fn narrow_frame_hides_logo_without_clipping_controls() {
         let output = frame(&fixture(), 80, 24);
         assert!(!output.contains("___ ___"));
-        assert!(output.contains(">_ bb-agent"));
+        assert!(output.contains(">_ qì agent"));
         assert!(output.contains("Type your message or @path/to/file"));
         assert!(output.lines().all(|line| line.width() <= 80));
     }
@@ -2547,7 +2547,7 @@ mod tests {
         let scrollback = buffer_text(terminal.backend().scrollback());
         let screen = buffer_text(terminal.backend().buffer());
         let viewport = buffer_rect_text(terminal.backend().buffer(), viewport_area);
-        assert!(scrollback.contains(">_ bb-agent"));
+        assert!(scrollback.contains(">_ qì agent"));
         assert!(format!("{scrollback}\n{screen}").contains("> hello"));
         assert!(!viewport.contains("> hello"));
         assert!(!viewport.contains("TUI is ready"));

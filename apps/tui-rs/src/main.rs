@@ -1,9 +1,4 @@
 use anyhow::{Context, Result, bail};
-use bb_agent_tui::{
-    Action, App, Envelope,
-    client::{self, AttachedAgent},
-    daemon, service, ui, wire, worker_proxy,
-};
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
     event::{
@@ -15,6 +10,11 @@ use crossterm::{
         Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
         enable_raw_mode, size,
     },
+};
+use qi_agent_tui::{
+    Action, App, Envelope,
+    client::{self, AttachedAgent},
+    daemon, service, ui, wire, worker_proxy,
 };
 use ratatui::{
     Terminal, TerminalOptions, Viewport,
@@ -599,7 +599,7 @@ fn run_tui(mut attached: AttachedAgent, terminal_mode: TerminalMode) -> Result<(
     }
 }
 
-fn reconnect_tui(agent_id: &str, cursor: bb_agent_tui::Cursor) -> Result<AttachedAgent> {
+fn reconnect_tui(agent_id: &str, cursor: qi_agent_tui::Cursor) -> Result<AttachedAgent> {
     let started = Instant::now();
     let mut last_error = None;
     while started.elapsed() < Duration::from_secs(15) {
@@ -614,7 +614,7 @@ fn reconnect_tui(agent_id: &str, cursor: bb_agent_tui::Cursor) -> Result<Attache
 
 fn main() {
     if let Err(error) = entrypoint() {
-        eprintln!("dao failed: {error:#}");
+        eprintln!("qi-agent failed: {error:#}");
         std::process::exit(1);
     }
 }
@@ -747,8 +747,8 @@ fn entrypoint() -> Result<()> {
             println!("{USAGE}");
             Ok(())
         }
-        Some(value) if !value.starts_with('-') => bail!("unknown dao command: {value}"),
-        Some(value) => bail!("unknown dao option: {value}"),
+        Some(value) if !value.starts_with('-') => bail!("unknown qi-agent command: {value}"),
+        Some(value) => bail!("unknown qi-agent option: {value}"),
         _ => run_tui(
             client::attach_or_create(
                 None,
@@ -796,7 +796,7 @@ fn choose_preset_interactive(
         .read(true)
         .write(true)
         .open("/dev/tty")
-        .context("dao new requires a terminal; pass --preset ID for automation")?;
+        .context("qi-agent new requires a terminal; pass --preset ID for automation")?;
     writeln!(tty, "选择新会话的 Agent 模式：")?;
     for (index, preset) in presets.iter().enumerate() {
         let state = if preset.broken { " [不可用]" } else { "" };
@@ -847,29 +847,29 @@ fn select_preset_id(presets: &[(String, bool)], input: &str) -> Result<String> {
 
 const USAGE: &str = "Daemon-backed Clojure agent runtime
 
-  dao                              attach/create and open the Rust TUI
-  dao new [--preset ID]            choose a mode and create a distinct Agent/Session
-  dao agents                       list saved and resident agents
-  dao attach AGENT_ID              attach the TUI to an agent
-  dao run --detach PROMPT          submit background work and return
-  dao repl AGENT_ID                open the agent's Clojure REPL
-  dao status                       show daemon and worker state
-  dao update                       recover missing workers and refresh leases
-  dao doctor                       run non-destructive diagnostics
-  dao doctor --fix                 purge only provably expired leases
-  dao backup                       create a consistent SQLite snapshot
-  dao service print|install|uninstall
+  qi-agent                              attach/create and open the Rust TUI
+  qi-agent new [--preset ID]            choose a mode and create a distinct Agent/Session
+  qi-agent agents                       list saved and resident agents
+  qi-agent attach AGENT_ID              attach the TUI to an agent
+  qi-agent run --detach PROMPT          submit background work and return
+  qi-agent repl AGENT_ID                open the agent's Clojure REPL
+  qi-agent status                       show daemon and worker state
+  qi-agent update                       recover missing workers and refresh leases
+  qi-agent doctor                       run non-destructive diagnostics
+  qi-agent doctor --fix                 purge only provably expired leases
+  qi-agent backup                       create a consistent SQLite snapshot
+  qi-agent service print|install|uninstall
                                    manage the per-user OS daemon service
-  dao stop AGENT_ID                explicitly stop one root agent tree
-  dao shutdown                     stop all workers and the daemon
-  dao daemon serve                 run the supervisor in the foreground
+  qi-agent stop AGENT_ID                explicitly stop one root agent tree
+  qi-agent shutdown                     stop all workers and the daemon
+  qi-agent daemon serve                 run the supervisor in the foreground
 
 Options:
   --config PATH                    trusted daemon default profile (default: agent.edn)
   --preset ID                      registered Preset for a newly created Agent
   --native-scrollback              use terminal scrollback instead of virtual history
   --repl-backend BACKEND           babashka (default) or jvm-clojure
-  --repository-root PATH           dao runtime source root";
+  --repository-root PATH           qi-agent runtime source root";
 
 fn call_and_print(
     method: &str,
@@ -961,7 +961,7 @@ mod tests {
 
     #[test]
     fn top_level_help_is_a_command_instead_of_starting_the_tui() {
-        let values = args(&["--repository-root", "/tmp/dao", "--help"]);
+        let values = args(&["--repository-root", "/tmp/qi-agent", "--help"]);
         let (command, tail) = command_and_tail(&values);
         assert_eq!(command, Some("--help"));
         assert!(tail.is_empty());
@@ -1006,9 +1006,9 @@ mod tests {
     fn preset_is_a_global_agent_creation_option() {
         let values = args(&[
             "--repository-root",
-            "/installed/dao",
+            "/installed/qi-agent",
             "--config",
-            "/installed/dao/agent.edn",
+            "/installed/qi-agent/agent.edn",
             "--preset",
             "standard",
             "run",

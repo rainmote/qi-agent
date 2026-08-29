@@ -51,7 +51,7 @@ test("creator draft entry is hidden when the creator preset is unavailable", () 
 
 test("workspace selector keeps adding a workspace beside selection", () => {
   const html = renderToStaticMarkup(<WorkspaceSelector workspaces={[
-    { id: "workspace-1", name: "DAO", path: "/workspace/dao", addedAt: "2026-08-29" },
+    { id: "workspace-1", name: "qì agent", path: "/workspace/qi-agent", addedAt: "2026-08-29" },
   ]} value="workspace-1" onChange={() => undefined} onAdd={() => undefined} />);
   assert.match(html, /aria-label="选择工作区"/);
   assert.match(html, /value="workspace-1" selected=""/);

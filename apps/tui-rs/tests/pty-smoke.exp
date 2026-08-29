@@ -5,10 +5,10 @@ set timeout 10
 
 set repo_root [file normalize [file join [file dirname [info script]] ../../..]]
 cd $repo_root
-set capture_path [file join /tmp "dao-tui-pty-[pid].log"]
-set runtime_path [file join /tmp "dao-pty-runtime-[pid]"]
-set state_path [file join /tmp "dao-pty-state-[pid]"]
-set workspace_path [file join /tmp "dao-pty-workspace-[pid]"]
+set capture_path [file join /tmp "qi-agent-tui-pty-[pid].log"]
+set runtime_path [file join /tmp "qi-agent-pty-runtime-[pid]"]
+set state_path [file join /tmp "qi-agent-pty-state-[pid]"]
+set workspace_path [file join /tmp "qi-agent-pty-workspace-[pid]"]
 file mkdir $runtime_path
 file mkdir $state_path
 file mkdir $workspace_path
@@ -22,8 +22,8 @@ proc fail {message code} {
     catch {send -- "\003"}
     after 100
     catch {send -- "\003"}
-    catch {exec env DAO_RUNTIME_DIR=$runtime_path DAO_STATE_DIR=$state_path \
-        [file join $repo_root apps tui-rs target release dao] shutdown --repository-root $repo_root \
+    catch {exec env QI_AGENT_RUNTIME_DIR=$runtime_path QI_AGENT_STATE_DIR=$state_path \
+        [file join $repo_root apps tui-rs target release qi-agent] shutdown --repository-root $repo_root \
         --config [file join $repo_root examples tui-mock.edn]}
     puts stderr "terminal capture: $capture_path"
     catch {file delete -force $runtime_path}
@@ -35,8 +35,8 @@ proc fail {message code} {
 # Some non-interactive Expect hosts create the child PTY at 0x0, so Ratatui's
 # first frame would correctly contain no cells. Configure the spawned slave.
 cd $workspace_path
-spawn -noecho env DAO_RUNTIME_DIR=$runtime_path DAO_STATE_DIR=$state_path \
-    [file join $repo_root apps tui-rs target release dao] --repository-root $repo_root \
+spawn -noecho env QI_AGENT_RUNTIME_DIR=$runtime_path QI_AGENT_STATE_DIR=$state_path \
+    [file join $repo_root apps tui-rs target release qi-agent] --repository-root $repo_root \
     --config [file join $repo_root examples tui-mock.edn]
 stty rows 44 columns 160 < $spawn_out(slave,name)
 
@@ -92,8 +92,8 @@ expect {
         if {[string first "\x1b\[?1006l" $terminal_output] < 0} {
             fail "terminal: mouse capture was not restored" 10
         }
-        catch {exec env DAO_RUNTIME_DIR=$runtime_path DAO_STATE_DIR=$state_path \
-            [file join $repo_root apps tui-rs target release dao] shutdown --repository-root $repo_root \
+        catch {exec env QI_AGENT_RUNTIME_DIR=$runtime_path QI_AGENT_STATE_DIR=$state_path \
+            [file join $repo_root apps tui-rs target release qi-agent] shutdown --repository-root $repo_root \
             --config [file join $repo_root examples tui-mock.edn]}
         file delete -force $runtime_path
         file delete -force $state_path

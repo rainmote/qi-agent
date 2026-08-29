@@ -3,7 +3,7 @@
 ## 定位
 
 唯一受支持的外部终端前端位于 `apps/tui-rs/`，使用 Rust、Ratatui 0.30 和 Crossterm 0.29。
-旧 TypeScript/React/Ink 实现和过渡性的 `agent.plugins.tui-ink` bridge 已经删除。Rust 前端是
+旧 TypeScript/React/Ink 实现和过渡性的 `qi.plugins.tui-ink` bridge 已经删除。Rust 前端是
 常驻 daemon 的普通客户端；session、agent loop、模型、工具、审批、策略和命令由 resident
 Babashka worker 持有，关闭 TUI 只产生 detach。
 
@@ -11,13 +11,13 @@ Babashka worker 持有，关闭 TUI 只产生 detach。
 
 ```bash
 bb tui-build
-apps/tui-rs/target/release/dao
+apps/tui-rs/target/release/qi-agent
 ```
 
 完全离线的真实工具批次：
 
 ```bash
-apps/tui-rs/target/release/dao --repository-root . --config examples/tui-mock.edn
+apps/tui-rs/target/release/qi-agent --repository-root . --config examples/tui-mock.edn
 ```
 
 Rust 前端直接打开 controlling TTY。它通过 TTY 读取按键，默认进入 alternate screen，并在应用内
@@ -92,5 +92,5 @@ Rust TUI、headless CLI 和 WebUI 使用同一个 daemon 协议与 supervisor SQ
 durable state 和显式 `replay_safe` REPL cell，不会重放结果不确定的副作用。完整进程边界与协议见
 [Daemon-backed Agent 架构](daemon-agent-architecture.md)。
 
-原生 Clojure TUI 仍是 `agent.plugins.tui`。一个 profile 只能配置一个
+原生 Clojure TUI 仍是 `qi.plugins.tui`。一个 profile 只能配置一个
 `:frontend/interactive` provider。

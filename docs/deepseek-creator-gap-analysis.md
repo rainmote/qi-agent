@@ -1,24 +1,24 @@
-# DAO 创造模式与 DeepSeek Harness 对齐分析
+# qì agent 创造模式与 DeepSeek Harness 对齐分析
 
 更新时间：2026-08-28  
 DeepSeek Harness 基线：[`cd5ef8148158c3a752a658978873241fdf8e2bbc`](https://github.com/deepseek-ai/deepseek-harness/tree/cd5ef8148158c3a752a658978873241fdf8e2bbc)（`0.1.2-alpha.1`）
 
 ## 结论
 
-DAO 已从“可选择的特殊配置”补成可完成真实交付的创造模式：它继承标准编码能力，能够检查当前运行时，创建、读取、复制、原子更新、校验和删除用户 Agent Preset，也能以不可变版本管理受控的临时插件实验。Creator 现在还可提交 Clojure EDN Blueprint，在当前 Session 动态创建带 Schema 的有状态工具，并热更新或回滚。
+qì agent 已从“可选择的特殊配置”补成可完成真实交付的创造模式：它继承标准编码能力，能够检查当前运行时，创建、读取、复制、原子更新、校验和删除用户 Agent Preset，也能以不可变版本管理受控的临时插件实验。Creator 现在还可提交 Clojure EDN Blueprint，在当前 Session 动态创建带 Schema 的有状态工具，并热更新或回滚。
 
-它仍不等价于 DeepSeek Harness 的 Dynamic Cordis Plugins。DAO 执行的是能力封闭的 EDN 数据程序，而不是模型提交的任意 Clojure/JavaScript 源码；同时还没有浏览器 Client half、Slot UI、完整 Inspect Provider 类型目录和异步页面审批链。这些差异是明确的安全/产品边界，不应被描述为已经完全对齐。
+它仍不等价于 DeepSeek Harness 的 Dynamic Cordis Plugins。qì agent 执行的是能力封闭的 EDN 数据程序，而不是模型提交的任意 Clojure/JavaScript 源码；同时还没有浏览器 Client half、Slot UI、完整 Inspect Provider 类型目录和异步页面审批链。这些差异是明确的安全/产品边界，不应被描述为已经完全对齐。
 
 ## 能力矩阵
 
-| 能力 | DeepSeek Harness 创造模式 | DAO 当前状态 | 结论 |
+| 能力 | DeepSeek Harness 创造模式 | qì agent 当前状态 | 结论 |
 |---|---|---|---|
 | 模式发现与新 Session 选择 | `standard`/`cordis` 等 Preset roster | daemon、TUI、Web 共用 Preset roster；按 Preset 创建独立 Agent | 已对齐 |
 | 标准能力超集 | `cordis` 复制标准模式全部工具，再增加创造能力 | `creator` 是 `standard` 严格超集 | 已对齐 |
 | Session 隔离与恢复 | Preset 按 Session mount；选择持久化 | 每个 Agent 独立 worker/config snapshot；选择持久化，fork 继承 | 已对齐 |
-| 系统/用户 Preset 边界 | shipped 只读，用户目录可创作 | `presets/` 只读，`~/.dao/agent-presets` 可写 | 已对齐 |
+| 系统/用户 Preset 边界 | shipped 只读，用户目录可创作 | `presets/` 只读，`~/.qi-agent/presets` 可写 | 已对齐 |
 | Preset 发现、读取、复制、删除 | roster service | `:agent/presets` service + `preset_inspect`/`preset_author` | 已对齐 |
-| 用户 Preset 修改 | 复制后通过文件工具修改 composition | `preset_author update` 接受完整 EDN，先校验再原子替换 | 已对齐；DAO 边界更窄 |
+| 用户 Preset 修改 | 复制后通过文件工具修改 composition | `preset_author update` 接受完整 EDN，先校验再原子替换 | 已对齐；qì agent 边界更窄 |
 | Preset 校验 | shape check + standing mount validation | structural validation；可信宿主可选 boot/dispose mount validation | 已对齐 |
 | 创作入口 | 设置页“用创造模式起草” | Web 新会话页提供同类入口并预填创作请求 | 已对齐 |
 | 创作指导 | 两个随 Preset 分发的 progressive skills | 随 Creator 分发的 `creating-agent-presets` skill + `preset_guide` | 已对齐 |

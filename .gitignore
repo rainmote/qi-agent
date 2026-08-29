@@ -1,4 +1,7 @@
 # Agent runtime state: conversations, tool calls, local paths, and sandboxes
+.qi-agent/
+.qi-agent-*
+# Legacy state is ignored while migration fallback remains supported.
 .bb-agent/
 .bb-agent-*
 

@@ -62,7 +62,7 @@ fn finish_preset_discovery(hello: Value, value: Value) -> Result<Vec<PresetSumma
                 .any(|capability| capability.as_str() == Some("preset.discovery.v1"))
         });
     if !supported {
-        bail!("the running dao daemon does not support preset discovery; restart it")
+        bail!("the running qi-agent daemon does not support preset discovery; restart it")
     }
     parse_preset_summaries(value)
 }
@@ -215,7 +215,7 @@ pub fn connect_or_launch(
         }
         if started.elapsed() >= Duration::from_secs(10) {
             bail!(
-                "dao daemon did not start; inspect {}",
+                "qi-agent daemon did not start; inspect {}",
                 paths.logs_dir.join("daemon.log").display()
             )
         }
@@ -293,7 +293,7 @@ fn attach_or_create_impl(
             != Some(requested.to_string_lossy().as_ref())
     {
         bail!(
-            "the running dao daemon uses a different --config; restart it when current background tasks are safe to stop or select a registered --preset"
+            "the running qi-agent daemon uses a different --config; restart it when current background tasks are safe to stop or select a registered --preset"
         )
     }
     if preset_id.is_some()
@@ -306,7 +306,7 @@ fn attach_or_create_impl(
                     .any(|value| value.as_str() == Some("agent.preset-selection.v1"))
             })
     {
-        bail!("the running dao daemon does not support preset selection; restart it")
+        bail!("the running qi-agent daemon does not support preset selection; restart it")
     }
     if repl_backend.is_some()
         && !hello
@@ -319,7 +319,7 @@ fn attach_or_create_impl(
             })
     {
         bail!(
-            "the running dao daemon does not support per-agent REPL selection; restart it when current background tasks are safe to stop"
+            "the running qi-agent daemon does not support per-agent REPL selection; restart it when current background tasks are safe to stop"
         )
     }
     let workspace = canonical(std::env::current_dir()?)?;
@@ -502,7 +502,9 @@ pub fn launch_daemon(
             Ok(())
         });
     }
-    command.spawn().context("could not launch dao daemon")?;
+    command
+        .spawn()
+        .context("could not launch qi-agent daemon")?;
     Ok(())
 }
 
@@ -604,32 +606,32 @@ mod tests {
     #[test]
     fn profile_matching_separates_default_and_preset_agents_with_launcher_config() {
         let workspace = Path::new("/workspace");
-        let launcher_config = Path::new("/installed/dao/agent.edn");
+        let launcher_config = Path::new("/installed/qi-agent/agent.edn");
         let default_agent = json!({
             "workspace_path": "/workspace",
             "preset_id": null,
-            "config_path": "/installed/dao/agent.edn",
+            "config_path": "/installed/qi-agent/agent.edn",
             "repl_backend": "babashka",
             "status": "idle"
         });
         let preset_agent = json!({
             "workspace_path": "/workspace",
             "preset_id": "standard",
-            "config_path": "/installed/dao/presets/standard/agent.edn",
+            "config_path": "/installed/qi-agent/presets/standard/agent.edn",
             "repl_backend": "babashka",
             "status": "idle"
         });
         let jvm_default_agent = json!({
             "workspace_path": "/workspace",
             "preset_id": null,
-            "config_path": "/installed/dao/agent.edn",
+            "config_path": "/installed/qi-agent/agent.edn",
             "repl_backend": "jvm-clojure",
             "status": "idle"
         });
         let jvm_preset_agent = json!({
             "workspace_path": "/workspace",
             "preset_id": "standard",
-            "config_path": "/installed/dao/presets/standard/agent.edn",
+            "config_path": "/installed/qi-agent/presets/standard/agent.edn",
             "repl_backend": "jvm-clojure",
             "status": "idle"
         });

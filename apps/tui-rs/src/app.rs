@@ -96,7 +96,7 @@ impl Default for App {
             dialog_interaction_id: None,
             theme: Theme::default(),
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-            brand: "bb-agent".into(),
+            brand: "qì agent".into(),
             version: env!("CARGO_PKG_VERSION").into(),
             details_expanded: false,
             expanded_tool_groups: HashSet::new(),

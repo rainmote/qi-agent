@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { homedir } from "node:os";
@@ -17,8 +18,7 @@ export class WorkspaceRegistry {
   readonly statePath: string;
   #workspaces = new Map<string, Workspace>();
 
-  constructor(stateDirectory = process.env.BB_AGENT_WEB_STATE_DIR ||
-    join(homedir(), ".bb-agent", "web")) {
+  constructor(stateDirectory = defaultStateDirectory()) {
     this.stateDirectory = stateDirectory;
     this.statePath = join(stateDirectory, "workspaces.json");
   }
@@ -93,4 +93,13 @@ export class WorkspaceRegistry {
     if (!info.isDirectory()) throw new Error("Workspace must be a directory");
     return canonical;
   }
+}
+
+function defaultStateDirectory(): string {
+  if (process.env.QI_AGENT_WEB_STATE_DIR) return process.env.QI_AGENT_WEB_STATE_DIR;
+  if (process.env.BB_AGENT_WEB_STATE_DIR) return process.env.BB_AGENT_WEB_STATE_DIR;
+  if (process.env.QI_AGENT_HOME) return join(process.env.QI_AGENT_HOME, "web");
+  const canonical = join(homedir(), ".qi-agent", "web");
+  const legacy = join(homedir(), ".bb-agent", "web");
+  return existsSync(canonical) || !existsSync(legacy) ? canonical : legacy;
 }

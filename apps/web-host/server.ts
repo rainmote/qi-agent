@@ -13,7 +13,7 @@ import { WorkspaceRegistry } from "./workspaces.js";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const defaultStaticRoot = join(repositoryRoot, "apps", "web", "dist");
-const cookieName = "bb_agent_web";
+const cookieName = "qi_agent_web";
 const mimeTypes: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
   ".html": "text/html; charset=utf-8",
@@ -180,7 +180,7 @@ export async function startWebHost(options: WebHostOptions = {}) {
   const ownedDaemonEnvironment = options.stateDirectory ? {
     // Unix socket paths are short on macOS. Keep the ephemeral runtime path
     // out of deeply nested test/application state directories.
-    runtimeDirectory: join("/tmp", `dao-web-${process.pid}-${randomBytes(6).toString("hex")}`),
+    runtimeDirectory: join("/tmp", `qi-agent-web-${process.pid}-${randomBytes(6).toString("hex")}`),
     stateDirectory: join(options.stateDirectory, "daemon-state"),
     providerSettingsPath: providers.statePath,
   } : null;
@@ -190,7 +190,10 @@ export async function startWebHost(options: WebHostOptions = {}) {
   const readiness = async () => {
     const workspaceRoots = workspaces.list().map((workspace) => workspace.path);
     const binaryCandidates = [
+      process.env.QI_AGENT_BIN,
       process.env.DAO_BIN,
+      join(repositoryRoot, "apps", "tui-rs", "target", "release", "qi-agent"),
+      join(repositoryRoot, "apps", "tui-rs", "target", "debug", "qi-agent"),
       join(repositoryRoot, "apps", "tui-rs", "target", "release", "dao"),
       join(repositoryRoot, "apps", "tui-rs", "target", "debug", "dao"),
     ].filter((value): value is string => Boolean(value));
@@ -455,7 +458,7 @@ function parseArguments(arguments_: string[]): WebHostOptions {
 const entrypoint = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (entrypoint) {
   const host = await startWebHost(parseArguments(process.argv.slice(2)));
-  console.log(`bb-agent Web is ready: ${host.url}`);
+  console.log(`qì agent Web is ready: ${host.url}`);
   console.log("The bearer token is stored only in this process and the authenticated cookie.");
   const shutdown = async () => {
     await host.close();

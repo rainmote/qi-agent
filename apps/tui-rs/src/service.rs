@@ -6,8 +6,8 @@ use std::{
     process::Command,
 };
 
-const LAUNCHD_LABEL: &str = "ai.dao.agent";
-const SYSTEMD_UNIT: &str = "dao.service";
+const LAUNCHD_LABEL: &str = "io.github.rainmote.qi-agent";
+const SYSTEMD_UNIT: &str = "qi-agent.service";
 
 pub enum ServiceAction {
     Print,
@@ -131,7 +131,7 @@ fn definition(
             arguments.push(shell_escape(&config.display().to_string()));
         }
         let contents = format!(
-            "[Unit]\nDescription=DAO local agent supervisor\nAfter=network.target\n\n\
+            "[Unit]\nDescription=qì agent local supervisor\nAfter=network.target\n\n\
 [Service]\nType=simple\nExecStart={}\nRestart=on-failure\nRestartSec=1\n\
 StandardOutput=append:{}\nStandardError=append:{}\n\n\
 [Install]\nWantedBy=default.target\n",

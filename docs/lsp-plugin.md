@@ -5,9 +5,9 @@
 
 | 插件 | Service / 工具 | 职责 |
 |---|---|---|
-| `agent.plugins.stdio-session` | `:execution/stdio-session` | 在 ExecutionWorld 的根目录和 sandbox 模式内管理长驻 argv/stdio 进程 |
-| `agent.plugins.lsp` | `:lsp/runtime` | server registry、JSON-RPC、客户端生命周期、文档同步和结果归一化 |
-| `agent.plugins.lsp-tools` | `lsp_query`、`/lsp` | 向模型与交互前端暴露只读查询 |
+| `qi.plugins.stdio-session` | `:execution/stdio-session` | 在 ExecutionWorld 的根目录和 sandbox 模式内管理长驻 argv/stdio 进程 |
+| `qi.plugins.lsp` | `:lsp/runtime` | server registry、JSON-RPC、客户端生命周期、文档同步和结果归一化 |
+| `qi.plugins.lsp-tools` | `lsp_query`、`/lsp` | 向模型与交互前端暴露只读查询 |
 
 删除这三个 profile 条目即可完整卸载 LSP；active server、工具、命令和 service 都会通过
 微内核 effect 逆序回收。
@@ -46,7 +46,7 @@
 每项 server 至少包含 keyword `:id`、`:command` 和 `:file-types`：
 
 ```clojure
-{:ns agent.plugins.lsp
+{:ns qi.plugins.lsp
  :config
  {:request-timeout-ms 10000
   :startup-timeout-ms 30000

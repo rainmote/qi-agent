@@ -9,7 +9,7 @@
 - macOS 的 `bash`/REPL 使用 Seatbelt 禁网并限制写入工作区；Linux 没有安全 provider 时会
   fail closed，不注册进程执行能力。需要在 Linux 开启 shell 时，应把 execution world 放入
   容器或受限远程执行环境，不能仅设置 `:sandbox :none` 后称为隔离。
-- `agent.plugins.openai-responses` 是默认生产 adapter；`agent.plugins.chatgpt` 依赖内部订阅
+- `qi.plugins.openai-responses` 是默认生产 adapter；`qi.plugins.chatgpt` 依赖内部订阅
   协议并标记为 experimental，不应作为无人值守生产默认值。
 - Web Host 默认拒绝非回环地址。`--unsafe-allow-network` 只用于已有认证和 TLS 的反向代理，
   不提供租户隔离、RBAC 或审计身份。
@@ -37,8 +37,8 @@ expect apps/tui-rs/tests/pty-smoke.exp
 首次启动后检查：
 
 ```bash
-dao doctor
-dao backup
+qi-agent doctor
+qi-agent backup
 ```
 
 `doctor.ok` 只有在 worker 状态、SQLite quick check 和 schema revision 都正常时才为 `true`。
@@ -58,12 +58,12 @@ owner-only（目录 `0700`、普通文件 `0600`），符号链接状态文件�
 | shell 最长运行 | 5 分钟 | `:max-timeout-ms` |
 | 单命令落盘输出 | 10,000,000 字符/流 | `:max-output-file-chars` |
 | 保留工具完整输出 | 1,000 份/工作区 | `:max-output-files` |
-| worker 单日志 | 10 MiB | `DAO_LOG_MAX_BYTES` |
-| 单日志轮转 | 3 份 | `DAO_LOG_BACKUPS` |
-| worker 日志总数 | 100 | `DAO_MAX_WORKER_LOGS` |
+| worker 单日志 | 10 MiB | `QI_AGENT_LOG_MAX_BYTES` |
+| 单日志轮转 | 3 份 | `QI_AGENT_LOG_BACKUPS` |
+| worker 日志总数 | 100 | `QI_AGENT_MAX_WORKER_LOGS` |
 
 命令超时、取消或输出越界会先终止整棵后代进程树。工具输出先写入受保护的临时 spool，只有
-需要完整输出时才生成持久文件；启动时只清理符合 dao UUID 命名规则的旧输出。
+需要完整输出时才生成持久文件；启动时只清理符合 qi-agent UUID 命名规则的旧输出。
 
 ## 数据库升级、备份与恢复
 
@@ -75,20 +75,21 @@ Supervisor 使用 `PRAGMA user_version` 管理 schema。启动时先做 quick ch
 恢复时先停止 daemon，不要覆盖正在使用的数据库：
 
 ```bash
-dao shutdown
-state_dir="/absolute/path/to/dao-state"
+qi-agent shutdown
+state_dir="/absolute/path/to/qi-agent-state"
 recovery_dir="$state_dir/recovery-before-restore"
 mkdir -m 700 "$recovery_dir"
 mv "$state_dir/supervisor.sqlite" "$recovery_dir/"
 test ! -e "$state_dir/supervisor.sqlite-wal" || mv "$state_dir/supervisor.sqlite-wal" "$recovery_dir/"
 test ! -e "$state_dir/supervisor.sqlite-shm" || mv "$state_dir/supervisor.sqlite-shm" "$recovery_dir/"
 install -m 600 "$state_dir/backups/SELECTED.sqlite" "$state_dir/supervisor.sqlite"
-dao doctor
+qi-agent doctor
 ```
 
-未设置 `DAO_STATE_DIR` 时，默认状态目录是 `$XDG_STATE_HOME/dao` 或
-`~/.local/state/dao`。恢复前应另外保存当前数据库及 `-wal`/`-shm` 文件；session JSONL 位于
-各工作区 `.bb-agent/sessions/`，不包含在 supervisor 备份中，需要纳入独立文件备份策略。
+未设置 `QI_AGENT_STATE_DIR` 时，若配置了 `QI_AGENT_HOME`，状态目录为
+`$QI_AGENT_HOME/state`；否则依次使用 `$XDG_STATE_HOME/qi-agent` 或 `~/.qi-agent/state`。
+恢复前应另外保存当前数据库及 `-wal`/`-shm` 文件；session JSONL 位于
+各工作区 `.qi-agent/sessions/`，不包含在 supervisor 备份中，需要纳入独立文件备份策略。
 
 ## 发布与校验
 
@@ -97,8 +98,8 @@ arm64 runner 上重新测试、用 lockfile 构建并生成最小运行包。Rel
 汇总 `SHA256SUMS` 和 GitHub artifact attestation。
 
 ```bash
-shasum -a 256 -c dao-vX.Y.Z-PLATFORM.tar.gz.sha256
-gh attestation verify dao-vX.Y.Z-PLATFORM.tar.gz --repo OWNER/REPOSITORY
+shasum -a 256 -c qi-agent-vX.Y.Z-PLATFORM.tar.gz.sha256
+gh attestation verify qi-agent-vX.Y.Z-PLATFORM.tar.gz --repo OWNER/REPOSITORY
 ```
 
 发布包不包含本地 `target/` 缓存、Node 依赖、session、凭据或用户状态。`bb install` 同样只
@@ -106,7 +107,7 @@ stage 运行所需源码，使用 `cargo build --release --locked`，并在激�
 
 ## 告警与故障处理
 
-本地部署至少应定期采集 `dao doctor` JSON，并对以下情况告警：`ok=false`、
+本地部署至少应定期采集 `qi-agent doctor` JSON，并对以下情况告警：`ok=false`、
 `database_integrity` 不是 `ok`、schema revision 不匹配、worker `alive=false`、日志持续轮转、
 或 release/CI 依赖审计失败。当前项目不内置 Prometheus server、集中日志、PagerDuty 集成或
 跨主机高可用；这些属于部署平台职责。需要公网、多租户、合规身份审计或 HA 时，仍需增加

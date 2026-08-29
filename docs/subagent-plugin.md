@@ -18,9 +18,9 @@ DeepSeek Harness 方案的主要优势不是“多开几个模型请求”，而
 
 | 插件 | 职责 |
 | --- | --- |
-| `agent.plugins.subagent` | 提供 `:subagents/runtime`，注册 provider，校验能力，管理任务与回收 |
-| `agent.plugins.subagent-in-process` | 注册 `:spawn`、`:fork`，创建隔离的子 plugin context |
-| `agent.plugins.subagent-tools` | 注册委派与后台控制工具 |
+| `qi.plugins.subagent` | 提供 `:subagents/runtime`，注册 provider，校验能力，管理任务与回收 |
+| `qi.plugins.subagent-in-process` | 注册 `:spawn`、`:fork`，创建隔离的子 plugin context |
+| `qi.plugins.subagent-tools` | 注册委派与后台控制工具 |
 
 默认工具：
 
@@ -56,22 +56,22 @@ DeepSeek Harness 方案的主要优势不是“多开几个模型请求”，而
 默认 [agent.edn](../agent.edn) 已启用三层插件。provider 的关键配置如下：
 
 ```clojure
-{:ns agent.plugins.subagent-in-process
+{:ns qi.plugins.subagent-in-process
  :config
  {:max-depth 1
   :allowed-tools ["read" "grep" "find" "ls" "bb_repl"]
   :child-profile
   {:plugins
-   [{:ns agent.plugins.session :config {:path nil}}
-    {:ns agent.plugins.model-registry :config {:default-provider :chatgpt}}
-    {:ns agent.plugins.chatgpt :config {:model "gpt-5.6-sol"}}
-    {:ns agent.plugins.runtime :config {:max-steps 8}}]}}}
+   [{:ns qi.plugins.session :config {:path nil}}
+    {:ns qi.plugins.model-registry :config {:default-provider :chatgpt}}
+    {:ns qi.plugins.chatgpt :config {:model "gpt-5.6-sol"}}
+    {:ns qi.plugins.runtime :config {:max-steps 8}}]}}}
 ```
 
 也可以为 tool adapter 配置其他固定 provider 名称：
 
 ```clojure
-{:ns agent.plugins.subagent-tools
+{:ns qi.plugins.subagent-tools
  :config
  {:delegates
   [{:name "research_agent"

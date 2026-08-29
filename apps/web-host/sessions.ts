@@ -113,17 +113,23 @@ export class SessionManager {
 
   async list(workspace: Workspace): Promise<SessionSummary[]> {
     await this.loadProfiles();
-    const directory = join(workspace.path, ".bb-agent", "sessions");
-    let entries;
-    try {
-      entries = await readdir(directory, { withFileTypes: true });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-      throw error;
-    }
-    const summaries = await Promise.all(entries
-      .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
-      .map((entry) => describeSession(join(directory, entry.name), workspace.id)));
+    const directories = [
+      join(workspace.path, ".qi-agent", "sessions"),
+      join(workspace.path, ".bb-agent", "sessions"),
+    ];
+    const files = (await Promise.all(directories.map(async (directory) => {
+      try {
+        const entries = await readdir(directory, { withFileTypes: true });
+        return entries
+          .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
+          .map((entry) => join(directory, entry.name));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+        throw error;
+      }
+    }))).flat();
+    const summaries = await Promise.all(files
+      .map((path) => describeSession(path, workspace.id)));
     return summaries.filter((value): value is SessionSummary => Boolean(value))
       .map((summary) => ({
         ...summary,
@@ -145,7 +151,7 @@ export class SessionManager {
     if (!workspace) throw new Error("No workspace is allowlisted");
     const control = this.workerFactory(
       workspace.path,
-      join(workspace.path, ".bb-agent", ".preset-discovery"),
+      join(workspace.path, ".qi-agent", ".preset-discovery"),
       this.repositoryRoot,
       this.daemonEnvironment,
     ) as AgentWorker;
@@ -160,7 +166,7 @@ export class SessionManager {
     presetId?: string): Promise<OpenSession & { snapshot: unknown }> {
     await this.loadProfiles();
     const workspace = this.workspaces.get(workspaceId);
-    const directory = join(workspace.path, ".bb-agent", "sessions");
+    const directory = join(workspace.path, ".qi-agent", "sessions");
     await mkdir(directory, { recursive: true, mode: 0o700 });
     const stamp = new Date().toISOString().replace(/[-:]/g, "").slice(0, 15);
     const path = join(directory, `${stamp}-${randomUUID().slice(0, 8)}.jsonl`);

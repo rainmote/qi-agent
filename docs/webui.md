@@ -48,8 +48,8 @@ WebUI 支持：
 
 ## Worker 协议
 
-`agent.plugins.remote-registry` 提供可逆、JSON Schema 校验的 `:remote/registry`。其他插件
-注册声明式方法，`agent.protocol` 只负责 JSONL 传输与旧 RPC 方法兼容，不再集中维护所有
+`qi.plugins.remote-registry` 提供可逆、JSON Schema 校验的 `:remote/registry`。其他插件
+注册声明式方法，`qi.protocol` 只负责 JSONL 传输与旧 RPC 方法兼容，不再集中维护所有
 业务分支。默认远程方法包括：
 
 ```text
@@ -86,7 +86,7 @@ Host 的 HTTP 请求不需要占用到模型运行结束。
 
 ## 审批与安全边界
 
-RPC mode 会在 approval 插件前自动插入 `agent.plugins.remote-interaction`。当策略要求审批时，
+RPC mode 会在 approval 插件前自动插入 `qi.plugins.remote-interaction`。当策略要求审批时，
 Worker 发出 `interaction/request`，阻塞的只是工具 future；浏览器通过
 `interaction.resolve` 返回 allow、allow-session 或 deny。超时、Worker 退出或最后一个
 SSE 客户端断开都会默认 deny。最终 policy decision 仍作为 `approval/decision` 写入 session。

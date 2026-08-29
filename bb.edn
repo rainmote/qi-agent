@@ -1,10 +1,13 @@
 {:paths ["src" "plugins"]
  :tasks
-  {agent {:doc "Run the plugin-based LLM agent"
-         :requires ([agent.cli :as cli])
-         :task (apply cli/entrypoint *command-line-args*)}
-  install {:doc "Install the dao command for use from any workspace"
-           :requires ([agent.install :as install])
+  {qi-agent {:doc "Run qì agent directly with Babashka"
+             :requires ([qi.cli :as cli])
+             :task (apply cli/entrypoint *command-line-args*)}
+   agent {:doc "Compatibility alias for the qi-agent task"
+          :requires ([qi.cli :as cli])
+          :task (apply cli/entrypoint *command-line-args*)}
+  install {:doc "Install qì agent for use from any workspace"
+           :requires ([qi.install :as install])
            :task (apply install/entrypoint *command-line-args*)}
   tui-build {:doc "Build the Qwen-style Ratatui frontend"
              :task (shell "cargo build --release --manifest-path apps/tui-rs/Cargo.toml")}
@@ -15,7 +18,7 @@
                     (shell "expect apps/tui-rs/tests/pty-smoke.exp"))}
   test {:doc "Run the test suite"
         :extra-paths ["test"]
-        :requires ([agent.test-runner :as test-runner])
+        :requires ([qi.test-runner :as test-runner])
         :task (test-runner/-main)}
   web {:doc "Build and start the local WebUI"
        :task (shell "npm run web")}}}

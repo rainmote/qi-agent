@@ -34,7 +34,7 @@ class FakeWorker extends EventEmitter {
 }
 
 async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), "dao-session-manager-test-"));
+  const root = await mkdtemp(join(tmpdir(), "qi-agent-session-manager-test-"));
   const workspace = join(root, "workspace");
   const state = join(root, "state");
   await mkdir(workspace);
@@ -54,6 +54,27 @@ async function profiles(state: string): Promise<Record<string, string>> {
   }
 }
 
+test("catalog keeps legacy .bb-agent sessions visible", async () => {
+  const value = await fixture();
+  const directory = join(value.workspace, ".bb-agent", "sessions");
+  const path = join(directory, "legacy.jsonl");
+  await mkdir(directory, { recursive: true });
+  await writeFile(path, `${JSON.stringify({
+    type: "session/start", at: "2026-08-28T00:00:00Z", data: { session_id: "legacy" },
+  })}\n`);
+  try {
+    const manager = new SessionManager(value.registry, value.root, {}, () => {
+      throw new Error("listing must not start a worker");
+    });
+    const sessions = await manager.list(value.registry.list()[0]);
+    assert.equal(sessions.length, 1);
+    assert.equal(sessions[0].id, "legacy");
+    assert.match(sessions[0].path, /\.bb-agent\/sessions\/legacy\.jsonl$/);
+  } finally {
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
 test("create closes an uncommitted worker and rolls back its profile", async () => {
   const value = await fixture();
   const worker = new FakeWorker({ session_id: "new-session" }, async (method) => {
@@ -72,8 +93,8 @@ test("create closes an uncommitted worker and rolls back its profile", async () 
 
 test("open closes a worker when initialization fails", async () => {
   const value = await fixture();
-  const path = join(value.workspace, ".bb-agent", "sessions", "existing.jsonl");
-  await mkdir(join(value.workspace, ".bb-agent", "sessions"), { recursive: true });
+  const path = join(value.workspace, ".qi-agent", "sessions", "existing.jsonl");
+  await mkdir(join(value.workspace, ".qi-agent", "sessions"), { recursive: true });
   await writeFile(path, `${JSON.stringify({
     type: "session/start", at: "2026-08-28T00:00:00Z", data: { session_id: "existing" },
   })}\n`);
@@ -89,8 +110,8 @@ test("open closes a worker when initialization fails", async () => {
 
 test("open returns session metadata appended by startup plugins", async () => {
   const value = await fixture();
-  const path = join(value.workspace, ".bb-agent", "sessions", "recovered.jsonl");
-  await mkdir(join(value.workspace, ".bb-agent", "sessions"), { recursive: true });
+  const path = join(value.workspace, ".qi-agent", "sessions", "recovered.jsonl");
+  await mkdir(join(value.workspace, ".qi-agent", "sessions"), { recursive: true });
   await writeFile(path, `${JSON.stringify({
     type: "session/start", at: "2026-08-28T00:00:00Z", data: { session_id: "recovered" },
   })}\n`);
@@ -115,8 +136,8 @@ test("open returns session metadata appended by startup plugins", async () => {
 
 test("fork closes the destination worker and rolls back its inherited profile", async () => {
   const value = await fixture();
-  const sourcePath = join(value.workspace, ".bb-agent", "sessions", "source.jsonl");
-  await mkdir(join(value.workspace, ".bb-agent", "sessions"), { recursive: true });
+  const sourcePath = join(value.workspace, ".qi-agent", "sessions", "source.jsonl");
+  await mkdir(join(value.workspace, ".qi-agent", "sessions"), { recursive: true });
   await writeFile(sourcePath, `${JSON.stringify({
     type: "session/start", at: "2026-08-28T00:00:00Z", data: { session_id: "source" },
   })}\n`);

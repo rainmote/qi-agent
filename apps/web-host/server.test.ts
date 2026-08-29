@@ -8,7 +8,7 @@ import { startWebHost } from "./server.js";
 import { WorkspaceRegistry, workspaceId } from "./workspaces.js";
 
 async function temporaryRoot() {
-  return mkdtemp(join(tmpdir(), "bb-agent-web-test-"));
+  return mkdtemp(join(tmpdir(), "qi-agent-web-test-"));
 }
 
 async function removeTemporaryRoot(root: string) {

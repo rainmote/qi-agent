@@ -1,6 +1,6 @@
 ---
 name: creating-runtime-blueprints
-description: Define, test, inspect, hot-update, stop, or remove a session-local runtime tool using DAO's bounded Clojure EDN Blueprint data language.
+description: Define, test, inspect, hot-update, stop, or remove a session-local runtime tool using qì agent's bounded Clojure EDN Blueprint data language.
 ---
 
 # Create runtime EDN Blueprints

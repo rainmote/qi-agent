@@ -35,8 +35,8 @@ jobs:
           workspaces: apps/tui-rs
       - name: Install Babashka
         run: |
-          scripts/install-ci-babashka.sh "$RUNNER_TEMP/dao-bin"
-          echo "$RUNNER_TEMP/dao-bin" >> "$GITHUB_PATH"
+          scripts/install-ci-babashka.sh "$RUNNER_TEMP/qi-agent-bin"
+          echo "$RUNNER_TEMP/qi-agent-bin" >> "$GITHUB_PATH"
       - name: Install web dependencies
         run: npm ci --registry=https://registry.npmjs.org
       - name: Check Rust formatting

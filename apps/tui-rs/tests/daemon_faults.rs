@@ -68,9 +68,9 @@ impl Harness {
             .arg("--config")
             .arg(&config)
             .current_dir(&repository)
-            .env("DAO_RUNTIME_DIR", &runtime)
-            .env("DAO_STATE_DIR", &state)
-            .env("DAO_REPOSITORY_ROOT", &repository)
+            .env("QI_AGENT_RUNTIME_DIR", &runtime)
+            .env("QI_AGENT_STATE_DIR", &state)
+            .env("QI_AGENT_REPOSITORY_ROOT", &repository)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::inherit());
@@ -116,9 +116,9 @@ impl Harness {
             .arg("--config")
             .arg(&self.config)
             .current_dir(&self.repository)
-            .env("DAO_RUNTIME_DIR", self.root.join("r"))
-            .env("DAO_STATE_DIR", self.root.join("s"))
-            .env("DAO_REPOSITORY_ROOT", &self.repository)
+            .env("QI_AGENT_RUNTIME_DIR", self.root.join("r"))
+            .env("QI_AGENT_STATE_DIR", self.root.join("s"))
+            .env("QI_AGENT_REPOSITORY_ROOT", &self.repository)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::inherit());
@@ -220,7 +220,7 @@ fn preset_list_exposes_safe_display_metadata_for_mode_selection() {
 #[test]
 fn preset_list_marks_broken_user_entries_without_exposing_registry_details() {
     let root = PathBuf::from("/tmp").join(format!(
-        "dao-preset-list-{}",
+        "qi-agent-preset-list-{}",
         &Uuid::new_v4().simple().to_string()[..8]
     ));
     let broken = root.join("broken");
@@ -230,7 +230,7 @@ fn preset_list_marks_broken_user_entries_without_exposing_registry_details() {
 
     let harness = Harness::start_with_env(
         "examples/tui-mock.edn",
-        &[("DAO_PRESET_USER_ROOT", root.to_str().unwrap())],
+        &[("QI_AGENT_PRESET_USER_ROOT", root.to_str().unwrap())],
     );
     let mut client = TestClient::connect(&harness.socket, "broken-preset-list-client").unwrap();
     let presets = client.call(None, "preset.list", json!({}), None).unwrap();
@@ -297,12 +297,12 @@ fn creator_and_standard_sessions_are_isolated_and_survive_restart() {
     assert!(
         !fs::read_to_string(&standard_snapshot)
             .unwrap()
-            .contains("agent.plugins.runtime-inspect")
+            .contains("qi.plugins.runtime-inspect")
     );
     assert!(
         fs::read_to_string(&creator_snapshot)
             .unwrap()
-            .contains("agent.plugins.runtime-inspect")
+            .contains("qi.plugins.runtime-inspect")
     );
 
     drop(client);
@@ -370,8 +370,8 @@ fn agent_create_resolves_and_persists_a_preset_id() {
 #[test]
 fn user_preset_is_snapshotted_before_the_agent_starts() {
     let suffix = Uuid::new_v4().simple().to_string();
-    let home = PathBuf::from("/tmp").join(format!("dao-preset-home-{}", &suffix[..8]));
-    let preset = home.join(".dao/agent-presets/custom");
+    let home = PathBuf::from("/tmp").join(format!("qi-agent-preset-home-{}", &suffix[..8]));
+    let preset = home.join(".qi-agent/presets/custom");
     fs::create_dir_all(&preset).unwrap();
     fs::write(preset.join("preset.edn"), "{:name \"Custom\"}").unwrap();
     let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -385,7 +385,7 @@ fn user_preset_is_snapshotted_before_the_agent_starts() {
     let harness = Harness::start_with_env(
         "examples/tui-mock.edn",
         &[(
-            "DAO_PRESET_USER_ROOT",
+            "QI_AGENT_PRESET_USER_ROOT",
             preset.parent().unwrap().to_str().unwrap(),
         )],
     );
@@ -573,7 +573,7 @@ impl TestClient {
 fn idle_worker_is_passivated_without_deleting_session_and_hydrates_on_attach() {
     let harness = Harness::start_with_env(
         "examples/tui-mock.edn",
-        &[("DAO_IDLE_EVICTION_MINUTES", "0.001")],
+        &[("QI_AGENT_IDLE_EVICTION_MINUTES", "0.001")],
     );
     let mut client = TestClient::connect(&harness.socket, "idle-lifecycle-client").unwrap();
     let created = client
@@ -656,7 +656,7 @@ fn idle_worker_is_passivated_without_deleting_session_and_hydrates_on_attach() {
 fn active_schedule_pins_otherwise_idle_worker() {
     let harness = Harness::start_with_env(
         "examples/daemon-goal-mock.edn",
-        &[("DAO_IDLE_EVICTION_MINUTES", "0.001")],
+        &[("QI_AGENT_IDLE_EVICTION_MINUTES", "0.001")],
     );
     let mut client = TestClient::connect(&harness.socket, "schedule-pin-client").unwrap();
     let created = client
@@ -960,7 +960,7 @@ fn retained_child_is_listed_attachable_and_has_its_own_repl() {
 fn idle_retained_child_passivates_and_hydrates_on_demand() {
     let harness = Harness::start_with_env(
         "examples/daemon-subagent-mock.edn",
-        &[("DAO_IDLE_EVICTION_MINUTES", "0.001")],
+        &[("QI_AGENT_IDLE_EVICTION_MINUTES", "0.001")],
     );
     let mut client = TestClient::connect(&harness.socket, "child-idle-client").unwrap();
     let created = client

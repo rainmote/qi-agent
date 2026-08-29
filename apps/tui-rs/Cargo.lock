@@ -54,24 +54,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
-name = "bb-agent-tui"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "crossterm 0.29.0",
- "fs2",
- "libc",
- "pretty_assertions",
- "ratatui",
- "rusqlite",
- "serde",
- "serde_json",
- "unicode-segmentation",
- "unicode-width",
- "uuid",
-]
-
-[[package]]
 name = "bit-set"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1031,6 +1013,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "qi-agent-tui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "crossterm 0.29.0",
+ "fs2",
+ "libc",
+ "pretty_assertions",
+ "ratatui",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "unicode-segmentation",
+ "unicode-width",
+ "uuid",
 ]
 
 [[package]]

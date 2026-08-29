@@ -1,6 +1,7 @@
 use crate::{
     paths::{
-        RuntimePaths, canonical, discover_repository_root, set_owner_only_dir, set_owner_only_file,
+        RuntimePaths, canonical, discover_repository_root, env_var, set_owner_only_dir,
+        set_owner_only_file,
     },
     wire::{self, PROTOCOL_VERSION, PublicCommand},
     worker_proxy::{WorkerDescriptor, read_descriptor, write_descriptor},
@@ -1289,24 +1290,21 @@ fn prune_database_backups(directory: &Path, keep: usize) -> Result<()> {
 }
 
 fn configured_log_max_bytes() -> u64 {
-    std::env::var("DAO_LOG_MAX_BYTES")
-        .ok()
+    env_var("QI_AGENT_LOG_MAX_BYTES", "DAO_LOG_MAX_BYTES")
         .and_then(|value| value.parse().ok())
         .filter(|value| *value >= 64 * 1024)
         .unwrap_or(DEFAULT_LOG_MAX_BYTES)
 }
 
 fn configured_log_backups() -> usize {
-    std::env::var("DAO_LOG_BACKUPS")
-        .ok()
+    env_var("QI_AGENT_LOG_BACKUPS", "DAO_LOG_BACKUPS")
         .and_then(|value| value.parse().ok())
         .filter(|value| (1..=20).contains(value))
         .unwrap_or(DEFAULT_LOG_BACKUPS)
 }
 
 fn configured_max_worker_logs() -> usize {
-    std::env::var("DAO_MAX_WORKER_LOGS")
-        .ok()
+    env_var("QI_AGENT_MAX_WORKER_LOGS", "DAO_MAX_WORKER_LOGS")
         .and_then(|value| value.parse().ok())
         .filter(|value| (10..=10_000).contains(value))
         .unwrap_or(DEFAULT_MAX_WORKER_LOGS)
@@ -1378,9 +1376,9 @@ pub fn serve(repository_root: Option<&Path>, config_path: Option<&Path>) -> Resu
         .open(&paths.daemon_lock)?;
     lock_file
         .try_lock_exclusive()
-        .context("another dao daemon already owns the launch lease")?;
+        .context("another qi-agent daemon already owns the launch lease")?;
     if UnixStream::connect(&paths.public_socket).is_ok() {
-        bail!("dao daemon is already running")
+        bail!("qi-agent daemon is already running")
     }
     if paths.public_socket.exists() {
         fs::remove_file(&paths.public_socket)?;
@@ -1422,7 +1420,7 @@ pub fn serve(repository_root: Option<&Path>, config_path: Option<&Path>) -> Resu
                 let runtime = Arc::clone(&runtime);
                 thread::spawn(move || {
                     if let Err(error) = handle_client(runtime, stream) {
-                        eprintln!("dao client connection failed: {error:#}");
+                        eprintln!("qi-agent client connection failed: {error:#}");
                     }
                 });
             }
@@ -1442,15 +1440,18 @@ pub fn serve(repository_root: Option<&Path>, config_path: Option<&Path>) -> Resu
 impl Runtime {
     fn list_presets(&self) -> Result<Value> {
         let expression = r#"
-(require '[agent.presets :as presets]
+(require '[qi.presets :as presets]
          '[cheshire.core :as json]
          '[clojure.java.io :as io])
-(let [root (System/getenv "DAO_REPOSITORY_ROOT")
+(let [root (or (System/getenv "QI_AGENT_REPOSITORY_ROOT")
+               (System/getenv "DAO_REPOSITORY_ROOT"))
+      home (or (System/getenv "QI_AGENT_HOME")
+               (str (io/file (System/getProperty "user.home") ".qi-agent")))
       registry (presets/create-registry
                 {:system-roots [(str (io/file root "presets"))]
-                 :user-root (or (System/getenv "DAO_PRESET_USER_ROOT")
-                                (str (io/file (System/getProperty "user.home")
-                                              ".dao" "agent-presets")))})
+                 :user-root (or (System/getenv "QI_AGENT_PRESET_USER_ROOT")
+                                (System/getenv "DAO_PRESET_USER_ROOT")
+                                (str (io/file home "presets")))})
       public-preset (fn [preset]
                       (cond-> (select-keys preset [:id :name :description :order :trust])
                         (:broken preset) (assoc :broken true)))]
@@ -1463,6 +1464,7 @@ impl Runtime {
             .arg("-e")
             .arg(expression)
             .current_dir(&self.repository_root)
+            .env("QI_AGENT_REPOSITORY_ROOT", &self.repository_root)
             .env("DAO_REPOSITORY_ROOT", &self.repository_root)
             .output()
             .context("could not invoke the Preset registry")?;
@@ -1485,21 +1487,24 @@ impl Runtime {
             ));
         }
         let expression = r#"
-(require '[agent.presets :as presets]
+(require '[qi.presets :as presets]
          '[cheshire.core :as json]
          '[clojure.java.io :as io])
-(let [root (System/getenv "DAO_REPOSITORY_ROOT")
+(let [root (or (System/getenv "QI_AGENT_REPOSITORY_ROOT")
+               (System/getenv "DAO_REPOSITORY_ROOT"))
+      home (or (System/getenv "QI_AGENT_HOME")
+               (str (io/file (System/getProperty "user.home") ".qi-agent")))
       registry (presets/create-registry
                 {:system-roots [(str (io/file root "presets"))]
-                 :user-root (or (System/getenv "DAO_PRESET_USER_ROOT")
-                                (str (io/file (System/getProperty "user.home")
-                                              ".dao" "agent-presets")))})]
+                 :user-root (or (System/getenv "QI_AGENT_PRESET_USER_ROOT")
+                                (System/getenv "DAO_PRESET_USER_ROOT")
+                                (str (io/file home "presets")))})]
   (print
    (json/generate-string
     (try
       {:ok true
        :result (presets/materialize-preset registry
-                                           (System/getenv "DAO_PRESET_ID"))}
+                                           (System/getenv "QI_AGENT_PRESET_ID"))}
       (catch Throwable error
         {:ok false
          :error {:type (some-> (ex-data error) :type name)
@@ -1511,6 +1516,8 @@ impl Runtime {
             .arg("-e")
             .arg(expression)
             .current_dir(&self.repository_root)
+            .env("QI_AGENT_REPOSITORY_ROOT", &self.repository_root)
+            .env("QI_AGENT_PRESET_ID", preset_id)
             .env("DAO_REPOSITORY_ROOT", &self.repository_root)
             .env("DAO_PRESET_ID", preset_id)
             .output()
@@ -1770,7 +1777,7 @@ impl Runtime {
                 }
             } else {
                 workspace_path.join(format!(
-                    ".bb-agent/sessions/{}-{}.jsonl",
+                    ".qi-agent/sessions/{}-{}.jsonl",
                     now_ms(),
                     &Uuid::new_v4().to_string()[..8]
                 ))
@@ -3428,15 +3435,18 @@ fn dispatch(
 }
 
 fn configured_max_workers() -> usize {
-    std::env::var("DAO_MAX_WORKERS")
-        .ok()
+    env_var("QI_AGENT_MAX_WORKERS", "DAO_MAX_WORKERS")
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|value| *value > 0)
         .unwrap_or(8)
 }
 
 fn configured_idle_eviction() -> Option<Duration> {
-    let raw = std::env::var("DAO_IDLE_EVICTION_MINUTES").unwrap_or_else(|_| "90".into());
+    let raw = env_var(
+        "QI_AGENT_IDLE_EVICTION_MINUTES",
+        "DAO_IDLE_EVICTION_MINUTES",
+    )
+    .unwrap_or_else(|| "90".into());
     if matches!(raw.trim().to_ascii_lowercase().as_str(), "off" | "none") {
         return None;
     }
@@ -3535,15 +3545,13 @@ fn wait_for_worker_stop(path: &Path, pid: Option<u32>, timeout: Duration) -> boo
 }
 
 fn configured_max_tokens_per_run() -> Option<u64> {
-    std::env::var("DAO_MAX_TOKENS_PER_RUN")
-        .ok()
+    env_var("QI_AGENT_MAX_TOKENS_PER_RUN", "DAO_MAX_TOKENS_PER_RUN")
         .and_then(|value| value.parse::<u64>().ok())
         .filter(|value| *value > 0)
 }
 
 fn configured_allowed_providers() -> Vec<String> {
-    std::env::var("DAO_ALLOWED_PROVIDERS")
-        .ok()
+    env_var("QI_AGENT_ALLOWED_PROVIDERS", "DAO_ALLOWED_PROVIDERS")
         .map(|value| {
             value
                 .split(',')
@@ -3565,7 +3573,7 @@ fn enforce_model_quotas(parameters: &Value) -> Result<()> {
     let allowed = configured_allowed_providers();
     if !allowed.is_empty() {
         let provider = provider.context(
-            "turn must select options.model_options.provider when DAO_ALLOWED_PROVIDERS is set",
+            "turn must select options.model_options.provider when QI_AGENT_ALLOWED_PROVIDERS is set",
         )?;
         if !allowed.iter().any(|entry| entry == provider) {
             bail!("provider is outside the daemon allowlist: {provider}")
@@ -4470,7 +4478,10 @@ fn doctor(runtime: &Runtime, fix: bool) -> Value {
             "workspace_write_roots": 1,
             "allowed_providers": configured_allowed_providers(),
             "max_tokens_per_run": configured_max_tokens_per_run(),
-            "worker_cpu_seconds": std::env::var("DAO_WORKER_CPU_SECONDS").ok(),
+            "worker_cpu_seconds": env_var(
+                "QI_AGENT_WORKER_CPU_SECONDS",
+                "DAO_WORKER_CPU_SECONDS",
+            ),
             "log_max_bytes": configured_log_max_bytes(),
             "log_backups": configured_log_backups(),
             "max_worker_logs": configured_max_worker_logs(),
@@ -4512,7 +4523,7 @@ mod tests {
 
     #[test]
     fn database_migrations_are_versioned_backed_up_and_reject_newer_schemas() {
-        let root = std::env::temp_dir().join(format!("dao-migration-test-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("qi-agent-migration-test-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         let path = root.join("supervisor.sqlite");
         let database = Database::new(path.clone()).unwrap();
@@ -4557,7 +4568,7 @@ mod tests {
 
     #[test]
     fn worker_logs_rotate_with_a_bounded_history() {
-        let root = std::env::temp_dir().join(format!("dao-log-test-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("qi-agent-log-test-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         let log = root.join("worker-1.log");
         fs::write(&log, b"first").unwrap();
@@ -4572,7 +4583,7 @@ mod tests {
 
     #[test]
     fn command_journal_replays_completed_outcome_and_rejects_conflicts() {
-        let root = std::env::temp_dir().join(format!("dao-db-test-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("qi-agent-db-test-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         let database = Database::new(root.join("supervisor.sqlite")).unwrap();
         let command = PublicCommand {
@@ -4700,7 +4711,7 @@ mod tests {
 
     #[test]
     fn interrupted_schedule_tick_is_not_replayed() {
-        let root = std::env::temp_dir().join(format!("dao-schedule-test-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("qi-agent-schedule-test-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         let database = Database::new(root.join("supervisor.sqlite")).unwrap();
         let one_shot = database

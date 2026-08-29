@@ -1,5 +1,5 @@
 {
-  "name": "bb-agent-web",
+  "name": "@rainmote/qi-agent-web",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -13,7 +13,7 @@
     "web:build": "vite build",
     "web:start": "tsx apps/web-host/server.ts",
     "typecheck": "tsc --noEmit",
-    "test:web": "cargo build --manifest-path apps/tui-rs/Cargo.toml && DAO_BIN=\"$PWD/apps/tui-rs/target/debug/dao\" tsx --test apps/web-host/*.test.ts",
+    "test:web": "cargo build --manifest-path apps/tui-rs/Cargo.toml && QI_AGENT_BIN=\"$PWD/apps/tui-rs/target/debug/qi-agent\" tsx --test apps/web-host/*.test.ts",
     "test:web-ui": "tsx --test apps/web/src/*.test.tsx",
     "test:tui": "cargo test --manifest-path apps/tui-rs/Cargo.toml"
   },

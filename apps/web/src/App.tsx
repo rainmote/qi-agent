@@ -115,8 +115,9 @@ export function WorkspaceSelector({ workspaces, value, onChange, onAdd }: {
 }
 
 function Brand({ collapsed = false }: { collapsed?: boolean }) {
-  return <div className="brand-identity"><BrandMark size={collapsed ? 24 : 23} />{!collapsed && <>
-    <strong>DAO</strong><span>HARNESS</span>
+  return <div className="brand-identity" aria-label="器，qì agent" title="器以载道">
+    <BrandMark size={collapsed ? 24 : 23} />{!collapsed && <>
+    <strong>qì</strong><span>agent</span>
   </>}</div>;
 }
 
@@ -144,7 +145,8 @@ export function App() {
   const [pendingThinking, setPendingThinking] = useState<string | null>(null);
   const [pendingPolicy, setPendingPolicy] = useState<PolicyStatus["mode"] | null>(null);
   const [pendingPreset, setPendingPreset] = useState<AgentPresetId>("standard");
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("dao.sidebar") === "collapsed");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() =>
+    (localStorage.getItem("qi-agent.sidebar") || localStorage.getItem("dao.sidebar")) === "collapsed");
   const [mobileSidebar, setMobileSidebar] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -156,7 +158,9 @@ export function App() {
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
   const [sessionMenu, setSessionMenu] = useState<string | null>(null);
   const [conversationView, setConversationView] = useState<ConversationView>("chat");
-  const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem("dao.theme") as Theme | null) || "system");
+  const [theme, setTheme] = useState<Theme>(() =>
+    ((localStorage.getItem("qi-agent.theme") || localStorage.getItem("dao.theme")) as Theme | null)
+      || "system");
   const [resolving, setResolving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -204,7 +208,7 @@ export function App() {
   useEffect(() => {
     const apply = () => document.body.dataset.theme = resolvedTheme(theme);
     apply();
-    localStorage.setItem("dao.theme", theme);
+    localStorage.setItem("qi-agent.theme", theme);
     const query = window.matchMedia("(prefers-color-scheme: dark)");
     query.addEventListener("change", apply);
     return () => query.removeEventListener("change", apply);
@@ -555,7 +559,7 @@ export function App() {
 
   const toggleSidebar = () => {
     setSidebarCollapsed((current) => {
-      localStorage.setItem("dao.sidebar", current ? "expanded" : "collapsed");
+      localStorage.setItem("qi-agent.sidebar", current ? "expanded" : "collapsed");
       return !current;
     });
   };
@@ -662,9 +666,9 @@ export function App() {
         <button className="mobile-nav-button" type="button" onClick={() => setMobileSidebar(true)} aria-label="打开导航"><Icon name="menu" /></button>
         <div className="new-session-center">
           <div className="welcome-copy">
-            <div className="welcome-eyebrow"><BrandMark size={24} /><span>DAO WORKSPACE</span></div>
+            <div className="welcome-eyebrow"><BrandMark size={24} /><span>器 · qì agent</span></div>
             <h1>今天想完成什么？</h1>
-            <p>选择工作区与 Agent 模式，然后描述目标。DAO 会在项目上下文中持续执行并汇报进展。</p>
+            <p>选择工作区与 Agent 模式，然后描述目标。qì agent 会在项目上下文中持续执行并汇报进展。</p>
           </div>
           <WorkspaceSelector workspaces={bootstrap?.workspaces || []} value={workspaceId || ""}
             onChange={setWorkspaceId} onAdd={() => setWorkspaceDialogOpen(true)} />

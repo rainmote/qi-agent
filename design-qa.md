@@ -8,7 +8,7 @@
   `http://127.0.0.1:3080/`.
 - Implementation captures: `/tmp/dao-settings-models/target-list-final-v2.png`,
   `/tmp/dao-settings-models/target-edit-final.png`, and
-  `/tmp/dao-settings-models/target-custom-final-v2.png`, captured from the isolated DAO
+  `/tmp/dao-settings-models/target-custom-final-v2.png`, captured from the isolated qì agent
   production preview at `http://127.0.0.1:3185/`.
 - Full-view evidence: the three source captures and three implementation captures were opened
   together in one comparison input and judged as matched list, edit, and custom-provider states.
@@ -19,7 +19,7 @@
   CSS-pixel viewport at device scale factor 1.
 - State: light theme, settings modal open, Models tab active. The three comparisons cover the
   provider list, collapsed built-in-provider editor, and expanded custom-provider form.
-- DAO intentionally shows OpenAI and the temporary `Local Test` QA provider in addition to
+- qì agent intentionally shows OpenAI and the temporary `Local Test` QA provider in addition to
   DeepSeek. Comparison therefore judges frame geometry, hierarchy, cards, controls, form order,
   typography, and interaction behavior rather than identical provider-row count.
 - Focused crops were not needed: labels, inputs, status dots, borders, radii, and button states are
@@ -35,11 +35,11 @@ No actionable P0, P1, or P2 differences remain in the model-provider settings fl
   provider-card height, inset editor, two-column add actions, and custom-form field rhythm align
   with the source. Content naturally scrolls when the real provider list is longer.
 - Colors and tokens: white provider cards, gray inset editors, subtle borders, focus rings, muted
-  status dots, and configured-key green state use existing DAO tokens while matching the source
+  status dots, and configured-key green state use existing qì agent tokens while matching the source
   contrast and surface hierarchy.
 - Image and asset fidelity: this settings surface has no raster imagery. Existing project icon
   components are used consistently; no placeholder or generated visual asset is present.
-- Copy and content: Chinese labels and action names match the DeepSeek flow. DAO uses its own
+- Copy and content: Chinese labels and action names match the DeepSeek flow. qì agent uses its own
   provider IDs and exposes three supported protocols, which is required by the backend contract.
 - Interactions exercised in the browser: 13 preset providers can be selected; advanced settings
   expand; a custom provider can be created with a model catalog; the saved model immediately
@@ -83,8 +83,8 @@ final result: passed
 ## Comparison target
 
 - Source visual truth: `/tmp/dao-three-fixes/source-new.jpg`, `/tmp/dao-three-fixes/source-slash.jpg`, and `/tmp/dao-three-fixes/source-context.jpg` from DeepSeek Harness at `http://127.0.0.1:3080/`.
-- Implementation captures: `/tmp/dao-three-fixes/target-new-final.jpg`, `/tmp/dao-three-fixes/target-slash-final.jpg`, and `/tmp/dao-three-fixes/target-context-final.jpg` from an isolated authenticated DAO preview serving the same production build as `http://127.0.0.1:3081/`.
-- Full comparison: `/tmp/dao-three-fixes/comparison-all-final.jpg`, with DeepSeek on the left and DAO on the right for all three states.
+- Implementation captures: `/tmp/dao-three-fixes/target-new-final.jpg`, `/tmp/dao-three-fixes/target-slash-final.jpg`, and `/tmp/dao-three-fixes/target-context-final.jpg` from an isolated authenticated qì agent preview serving the same production build as `http://127.0.0.1:3081/`.
+- Full comparison: `/tmp/dao-three-fixes/comparison-all-final.jpg`, with DeepSeek on the left and qì agent on the right for all three states.
 - Focused slash-menu comparison: `/tmp/dao-three-fixes/comparison-slash-focused.jpg`.
 
 ## Capture normalization
@@ -132,8 +132,8 @@ final result: passed
 ## Comparison target
 
 - Source visual truth: `/tmp/dao-trajectory-ui/01-deepseek-trajectory.jpg` from DeepSeek Harness at `http://127.0.0.1:3080/`.
-- Implementation capture: `/tmp/dao-trajectory-ui/07-dao-final.jpg` from DAO Harness at `http://127.0.0.1:3081/` (verified through an isolated authenticated preview serving the same build).
-- Full-view comparison: `/tmp/dao-trajectory-ui/08-comparison-final.jpg`, with DeepSeek on the left and DAO on the right.
+- Implementation capture: `/tmp/dao-trajectory-ui/07-dao-final.jpg` from qì agent Harness at `http://127.0.0.1:3081/` (verified through an isolated authenticated preview serving the same build).
+- Full-view comparison: `/tmp/dao-trajectory-ui/08-comparison-final.jpg`, with DeepSeek on the left and qì agent on the right.
 - Focused trajectory comparison: `/tmp/dao-trajectory-ui/09-comparison-final-main.jpg`, cropped to the shared 1160 × 390 main trajectory surface.
 
 ## Capture normalization
@@ -157,7 +157,7 @@ No actionable P0, P1, or P2 differences remain in the trajectory surface.
 
 ### Iteration 1
 
-- P1 finding: DAO rendered the durable event stream as a raw JSON-oriented list and lacked the DeepSeek toolbar, three-lane overview, semantic tags, folding controls, search, and linked tool-call presentation.
+- P1 finding: qì agent rendered the durable event stream as a raw JSON-oriented list and lacked the DeepSeek toolbar, three-lane overview, semantic tags, folding controls, search, and linked tool-call presentation.
 - Fix: introduced a dedicated trajectory projection and view with paired tool lifecycle records, semantic rows, timeline lanes, filtering, folding, selection, and details.
 - Evidence: `/tmp/dao-trajectory-ui/04-comparison-1.jpg`.
 
@@ -204,7 +204,7 @@ do not change the core Qwen interaction or hierarchy.
 - Spacing and layout rhythm: the two-column 37-column wordmark plus single-border runtime panel, two-column breakpoint, two-column margins, scrolling banner, full-width input rules, and two-column footer behavior follow the Qwen layout. The 80-column PTY check hides the wordmark without clipping the panel.
 - Colors and tokens: the implementation uses Qwen's default dark semantic mapping and blue-purple-pink gradient. Focus, accent, secondary, success, warning, and error colors no longer use component-local color names. Theme-specific syntax/diff colors retain Qwen's raw built-in palettes.
 - Image and asset fidelity: this terminal surface has no raster image assets. The source's native ASCII wordmark treatment is retained with a project-specific `BB AGENT` wordmark of equivalent width and gradient behavior.
-- Copy and content: Qwen's placeholder, Tips line, model-change hint, dialog help, and busy/abort affordances are preserved. Product identity and mock response text intentionally remain bb-agent-specific.
+- Copy and content: Qwen's placeholder, Tips line, model-change hint, dialog help, and busy/abort affordances are preserved. Product identity and mock response text intentionally remain qì agent-specific.
 - Icons: user, assistant, reasoning, and tool status glyphs follow the Qwen vocabulary (`>`, `◆`, `∵`, `∴`, `o`, `⊷`, `✓`, `x`) and force ambiguous symbols to text presentation where needed.
 - States and interactions: idle, completed history, model dialog, theme preview/apply/rollback, narrow terminal, selection, approval, input, loading, queue, and long-history states are covered by captures or component tests. Opening a dialog hides composer/footer and keeps the conversation visible.
 - Accessibility and resilience: all controls remain keyboard-driven; software cursor and focus border are visible; grapheme editing and constrained-height dialogs are covered. The 80-column PTY capture and narrow component tests show no overlap or clipping.
@@ -282,7 +282,7 @@ the historical TypeScript/Ink implementation that has since been removed from th
 - P3: the checked-in Qwen source screenshot is from v0.19.2 and contains different session content. Current component source was used to resolve later token and layout behavior, but an upstream current-version idle screenshot would make future pixel diffs more exact.
 - P2: Qwen can show token/rate telemetry in the wide loading row. The current host protocol does not publish those values, so the Rust frontend cannot display them yet.
 - P3: the action-tool output safety cap is applied per tool instead of sharing one constrained budget across all sibling tools; expanded mode still exposes each complete result.
-- Expected difference: the wordmark, product title, version, provider, model, path, and transcript content remain specific to bb-agent.
+- Expected difference: the wordmark, product title, version, provider, model, path, and transcript content remain specific to qì agent.
 
 ## Implementation checklist
 

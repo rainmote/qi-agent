@@ -1,6 +1,6 @@
 {:plugins
- [{:ns agent.plugins.session}
-  {:ns agent.plugins.mock
+ [{:ns qi.plugins.session}
+  {:ns qi.plugins.mock
    :config
    {:responses
     [{:message
@@ -17,8 +17,8 @@
                 :content "6 × 7 = 42。"}
       :finish-reason "stop"
       :usage {:prompt_tokens 35 :completion_tokens 8 :total_tokens 43}}]}}
-  {:ns agent.plugins.math}
-  {:ns agent.plugins.trace :config {:enabled true}}
-  {:ns agent.plugins.runtime
+  {:ns qi.plugins.math}
+  {:ns qi.plugins.trace :config {:enabled true}}
+  {:ns qi.plugins.runtime
    :config {:max-steps 4
             :system-prompt "Use the calculator when arithmetic is requested."}}]}

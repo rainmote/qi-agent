@@ -1,9 +1,9 @@
 ---
 name: creating-agent-presets
-description: Create, change, validate, or remove a DAO Agent preset from Creator mode, including deciding whether a capability belongs in a per-Session preset or the shared host profile.
+description: Create, change, validate, or remove a qì agent Agent preset from Creator mode, including deciding whether a capability belongs in a per-Session preset or the shared host profile.
 ---
 
-# Create DAO Agent presets
+# Create qì agent Agent presets
 
 Use this workflow whenever the user asks to create or change an Agent mode.
 

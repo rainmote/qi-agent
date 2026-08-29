@@ -7,7 +7,7 @@ import test from "node:test";
 import { ProviderRegistry } from "./providers.js";
 
 test("provider registry persists secrets privately and returns redacted settings", async () => {
-  const root = await mkdtemp(join(tmpdir(), "dao-provider-test-"));
+  const root = await mkdtemp(join(tmpdir(), "qi-agent-provider-test-"));
   try {
     const authFile = join(root, "codex-auth.json");
     const registry = new ProviderRegistry(root, { codexAuthFile: authFile });
@@ -54,7 +54,7 @@ test("provider registry persists secrets privately and returns redacted settings
 });
 
 test("provider registry discovers the local Codex ChatGPT login without exposing tokens", async () => {
-  const root = await mkdtemp(join(tmpdir(), "dao-provider-chatgpt-auth-test-"));
+  const root = await mkdtemp(join(tmpdir(), "qi-agent-provider-chatgpt-auth-test-"));
   const authFile = join(root, "auth.json");
   try {
     await writeFile(authFile, JSON.stringify({
@@ -95,7 +95,7 @@ test("provider registry discovers the local Codex ChatGPT login without exposing
 });
 
 test("provider registry discovers OpenAI-compatible model catalogs", async () => {
-  const root = await mkdtemp(join(tmpdir(), "dao-provider-discovery-test-"));
+  const root = await mkdtemp(join(tmpdir(), "qi-agent-provider-discovery-test-"));
   const modelServer = createServer((request, response) => {
     assert.equal(request.url, "/v1/models");
     assert.equal(request.headers.authorization, "Bearer discovery-key");

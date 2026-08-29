@@ -1,4 +1,4 @@
-# bb-agent：Babashka 插件化 LLM Agent
+# qì agent（器）：Clojure 插件化 Coding Agent
 
 这是一个用 Clojure/Babashka 实现的可扩展 coding agent。它吸收了 Pi 的小核心思路，以及 DeepSeek Harness 的 “Everything is a Plugin” 和可逆 effect 机制。
 
@@ -35,25 +35,33 @@ bb install
 ```
 
 该命令会在临时目录安装依赖并构建 TUI，把应用安装到
-`~/.local/share/dao`，并创建 `~/.local/bin/dao`。只要
+`~/.qi-agent/app`，并创建 `~/.local/bin/qi-agent`；同时保留
+`~/.local/bin/dao` 兼容入口。只要
 `~/.local/bin` 已在 `PATH` 中，之后可从任意仓库启动：
 
 ```bash
 cd /path/to/another-project
-dao
+qi-agent
 ```
 
-启动器不会切换工作目录，因此文件工具、信任状态和 `.bb-agent/sessions` 都属于调用
-`dao` 时所在的仓库。可用 `DAO_INSTALL_DIR`、`DAO_BIN_DIR`，或
+启动器不会切换工作目录，因此文件工具、信任状态和 `.qi-agent/sessions` 都属于调用
+`qi-agent` 时所在的仓库。可用 `QI_AGENT_HOME`、`QI_AGENT_INSTALL_DIR`、
+`QI_AGENT_BIN_DIR`，或
 `bb install --install-dir PATH --bin-dir PATH` 覆盖默认安装位置。重复执行 `bb install`
 会构建并原子替换之前由该命令管理的安装，但保留已安装的 `agent.edn` 用户配置；只有显式
-传入 `bb install --reset-config` 才恢复仓库默认 profile。若目标 `dao` 是其他程序，安装器
-会拒绝覆盖。
+传入 `bb install --reset-config` 才恢复仓库默认 profile。若目标 `qi-agent` 或兼容别名
+`dao` 是其他程序，安装器会拒绝覆盖。
+
+品牌与工程标识遵循同一套约定：页面字标为 **qì**，产品全称为 **qì agent**，中文名为
+**器**；仓库与包路径使用 ASCII `qi-agent`，Clojure 命名空间使用 `qi.*`。新状态写入
+`~/.qi-agent` 与项目 `.qi-agent/`。旧 `dao` 命令、`DAO_*`/`BB_AGENT_*` 环境变量、
+`.bb-agent/` 会话及旧 `agent.plugins.*` profile 在迁移期继续兼容。完整映射与迁移边界见
+[qì agent 命名与迁移约定](docs/qi-agent-migration.md)。
 
 先运行完全离线的两轮工具调用示例：
 
 ```bash
-bb agent --config examples/mock.edn --once "六乘七是多少？"
+bb qi-agent --config examples/mock.edn --once "六乘七是多少？"
 ```
 
 运行测试：
@@ -79,7 +87,7 @@ WebUI 默认从 `127.0.0.1:3080` 开始监听；若端口已占用，会持续�
 默认使用官方 OpenAI Responses API：
 
 ```bash
-bb agent --once "读取 README.md 并总结这个项目"
+bb qi-agent --once "读取 README.md 并总结这个项目"
 ```
 
 默认提供 `read/write/edit/bash/grep/find/ls`；与 Pi 一致，`read` 的 `offset` 是从 1 开始的
@@ -114,19 +122,19 @@ bb web
 # 在 Web 顶栏的模型选择器中选择 deepseek-v4-flash
 
 # 或单次从命令行使用独立 profile
-bb agent --config examples/deepseek.edn --once "读取 README.md 并总结这个项目"
+bb qi-agent --config examples/deepseek.edn --once "读取 README.md 并总结这个项目"
 ```
 
 默认 profile 已注册 `deepseek-v4-flash`，通过官方 `https://api.deepseek.com/chat/completions`
 接口调用；主 Agent 与子 Agent 均可选择 `deepseek` provider。当前使用非思考模式，以保持工具
 调用后的多轮消息回放稳定。
 
-默认 `agent.edn` 使用 `agent.plugins.openai-responses`，从 `OPENAI_API_KEY` 动态取 key，
+默认 `agent.edn` 使用 `qi.plugins.openai-responses`，从 `OPENAI_API_KEY` 动态取 key，
 只向 `https://api.openai.com/v1/responses` 发送凭据。请求默认 `store=false`，支持 SSE、图片、
 并行 function call、完整 Responses output item 回放，以及对 408/409/429/5xx 的有界退避。
 
 默认 profile 同时注册独立的 `chatgpt` 订阅 provider；它不会复用 `openai` provider 的
-API Key。`agent.plugins.chatgpt` 与 `examples/chatgpt.edn` 会在每次请求前读取
+API Key。`qi.plugins.chatgpt` 与 `examples/chatgpt.edn` 会在每次请求前读取
 `$CODEX_HOME/auth.json`（未设置时为 `~/.codex/auth.json`），只取 access token 与
 account id，不缓存或记录 refresh token。登录失效后运行 `codex login`，无需修改
 agent 配置。Web 的“设置 → 模型”会自动显示这份本地登录的缺失、有效、过期、格式错误或
@@ -144,8 +152,9 @@ API key。认证缓存位置是官方文档支持的，但订阅后端协议并�
 `:proxy {:host "127.0.0.1" :port 7897}`，显式使用本机 HTTP/mixed proxy。连接层重试
 耗尽后不会再由 runtime 成倍重放同一个请求。
 
-`dao` 会连接常驻 supervisor，选择已有 agent 或创建新的持久 session；关闭终端只会 detach，
-不会停止后台 run、子 agent 或 REPL。`bb agent` 仍保留为 headless/embedding 入口。
+`qi-agent` 会连接常驻 supervisor，选择已有 agent 或创建新的持久 session；关闭终端只会 detach，
+不会停止后台 run、子 agent 或 REPL。`bb qi-agent` 是 headless/embedding 入口，
+`bb agent` 作为兼容 task 保留。
 默认模型、端点、工具和插件顺序都在 `agent.edn` 中配置。OpenAI-compatible
 插件也可以连接其他兼容 `/chat/completions` 的服务。OpenAI Responses 和 DeepSeek Chat
 Completions 都会把文本 delta 立即写到终端，不再等待完整响应下载结束。
@@ -156,22 +165,22 @@ Completions 都会把文本 delta 立即写到终端，不再等待完整响应�
 java --version
 clojure -Sdescribe
 clojure -P
-dao --repl-backend jvm-clojure
+qi-agent --repl-backend jvm-clojure
 ```
 
 JVM 模式要求系统已有 JDK 和官方 Clojure CLI；macOS 的 Clojure CLI 安装方式见
 [官方安装指南](https://clojure.org/guides/install_clojure)。首次使用含 Maven 或 git
 依赖的项目时，应先在 sandbox 外运行 `clojure -P` 下载依赖，因为 REPL sandbox 默认禁止网络。
 该 backend 会复制当前项目的 `deps.edn` 到 agent 专属可写目录，绝对化项目路径，再以
-`clojure -Srepro -M -m agent.repl-worker` 启动；`.cpcache` 不会写进项目根目录。
+`clojure -Srepro -M -m qi.repl-worker` 启动；`.cpcache` 不会写进项目根目录。
 
 `--repl-backend` 只影响新建 agent。Babashka 与 JVM Clojure agent 可以由同一个 daemon
-同时监督，`dao agents` 的 `repl_backend` 字段可确认选择。模型侧工具名暂时仍叫
+同时监督，`qi-agent agents` 的 `repl_backend` 字段可确认选择。模型侧工具名暂时仍叫
 `bb_repl`，这是为了保持会话和 policy 兼容；在 JVM agent 中它实际执行原生 JVM Clojure。
-也可以在自定义 profile 中把 `agent.plugins.bb-repl` 替换为
-`agent.plugins.jvm-clojure-repl`，并配置 `:project-deps`、`:aliases` 和 `:jvm-opts`。
+也可以在自定义 profile 中把 `qi.plugins.bb-repl` 替换为
+`qi.plugins.jvm-clojure-repl`，并配置 `:project-deps`、`:aliases` 和 `:jvm-opts`。
 
-唯一终端入口是 Rust/Ratatui 实现的 `dao` 客户端。Rust daemon 持有任务接纳、路由、worker
+唯一终端入口是 Rust/Ratatui 实现的 `qi-agent` 客户端。Rust daemon 持有任务接纳、路由、worker
 监督与恢复；resident Babashka worker 持有 session、agent loop、工具与审批。当前界面按
 Qwen Code 的默认暗色、
 欢迎 banner、消息符号、双横线输入区与弹窗布局呈现，并包含带代码/diff 分栏预览、可即时切换的 Qwen
@@ -180,19 +189,19 @@ Markdown/reasoning、紧凑工具状态、多行 Unicode 输入、命令补全�
 以及 model、session、theme 和审批选择器。离线体验：
 
 闲置 worker 默认在最后持久活动达到 90 分钟后释放运行资源，但 session JSONL 与 artifact 会保留，
-再次 attach 时自动恢复。`DAO_IDLE_EVICTION_MINUTES` 可设为正分钟数，或设为 `off` 关闭；有客户端、
-运行任务或 active/claimed/paused schedule 的 session 不会被回收。`dao status`/`dao doctor` 会显示
-回收阈值与扫描状态，`dao update` 可立即触发一次安全扫描。inactive、archived 与 deleted 是不同状态。
+再次 attach 时自动恢复。`QI_AGENT_IDLE_EVICTION_MINUTES` 可设为正分钟数，或设为 `off` 关闭；有客户端、
+运行任务或 active/claimed/paused schedule 的 session 不会被回收。`qi-agent status`/`qi-agent doctor` 会显示
+回收阈值与扫描状态，`qi-agent update` 可立即触发一次安全扫描。inactive、archived 与 deleted 是不同状态。
 
 Supervisor SQLite 使用显式 schema revision；升级前会在 owner-only 的 `backups/` 下创建一致性
-快照并保留最近 5 份，遇到更新版本的 schema 会拒绝启动。`dao backup` 可随时创建手工快照，
-`dao doctor` 会运行 SQLite quick check。worker 日志默认单文件 10 MiB、3 份轮转、总数 100，
-可用 `DAO_LOG_MAX_BYTES`、`DAO_LOG_BACKUPS`、`DAO_MAX_WORKER_LOGS` 调整。完整上线检查、恢复和
+快照并保留最近 5 份，遇到更新版本的 schema 会拒绝启动。`qi-agent backup` 可随时创建手工快照，
+`qi-agent doctor` 会运行 SQLite quick check。worker 日志默认单文件 10 MiB、3 份轮转、总数 100，
+可用 `QI_AGENT_LOG_MAX_BYTES`、`QI_AGENT_LOG_BACKUPS`、`QI_AGENT_MAX_WORKER_LOGS` 调整。完整上线检查、恢复和
 发布校验见 [生产运行手册](docs/production-readiness.md)。
 
 ```bash
 bb tui-build
-apps/tui-rs/target/release/dao --repository-root . --config examples/tui-mock.edn
+apps/tui-rs/target/release/qi-agent --repository-root . --config examples/tui-mock.edn
 ```
 
 Ratatui 直接打开 controlling TTY，并通过 owner-only Unix socket 使用 daemon JSONL 协议。默认 TUI
@@ -226,12 +235,12 @@ value:
 ```
 
 审批与工具过程是 trace，写到 stderr；模型文本流写到 stdout，完成后不会再重复打印最终回答。可在 profile
-中把 `agent.plugins.trace` 的 `:enabled` 改为 `false` 关闭。字面量
-`bb agent --once ""` 是空 prompt，会在调用模型之前被拒绝，所以不会产生任何工具过程。
+中把 `qi.plugins.trace` 的 `:enabled` 改为 `false` 关闭。字面量
+`bb qi-agent --once ""` 是空 prompt，会在调用模型之前被拒绝，所以不会产生任何工具过程。
 
 ```bash
-bb agent --list
-bb agent --help
+bb qi-agent --list
+bb qi-agent --help
 ```
 
 ## 运行中控制
@@ -247,7 +256,7 @@ bb agent --help
 ```
 
 公开的 `:agent/session` service 提供 `submit!/steer!/follow-up!/abort!/state/subscribe!`；
-`agent.api` 是稳定的嵌入入口。abort 会关闭 SSE、取消退避与进程，并把
+`qi.api` 是稳定的嵌入入口。abort 会关闭 SSE、取消退避与进程，并把
 `agent/aborted` 写入 session，不会持久化半条 final assistant message。
 
 同一 assistant message 的只读工具默认并行；preflight/approval 保持模型顺序，结果始终
@@ -259,22 +268,23 @@ bb agent --help
 `--session` 指定 JSONL 日志；文件存在时自动恢复，不存在时创建：
 
 ```bash
-bb agent --session .bb-agent/sessions/demo.jsonl --once "记住数字 42"
-bb agent --session .bb-agent/sessions/demo.jsonl
-bb agent --session .bb-agent/sessions/demo.jsonl --session-info
+bb qi-agent --session .qi-agent/sessions/demo.jsonl --once "记住数字 42"
+bb qi-agent --session .qi-agent/sessions/demo.jsonl
+bb qi-agent --session .qi-agent/sessions/demo.jsonl --session-info
 ```
 
 分叉会创建新 session id，并拒绝覆盖已有目标；压缩会保留最近消息，并追加一个
 `session/compaction` checkpoint，不重写旧日志：
 
 ```bash
-bb agent --session .bb-agent/sessions/demo.jsonl \
-  --fork .bb-agent/sessions/experiment.jsonl
-bb agent --session .bb-agent/sessions/demo.jsonl --compact
+bb qi-agent --session .qi-agent/sessions/demo.jsonl \
+  --fork .qi-agent/sessions/experiment.jsonl
+bb qi-agent --session .qi-agent/sessions/demo.jsonl --compact
 ```
 
 每个 entry 记录 parent，store 提供活动叶、name/label、`/tree` 与 `/checkout ENTRY_ID`；
-session catalog 会索引 `.bb-agent/sessions/*.jsonl`。交互模式还提供 `/session`、
+session catalog 会索引 `.qi-agent/sessions/*.jsonl`，迁移期也会读取旧的
+`.bb-agent/sessions/*.jsonl`。交互模式还提供 `/session`、
 `/fork PATH`、`/compact` 和 `/clear`。`/clear` 也只追加
 checkpoint，不再截断历史。恢复时无效 JSON 行会被跳过并出现在 `:diagnostics`，因此
 进程在写入中途退出留下的半行不会毁掉整段会话。
@@ -287,11 +297,11 @@ checkpoint 保存；摘要失败会退回有界确定性摘要。provider 报 co
 
 coding 工具经过四层独立能力：
 
-- `agent.plugins.execution-world` 统一 `read!/write!/edit!/list!/search!/spawn!`，工具不直接
+- `qi.plugins.execution-world` 统一 `read!/write!/edit!/list!/search!/spawn!`，工具不直接
   访问主机；本地、容器、SSH 或测试 provider 可以整体替换。
-- `agent.plugins.trust` 从用户控制的 `~/.bb-agent/trust.edn` 读取 canonical root，按最近
+- `qi.plugins.trust` 从用户控制的 `~/.qi-agent/trust.edn` 读取 canonical root，按最近
   父目录继承；项目自己的 `agent.edn` 不能自证可信或提前加载外置 namespace。
-- `agent.plugins.approval` 可按工具、最终解析路径、cwd、命令 regex 和 provider 决策，
+- `qi.plugins.approval` 可按工具、最终解析路径、cwd、命令 regex 和 provider 决策，
   支持当前 session 临时放行；审批前显示解析后的目标。
 - 本地 `bash` 与 `bb_repl` 默认 `:sandbox :auto`。macOS 使用 Seatbelt 禁网并阻止读取
   工作区外用户文件；其他系统找不到安全 provider 时，agent 仍可启动并保留对话与受
@@ -313,7 +323,7 @@ trust store 示例（路径应使用 canonical absolute path）：
 
 ## 资源、模型与外部协议
 
-resource catalog 会发现用户级 `~/.bb-agent/`、跨 agent 的 `~/.agents/skills/`，以及项目级 `.bb-agent/` 的
+resource catalog 会发现用户级 `~/.qi-agent/`、跨 agent 的 `~/.agents/skills/`，以及项目级 `.qi-agent/` 的
 `AGENTS.md`、`SYSTEM.md`、prompt 和 skill。skill 启动时只注入 name/description；模型用
 `read skill://<name>` 读取完整 `SKILL.md`，并可继续读取
 `skill://<name>/references/...` 等同目录资源。`load_skill` 保留为兼容入口，用户也可通过
@@ -327,8 +337,8 @@ model registry 允许多个 adapter 同时注册 metadata，并用 `/model`、`/
 外部 UI 和 IDE 可以使用版本化 JSONL：
 
 ```bash
-bb agent --config examples/mock.edn --mode json --once "六乘七是多少？"
-bb agent --config examples/mock.edn --mode rpc
+bb qi-agent --config examples/mock.edn --mode json --once "六乘七是多少？"
+bb qi-agent --config examples/mock.edn --mode rpc
 ```
 
 RPC 保留 prompt、steer、follow-up、abort、state、clear、compact、sessions、providers、
@@ -343,7 +353,7 @@ ChatGPT Responses 与 OpenAI-compatible adapter 会转换成各自的多模态�
 
 ```clojure
 (ns my.weather
-  (:require [agent.kernel :as kernel]))
+  (:require [qi.kernel :as kernel]))
 
 (def plugin
   {:id :tools/weather
@@ -372,11 +382,11 @@ ChatGPT Responses 与 OpenAI-compatible adapter 会转换成各自的多模态�
 注册 service、tool、observer、interceptor 和自定义 disposer 都会形成 effect。插件卸载时，effect 按注册的逆序撤销，不会留下旧工具或事件监听器。
 
 TUI 是 daemon 的可替换客户端，不再是由 Babashka 启动的插件。worker 通过 frontend-neutral
-Remote API 和 `agent.ui` prompt 边界暴露能力，不把 Rust UI 状态塞进 agent loop。当前界面处理
+Remote API 和 `qi.ui` prompt 边界暴露能力，不把 Rust UI 状态塞进 agent loop。当前界面处理
 approval、select、confirm、input 和 custom prompt，也会投影 JSON-safe status、widget 和
 notification，并通过 Remote API 调用注册在 host 的 shortcut handler。Clojure
 message/entry/tool renderer 函数不能跨进程变成 Ratatui widget，函数值字段只显示不可用占位符；
-需要原生 renderer 时仍可使用 `agent.plugins.tui`。
+需要原生 renderer 时仍可使用 `qi.plugins.tui`。
 工具仍可分别声明 `:render-model` 和 `:render-tui`，避免模型上下文文本与终端表现互相绑死；
 TUI 扩展示例见 `plugins/example/ui_demo.clj`。
 
@@ -387,12 +397,12 @@ TUI 扩展示例见 `plugins/example/ui_demo.clj`。
   字符串/数值/数组约束；未知字段可通过 `additionalProperties false` 拒绝。
 - 工具返回 canonical JSON value，渲染成模型文本是另一层职责，避免让下游解析随意 prose。
 - `:tool/pre-execute`、`:tool/execute`、`:tool/post-execute` 和 `:llm/request` 是有序 waterfall；策略无需修改 agent loop。
-- `bb_repl` 工具和执行后端分离：`agent.plugins.clojure-repl` 只依赖
+- `bb_repl` 工具和执行后端分离：`qi.plugins.clojure-repl` 只依赖
   `:execution/repl` service。默认 provider 是持久化 Babashka 子进程，也可选择隔离的
   原生 JVM Clojure 进程；二者共用单行 EDN 协议、interrupt/reset/status、持久定义与
   replay-safe cell 恢复语义。REPL 中的 `def` 可跨调用复用；超时后只重启该 agent 的
   REPL，不终止 resident worker。
-- `agent.cancellation` 的 token 会传到 adapter；取消会关闭 SSE transport 并记录
+- `qi.cancellation` 的 token 会传到 adapter；取消会关闭 SSE transport 并记录
   `agent/aborted`。运行时同时提供 `:agent/cancel` service，供 TUI、HTTP server 或
   上层调度器调用。
 - `:llm/stream` 是 provider-neutral live event；console renderer 只依赖
@@ -407,36 +417,36 @@ TUI 扩展示例见 `plugins/example/ui_demo.clj`。
 ## 目录
 
 ```text
-src/agent/kernel.clj            微内核、注册表、waterfall、effect
-src/agent/plugin.clj            EDN profile 与 namespace 加载器
-src/agent/cancellation.clj      协作式取消 token 与资源关闭回调
-src/agent/streaming.clj         provider-neutral SSE framing
-src/agent/plugins/runtime.clj   默认 agent loop 插件
-src/agent/plugins/execution_world.clj 统一文件与进程执行世界
-src/agent/plugins/context_manager.clj token 预算、语义压缩与恢复重试
-src/agent/plugins/model_registry.clj 多 provider/model 目录与选择器
-src/agent/plugins/subagent.clj provider-neutral subagent registry 与生命周期
-src/agent/plugins/subagent_in_process.clj 隔离的 spawn/fork provider
-src/agent/plugins/subagent_tools.clj 委派与后台任务控制工具
-src/agent/plugins/stdio_session.clj 长驻、可取消的 argv/stdio 进程 provider
-src/agent/plugins/lsp.clj       LSP registry、JSON-RPC 与文档同步 runtime
-src/agent/plugins/lsp_tools.clj 只读 lsp_query 与 /lsp 命令
-src/agent/plugins/resources.clj 可信 context/prompt/skill 发现与 reload
-src/agent/plugins/bb_repl.clj   持久化 Babashka 子进程 provider
-src/agent/plugins/clojure_repl.clj 模型侧 bb_repl 工具
-src/agent/repl_worker.clj       REPL 子进程的 EDN worker
-src/agent/plugins/openai.clj    DeepSeek/OpenAI-compatible adapter
-src/agent/plugins/openai_responses.clj 官方 OpenAI Responses adapter
-src/agent/plugins/chatgpt.clj   ChatGPT subscription/Codex auth adapter
-src/agent/plugins/session.clj   可恢复、可 fork/compact 的 append-only session
-src/agent/plugins/session_title.clj 首轮完成后自动生成确定性会话标题
-src/agent/protocol.clj          version 1 JSON event 与 stdin/stdout RPC
-src/agent/api.clj               稳定的公开 Clojure embedding API
-src/agent/command.clj           line/TUI 共用的 slash command dispatcher
-src/agent/ui.clj                可逆 UI extension 与 prompt API
-apps/tui-rs/                    dao daemon/client、Ratatui UI、worker proxy 与故障测试
-src/agent/plugins/tui.clj       兼容的 JLine/Clojure 全屏 TUI
-src/agent/plugins/*.clj         tools、trust、approval、policy、stream、trace、mock
+src/qi/kernel.clj            微内核、注册表、waterfall、effect
+src/qi/plugin.clj            EDN profile 与 namespace 加载器
+src/qi/cancellation.clj      协作式取消 token 与资源关闭回调
+src/qi/streaming.clj         provider-neutral SSE framing
+src/qi/plugins/runtime.clj   默认 agent loop 插件
+src/qi/plugins/execution_world.clj 统一文件与进程执行世界
+src/qi/plugins/context_manager.clj token 预算、语义压缩与恢复重试
+src/qi/plugins/model_registry.clj 多 provider/model 目录与选择器
+src/qi/plugins/subagent.clj provider-neutral subagent registry 与生命周期
+src/qi/plugins/subagent_in_process.clj 隔离的 spawn/fork provider
+src/qi/plugins/subagent_tools.clj 委派与后台任务控制工具
+src/qi/plugins/stdio_session.clj 长驻、可取消的 argv/stdio 进程 provider
+src/qi/plugins/lsp.clj       LSP registry、JSON-RPC 与文档同步 runtime
+src/qi/plugins/lsp_tools.clj 只读 lsp_query 与 /lsp 命令
+src/qi/plugins/resources.clj 可信 context/prompt/skill 发现与 reload
+src/qi/plugins/bb_repl.clj   持久化 Babashka 子进程 provider
+src/qi/plugins/clojure_repl.clj 模型侧 bb_repl 工具
+src/qi/repl_worker.clj       REPL 子进程的 EDN worker
+src/qi/plugins/openai.clj    DeepSeek/OpenAI-compatible adapter
+src/qi/plugins/openai_responses.clj 官方 OpenAI Responses adapter
+src/qi/plugins/chatgpt.clj   ChatGPT subscription/Codex auth adapter
+src/qi/plugins/session.clj   可恢复、可 fork/compact 的 append-only session
+src/qi/plugins/session_title.clj 首轮完成后自动生成确定性会话标题
+src/qi/protocol.clj          version 1 JSON event 与 stdin/stdout RPC
+src/qi/api.clj               稳定的公开 Clojure embedding API
+src/qi/command.clj           line/TUI 共用的 slash command dispatcher
+src/qi/ui.clj                可逆 UI extension 与 prompt API
+apps/tui-rs/                    qi-agent daemon/client、Ratatui UI、worker proxy 与故障测试
+src/qi/plugins/tui.clj       兼容的 JLine/Clojure 全屏 TUI
+src/qi/plugins/*.clj         tools、trust、approval、policy、stream、trace、mock
 plugins/example/math.clj        仓库外置插件示例
 examples/mock.edn               无 API key 的确定性演示
 examples/chatgpt.edn            复用 Codex 登录态的 ChatGPT 订阅 profile

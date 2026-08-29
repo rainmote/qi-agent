@@ -42,27 +42,28 @@ jobs:
           workspaces: apps/tui-rs
       - name: Verify tag matches package versions
         env:
-          DAO_TAG: ${{ inputs.tag || github.ref_name }}
+          QI_AGENT_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          version="${DAO_TAG#v}"
-          rust_version="$(cargo metadata --no-deps --format-version 1 --manifest-path apps/tui-rs/Cargo.toml | jq -r '.packages[] | select(.name == "bb-agent-tui") | .version')"
+          version="${QI_AGENT_TAG#v}"
+          rust_version="$(cargo metadata --no-deps --format-version 1 --manifest-path apps/tui-rs/Cargo.toml | jq -r '.packages[] | select(.name == "qi-agent-tui") | .version')"
           node_version="$(node -p 'require("./package.json").version')"
           test "$version" = "$rust_version"
           test "$version" = "$node_version"
       - name: Test and build locked dependencies
         run: |
           cargo test --locked --manifest-path apps/tui-rs/Cargo.toml
-          cargo build --release --locked --manifest-path apps/tui-rs/Cargo.toml
+          cargo build --release --locked --bins --manifest-path apps/tui-rs/Cargo.toml
       - name: Assemble runtime distribution
         env:
-          DAO_TARGET: ${{ matrix.target }}
-          DAO_TAG: ${{ inputs.tag || github.ref_name }}
+          QI_AGENT_TARGET: ${{ matrix.target }}
+          QI_AGENT_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          package="dao-${DAO_TAG}-${DAO_TARGET}"
+          package="qi-agent-${QI_AGENT_TAG}-${QI_AGENT_TARGET}"
           mkdir -p "dist/$package/apps/tui-rs/target/release"
           mkdir -p "dist/$package/apps/tui-rs/src"
+          cp apps/tui-rs/target/release/qi-agent "dist/$package/apps/tui-rs/target/release/qi-agent"
           cp apps/tui-rs/target/release/dao "dist/$package/apps/tui-rs/target/release/dao"
-          cp -R src plugins scripts "dist/$package/"
+          cp -R src plugins presets scripts "dist/$package/"
           cp apps/tui-rs/Cargo.toml apps/tui-rs/Cargo.lock "dist/$package/apps/tui-rs/"
           cp -R apps/tui-rs/src/. "dist/$package/apps/tui-rs/src/"
           cp bb.edn agent.edn LICENSE README.md "dist/$package/"
@@ -101,10 +102,10 @@ jobs:
       - name: Publish immutable tag assets
         env:
           GH_TOKEN: ${{ github.token }}
-          DAO_TAG: ${{ inputs.tag || github.ref_name }}
+          QI_AGENT_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          if gh release view "$DAO_TAG" >/dev/null 2>&1; then
-            gh release upload "$DAO_TAG" dist/* --clobber
+          if gh release view "$QI_AGENT_TAG" >/dev/null 2>&1; then
+            gh release upload "$QI_AGENT_TAG" dist/* --clobber
           else
-            gh release create "$DAO_TAG" dist/* --verify-tag --generate-notes
+            gh release create "$QI_AGENT_TAG" dist/* --verify-tag --generate-notes
           fi

@@ -1,13 +1,19 @@
 [package]
-name = "bb-agent-tui"
+name = "qi-agent-tui"
 version = "0.1.0"
 edition = "2024"
-description = "Daemon-backed agent runtime and Ratatui client for dao"
+description = "Daemon-backed agent runtime and Ratatui client for qì agent"
 license = "MIT"
+default-run = "qi-agent"
 
 [[bin]]
-name = "dao"
+name = "qi-agent"
 path = "src/main.rs"
+
+# Compatibility entrypoint. New documentation and installers use `qi-agent`.
+[[bin]]
+name = "dao"
+path = "src/bin/dao.rs"
 
 [dependencies]
 anyhow = "1.0"
