@@ -47,3 +47,38 @@ test("renders the DeepSeek-style trajectory controls and three-lane overview", (
   assert.match(markup, /lane-model/);
   assert.match(markup, /lane-tools/);
 });
+
+test("long trajectories mount a bounded window and bounded overview", () => {
+  const long = Array.from({ length: 8000 }, (_, index) => ({
+    id: `long-${index}`, seq: index, at: "2026-10-02T00:00:00Z", type: "message",
+    data: { message: { role: index % 2 ? "assistant" : "user", content: `row ${index}` } },
+  }));
+  const html = renderToStaticMarkup(<Trajectory events={long} />);
+  assert.ok((html.match(/class="trajectory-record /g) || []).length < 50);
+  assert.ok((html.match(/class="trajectory-span /g) || []).length <= 360);
+  assert.match(html, /aria-rowcount="8000"/);
+});
+
+test("trajectory detail serialization is deferred and cached until requested", () => {
+  let serialized = 0;
+  const detail = { toJSON: () => { serialized++; return { large: "detail" }; } };
+  const records = buildTrajectoryRecords([{ id: "lazy", seq: 1, at: "", type: "message",
+    data: { message: { role: "user", content: "visible" }, extra: detail } }]);
+  assert.equal(serialized, 0);
+  assert.match(records[0].detail(), /large/);
+  records[0].detail();
+  assert.equal(serialized, 1);
+});
+
+test("screenshot payloads stay out of trajectory text and searchable JSON details", () => {
+  const records = buildTrajectoryRecords([
+    event(1, "tool/call", { "call-id": "screen", name: "computer", arguments: { action: "screenshot" } }),
+    event(2, "tool/result", { "call-id": "screen", content: "Screenshot captured", ok: true,
+      images: [{ type: "image", url: "data:image/png;base64,c2Vuc2l0aXZlLWltYWdlLWRhdGE=", detail: "auto" }] }),
+  ]);
+  assert.equal(records.length, 1);
+  assert.match(records[0].text, /Screenshot captured/);
+  assert.match(records[0].detail(), /图片数据已省略/);
+  assert.doesNotMatch(records[0].detail(), /c2Vuc2l0aXZl/);
+  assert.match(records[0].detail(), /"ok": true/);
+});

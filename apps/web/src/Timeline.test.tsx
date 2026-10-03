@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildToolBatches, operationTarget } from "./Timeline";
+import { createRef } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { fromSnapshot } from "./projection";
+import { fixtureSnapshot } from "./timeline-fixture-data";
+import { buildToolBatches, operationTarget, Timeline } from "./Timeline";
 import type { DurableEvent } from "./types";
 
 function event(id: string, type: string, data: Record<string, unknown> = {}): DurableEvent {
@@ -39,4 +43,15 @@ test("describes and truncates tool operation targets", () => {
 
   assert.equal(operationTarget(grep), "src · tool_calls");
   assert.equal(operationTarget(bash, 20), "apps/web · npm run …");
+});
+
+
+test("long histories mount a bounded window rather than every Markdown message", () => {
+  const projection = fromSnapshot(fixtureSnapshot(2_000));
+  const html = renderToStaticMarkup(<Timeline projection={projection} scrollRef={createRef<HTMLDivElement>()} />);
+  assert.match(html, /data-total-rows="6000"/);
+  const mounted = (html.match(/class="timeline-row"/g) || []).length;
+  assert.ok(mounted > 0 && mounted < 30, `mounted ${mounted} rows`);
+  assert.ok(html.length < 100_000);
+  assert.match(html, /回复 2000/);
 });

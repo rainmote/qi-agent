@@ -33,14 +33,17 @@
                       {:provider value})))
     (keyword value)))
 
-(defn- runtime-id [provider-id index]
-  (if (zero? index)
-    provider-id
-    (keyword (str (name provider-id) "--" (inc index)))))
+(defn- runtime-id [provider-id model-id]
+  (keyword (str (name provider-id) "--"
+                (java.util.UUID/nameUUIDFromBytes
+                 (.getBytes (pr-str [provider-id model-id]) "UTF-8")))))
 
-(defn- model-entry [ctx provider model index]
+(defn- identity-of [entry]
+  [(or (:settings-provider-id entry) (:id entry)) (:model entry)])
+
+(defn- model-entry [ctx provider model]
   (let [provider-id (provider-keyword (:id provider))
-        config {:provider-id (runtime-id provider-id index)
+        config {:provider-id (runtime-id provider-id (:id model))
                 :settings-provider-id provider-id
                 :auth-id provider-id
                 :base-url (:baseUrl provider)
@@ -80,39 +83,62 @@
            (fn []
              (let [registry (kernel/require-service ctx :llm/registry)
                    auth (kernel/require-service ctx :auth/store)
-                   selected-id (some-> ((:current registry)) :id)
-                   providers (read-providers path)]
+                   selected ((:current registry))
+                   previous ((:providers registry))
+                   providers (read-providers path)
+                   managed (remove #(= "chatgpt-subscription" (:protocol %)) providers)
+                   ;; Validate and construct the complete replacement before
+                   ;; removing working registrations.
+                   entries (vec (mapcat (fn [provider]
+                                          (map #(model-entry ctx provider %) (:models provider)))
+                                        managed))]
+               (when-not (= (count entries) (count (set (map :id entries))))
+                 (throw (ex-info "Provider settings contain duplicate model identities" {})))
                (dispose-all! effects)
-               (doseq [provider providers]
-                 ;; ChatGPT subscription authentication and transport settings
-                 ;; are owned by qi.plugins.chatgpt. The Web catalog only
-                 ;; reports its local Codex login state; it must not replace
-                 ;; that dynamic auth resolver with an API-key resolver.
-                 (when-not (= "chatgpt-subscription" (:protocol provider))
-                   (let [provider-id (provider-keyword (:id provider))
-                         key (:apiKey provider)
-                         key-env (:apiKeyEnv provider)]
-                     (swap! effects conj
-                            ((:upsert! auth)
-                             provider-id
-                             (fn [] {:api-key (or key
-                                                  (when key-env
-                                                    (System/getenv key-env)))})
-                             {:provider (keyword (:protocol provider))
-                              :source (if key :settings :environment)}))
-                     (doseq [[index model] (map-indexed vector (:models provider))]
-                       (swap! effects conj
-                              ((:upsert! registry)
-                               (model-entry ctx provider model index)))))))
-               (when (and selected-id
-                          (some #(= selected-id (:id %)) ((:providers registry))))
-                 ((:select! registry) selected-id))
-               {:path path
-                :providers (count providers)
-                :models (reduce + 0 (map #(count (:models %)) providers))}))]
+               (doseq [provider managed]
+                 (let [provider-id (provider-keyword (:id provider))
+                       key (:apiKey provider)
+                       key-env (:apiKeyEnv provider)]
+                   ;; Replace the built-in provider alias while this provider
+                   ;; is managed by Web; restore it when the override is removed.
+                   (swap! effects conj ((:mask! registry) provider-id))
+                   (swap! effects conj
+                          ((:upsert! auth) provider-id
+                           (fn [] {:api-key (or key (when key-env (System/getenv key-env)))})
+                           {:provider (keyword (:protocol provider))
+                            :source (if key :settings :environment)}))))
+               (doseq [entry entries]
+                 (swap! effects conj ((:upsert! registry) entry)))
+               (doseq [provider managed
+                       :let [id (provider-keyword (:id provider))]
+                       :when (seq (:models provider))]
+                 (swap! effects conj ((:alias! registry) id
+                                      (runtime-id id (:id (first (:models provider)))))))
+               (let [available ((:providers registry))
+                     by-identity (into {} (map (juxt identity-of identity) available))
+                     retained (get by-identity (identity-of selected))
+                     fallback (or retained (some #(when (= (:id selected) (:id %)) %) available)
+                                  (when-not selected ((:current registry)))
+                                  (some #(when (= (first (identity-of selected))
+                                                   (:settings-provider-id %)) %) entries)
+                                  (first entries))
+                     levels (into {} (keep (fn [entry]
+                                            (when-let [next (get by-identity (identity-of entry))]
+                                              [(:id next) (:thinking-level entry)])) previous))
+                     warnings (cond-> []
+                                (and selected (nil? retained))
+                                (conj "原选模型已移除或替换，请确认当前模型。")
+                                (and retained (:thinking-level selected)
+                                     (not (some #{(:thinking-level selected)} (:thinking-levels retained))))
+                                (conj "原推理强度已不受支持，已使用模型默认值。"))]
+                 ((:restore-selection! registry) (:id fallback) levels)
+                 {:path path
+                  :providers (count providers)
+                  :models (reduce + 0 (map #(count (:models %)) providers))
+                  :warnings warnings})))]
        (reload!)
        (kernel/register-service!
         ctx :provider/settings
         {:path path
-         :reload! reload!})
+         :reload! (fn [] (locking effects (reload!)))})
        #(dispose-all! effects)))})

@@ -44,5 +44,20 @@ export interface WorkerMessage {
 }
 
 export interface HostEvent extends WorkerMessage {
+  hostEpoch: string;
   hostSeq: number;
+}
+
+export type ReplayResetReason = "initial" | "invalid-cursor" | "generation" | "buffer-gap";
+
+export interface EventReplay {
+  reset: ReplayResetReason | null;
+  events: HostEvent[];
+}
+
+export interface ProviderReloadResult {
+  scope: "open-web-sessions";
+  applied: string[];
+  failures: Array<{ sessionId: string; sessionName: string; message: string }>;
+  warnings?: Array<{ sessionId: string; sessionName: string; message: string }>;
 }

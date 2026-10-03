@@ -1,6 +1,7 @@
 (ns qi.plugins.remote-api
   "Frontend-neutral remote methods exposed by the agent worker."
-  (:require [qi.command :as command]
+  (:require [qi.attachments :as attachments]
+            [qi.command :as command]
             [qi.kernel :as kernel]
             [clojure.java.io :as io])
   (:import [java.time Instant]))
@@ -106,6 +107,10 @@
         session (kernel/require-service ctx :agent/session)
         models (kernel/service ctx :llm/registry)
         interactions (kernel/service ctx :interaction/remote)
+        interaction-snapshot (when interactions
+                               (if-let [snapshot (:snapshot interactions)]
+                                 (snapshot)
+                                 {:pending ((:pending interactions))}))
         approval-policy (kernel/service ctx :approval/policy)
         repl (kernel/service ctx :execution/repl)
         subagents (kernel/service ctx :subagents/runtime)
@@ -119,7 +124,8 @@
                {:current (public-provider ((:current models)))
                 :providers ((:providers models))})
      :context (context-status ctx)
-     :interactions (if interactions ((:pending interactions)) [])
+     :interactions (or (:pending interaction-snapshot) [])
+     :interactions_revision (:revision interaction-snapshot)
      :policy (when approval-policy ((:status approval-policy)))
      :children (if subagents ((:jobs subagents)) [])
      :repl (when repl
@@ -211,12 +217,14 @@
                 (fn [{:keys [destination]}] ((:fork! store) destination)))
        (method! "turn.submit" "Start an agent turn asynchronously."
                 (object-params
-                 {"message" {:type "string" :minLength 1}
+                 {"message" attachments/content-schema
+                  "request_id" {:type "string" :minLength 1}
                   "options" {:type "object"}}
                  "message")
                 {:type "object"}
-                (fn [{:keys [message options]}]
-                  (let [request-id (str (random-uuid))
+                (fn [{:keys [message options request_id]}]
+                  (attachments/validate-user-content! ctx message)
+                  (let [request-id (or request_id (str (random-uuid)))
                         {:keys [task result]}
                         ((:submit! session) message (or options {}))]
                     (swap! tasks conj task)
@@ -231,16 +239,16 @@
                                     :data (ex-data error)}}))
                         (swap! tasks disj task)))
                     {:accepted true :request_id request-id})))
-       (method! "turn.steer" "Queue steering text for the active turn."
-                (object-params {"message" {:type "string" :minLength 1}}
+       (method! "turn.steer" "Queue steering content for the active turn."
+                (object-params {"message" attachments/content-schema}
                                "message")
                 {:type "object"}
-                (fn [{:keys [message]}] ((:steer! session) message)))
+                (fn [{:keys [message]}] ((:steer! session) (attachments/validate-user-content! ctx message))))
        (method! "turn.follow-up" "Queue a follow-up for the active turn."
-                (object-params {"message" {:type "string" :minLength 1}}
+                (object-params {"message" attachments/content-schema}
                                "message")
                 {:type "object"}
-                (fn [{:keys [message]}] ((:follow-up! session) message)))
+                (fn [{:keys [message]}] ((:follow-up! session) (attachments/validate-user-content! ctx message))))
        (method! "turn.abort" "Abort the active turn."
                 empty-params {:type "object"}
                 (fn [_] {:aborted (boolean ((:abort! session)))}))

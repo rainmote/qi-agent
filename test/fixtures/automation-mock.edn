@@ -1,0 +1,18 @@
+{:plugins
+ [{:ns qi.plugins.session}
+  {:ns qi.plugins.mock
+   :config {:responses
+    [{:message {:role "assistant" :content nil
+                :tool_calls [{:id "scheduled-user-request" :type "function"
+                              :function {:name "schedule_add" :arguments "{\"daily\":\"09:00\",\"timezone\":\"Asia/Hong_Kong\",\"prompt\":\"check later\"}"}}
+                             {:id "goal-user-request" :type "function"
+                              :function {:name "goal_set" :arguments "{\"objective\":\"finish the requested goal\",\"max_continuations\":1}"}}]}
+      :finish-reason "tool_calls"}
+     {:message {:role "assistant" :content "automation registered"} :finish-reason "stop"}
+     {:message {:role "assistant" :content "goal continuation completed"} :finish-reason "stop"}]}}
+  {:ns qi.plugins.trust :config {:trusted true}}
+  {:ns qi.plugins.policy}
+  {:ns qi.plugins.remote-registry}
+  {:ns qi.plugins.automation}
+  {:ns qi.plugins.runtime :config {:max-steps 3}}
+  {:ns qi.plugins.remote-api}]}

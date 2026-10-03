@@ -2,6 +2,7 @@
   "Anthropic Messages adapter used by configurable Web providers."
   (:require [qi.cancellation :as cancellation]
             [qi.kernel :as kernel]
+            [qi.tool-images :as images]
             [babashka.http-client :as http]
             [cheshire.core :as json]
             [clojure.string :as str]))
@@ -20,9 +21,7 @@
     (mapv (fn [block]
             (case (keyword (:type block))
               :text {:type "text" :text (:text block)}
-              :image (throw (ex-info
-                             "Anthropic configurable providers currently require text input"
-                             {:block-type (:type block)}))
+              :image (images/anthropic-image block)
               (throw (ex-info "Unsupported Anthropic content block"
                               {:block-type (:type block)}))))
           content)
@@ -48,12 +47,25 @@
     "user" {:role "user" :content (content-blocks (:content message))}
     "assistant" {:role "assistant" :content (assistant-blocks message)}
     "tool" {:role "user"
-            :content [{:type "tool_result"
-                       :tool_use_id (:tool_call_id message)
-                       :content (if (string? (:content message))
-                                  (:content message)
-                                  (json/generate-string (:content message)))}]}
+            :content [(cond->
+                        {:type "tool_result"
+                         :tool_use_id (:tool_call_id message)
+                         :content (if (seq (:images message))
+                                    (into [{:type "text"
+                                            :text (images/content-text (:content message))}]
+                                          (map images/anthropic-image (:images message)))
+                                    (images/content-text (:content message)))}
+                        (:is-error message) (assoc :is_error true))]}
     nil))
+
+(defn- anthropic-messages [messages]
+  (vec
+   (mapcat (fn [batch]
+             (let [converted (keep anthropic-message batch)]
+               (if (= "tool" (:role (first batch)))
+                 [{:role "user" :content (vec (mapcat :content converted))}]
+                 converted)))
+           (partition-by #(= "tool" (:role %)) messages))))
 
 (defn- anthropic-tool [{:keys [type function]}]
   (when-not (= "function" type)
@@ -69,6 +81,7 @@
     (subs text 0 (min 1200 (count text)))))
 
 (defn generate [ctx config request]
+  (images/require-tool-images! config #{:text :image} :anthropic request)
   (let [auth-id (or (:auth-id config) (:settings-provider-id config)
                     (:provider-id config) :anthropic)
         key (if-let [store (kernel/service ctx :auth/store)]
@@ -78,7 +91,7 @@
       (throw (ex-info (str "Missing Anthropic API key; set "
                            (or (:api-key-env config) ":api-key"))
                       {:provider :anthropic})))
-    (let [messages (->> (:messages request) (keep anthropic-message) vec)
+    (let [messages (anthropic-messages (:messages request))
           tools (mapv anthropic-tool (:tools request))
           body (cond-> {:model (:model config)
                         :max_tokens (or (:max-output-tokens config) 8192)
@@ -140,7 +153,7 @@
    :display-name (:display-name config)
    :settings-provider-id (:settings-provider-id config)
    :context-window (:context-window config)
-   :input-modalities #{:text}
+   :input-modalities (images/input-modalities config #{:text :image})
    :generate (partial generate ctx config)})
 
 (def plugin

@@ -187,7 +187,7 @@
     {:items (vec (take limit values))
      :truncated (> (count values) limit)}))
 
-(defn- pump! [stream stream-name on-update spool-path preview-limit spool-limit
+(defn- pump! [stream stream-name on-update spool-path preview-limit spool-limit update-limit
               overflow terminate!]
   (future
     (with-open [reader (io/reader stream)
@@ -204,7 +204,7 @@
               (let [next-total (+ total n)
                     preview-count (min n (max 0 (- preview-limit (.length output))))
                     persist-count (min n (max 0 (- spool-limit total)))
-                    live-count (min n (max 0 (- preview-limit live-characters)))]
+                    live-count (min n (max 0 (- update-limit live-characters)))]
                 (when (pos? preview-count)
                   (.append output buffer 0 preview-count))
                 (when (pos? persist-count)
@@ -272,11 +272,21 @@
          (take limit)
          doall)))
 
-(defn- terminate-process-tree! [process]
+(defn- remember-descendants! [process tracked]
+  (try
+    (with-open [stream (.descendants (.toHandle process))]
+      (let [handles (vec (iterator-seq (.iterator stream)))]
+        (swap! tracked
+               (fn [known]
+                 (into {} (map (fn [handle] [(.pid handle) handle]))
+                       (filter #(.isAlive %)
+                               (concat (vals known) handles)))))))
+    (catch Throwable _)))
+
+(defn- terminate-process-tree! [process tracked]
+  (remember-descendants! process tracked)
   (let [root (.toHandle process)
-        descendants (with-open [stream (.descendants root)]
-                      (vec (iterator-seq (.iterator stream))))
-        handles (conj (vec (reverse descendants)) root)]
+        handles (conj (vec (reverse (vals @tracked))) root)]
     (doseq [handle handles]
       (when (.isAlive handle)
         (.destroy handle)))
@@ -286,6 +296,30 @@
     (doseq [handle handles]
       (when (.isAlive handle)
         (.destroyForcibly handle)))))
+
+(defn- remaining-ms [deadline]
+  (max 0 (long (Math/ceil (/ (- deadline (System/nanoTime)) 1000000.0)))))
+
+(defn- await-process! [process tracked deadline]
+  ;; Remember children while the shell is alive so timeout/cancel still owns
+  ;; them after their parent exits. Never block past the command deadline.
+  (loop []
+    (remember-descendants! process tracked)
+    (let [remaining (remaining-ms deadline)]
+      (cond
+        (not (.isAlive process)) true
+        (zero? remaining) false
+        (.waitFor process (min 20 remaining) TimeUnit/MILLISECONDS) true
+        :else (recur)))))
+
+(defn- await-pump! [task deadline cancel-token]
+  (loop []
+    (cancellation/throw-if-cancelled! cancel-token)
+    (let [remaining (remaining-ms deadline)
+          value (deref task (min 20 remaining) ::drain-timeout)]
+      (if (and (= ::drain-timeout value) (pos? remaining))
+        (recur)
+        value))))
 
 (defn- process-command [sandbox root command]
   ;; Tool commands are intentionally non-login shells. A login shell reads
@@ -306,7 +340,7 @@
 (defn- spawn! [root output-root sandbox default-timeout max-timeout
                max-output max-output-file-chars max-output-files
                max-walk-entries
-               {:keys [command cwd timeout-ms cancel-token on-update]
+               {:keys [command cwd timeout-ms cancel-token on-update stream-output?]
                 :or {cwd "."}}]
   (when (str/blank? command)
     (throw (ex-info "Command must not be blank" {})))
@@ -321,6 +355,7 @@
                         {:timeout-ms effective-timeout
                          :max-timeout-ms max-timeout})))
       (let [started (System/nanoTime)
+          deadline (+ started (* effective-timeout 1000000))
           stdout-spool (spool-path! output-root "stdout")
           stderr-spool (spool-path! output-root "stderr")
           overflow (atom nil)
@@ -332,26 +367,36 @@
                       (doseq [path [stdout-spool stderr-spool]]
                         (try (fs/delete-if-exists path) (catch Throwable _)))
                       (throw error)))
-          terminate! #(terminate-process-tree! process)
+          tracked (atom {})
+          terminate! #(terminate-process-tree! process tracked)
           dispose-cancel (cancellation/on-cancel!
                           cancel-token
                           terminate!)
           stdout-task (pump! (.getInputStream process) :stdout on-update
                              stdout-spool max-output max-output-file-chars
+                             (if stream-output? max-output-file-chars max-output)
                              overflow terminate!)
           stderr-task (pump! (.getErrorStream process) :stderr on-update
                              stderr-spool max-output max-output-file-chars
+                             (if stream-output? max-output-file-chars max-output)
                              overflow terminate!)]
         (try
-          (let [completed? (.waitFor process effective-timeout TimeUnit/MILLISECONDS)]
+          ;; This API has no stdin writer. Deliver EOF instead of leaving a
+          ;; command waiting for input that no caller can provide.
+          (.close (.getOutputStream process))
+          (let [completed? (await-process! process tracked deadline)]
             (when-not completed?
               (terminate!))
-            (let [stdout @stdout-task
-                  stderr @stderr-task]
+            (let [drain-deadline (if completed? deadline
+                                  (+ (System/nanoTime) 500000000))
+                  stdout (await-pump! stdout-task drain-deadline cancel-token)
+                  stderr (await-pump! stderr-task drain-deadline cancel-token)
+                  drained? (and (not= ::drain-timeout stdout)
+                                (not= ::drain-timeout stderr))]
               (when-let [limit @overflow]
                 (throw (ex-info "Command output exceeded the configured disk limit"
                                 (assoc limit :command command))))
-              (when-not completed?
+              (when-not (and completed? drained?)
                 (throw (ex-info "Command timed out"
                                 {:timeout-ms effective-timeout :command command})))
               (cancellation/throw-if-cancelled! cancel-token)
@@ -373,6 +418,13 @@
                  :duration-ms (long (/ (- (System/nanoTime) started) 1000000))})))
           (finally
             (dispose-cancel)
+            ;; Future interruption and stream/callback failures also own cleanup;
+            ;; cancellation is not the only way a process can leave this scope.
+            (terminate!)
+            (doseq [stream [(.getInputStream process) (.getErrorStream process)]]
+              (try (.close stream) (catch Throwable _)))
+            (doseq [task [stdout-task stderr-task]]
+              (when-not (future-done? task) (future-cancel task)))
             (doseq [path [stdout-spool stderr-spool]]
               (try (fs/delete-if-exists path) (catch Throwable _)))))))))
 
@@ -424,6 +476,8 @@
            {:provider :local
             :sandbox mode
             :root (str workspace-root)
+            :default-timeout-ms timeout-ms
+            :max-timeout-ms max-timeout-ms
             :capabilities (cond-> #{:fs/read :fs/write}
                             (not= :unavailable mode) (conj :process))
             :resolve! (fn [path] (str (existing-inside workspace-root path)))

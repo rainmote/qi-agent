@@ -17,6 +17,33 @@ const PROCESS_TIMEOUT: Duration = Duration::from_secs(30);
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(60);
 static FAULT_TEST_LOCK: Mutex<()> = Mutex::new(());
 
+fn daemon_binary() -> PathBuf {
+    let compiled = PathBuf::from(env!("CARGO_BIN_EXE_dao"));
+    if compiled.is_file() {
+        return compiled;
+    }
+
+    // Cargo fingerprints can survive a repository move and leave the
+    // compile-time CARGO_BIN_EXE path pointing at the old checkout. Prefer
+    // the binary next to the currently running integration test in that case.
+    // This also respects a caller-provided CARGO_TARGET_DIR.
+    let current = std::env::current_exe()
+        .ok()
+        .and_then(|path| {
+            path.parent()
+                .and_then(Path::parent)
+                .map(|path| path.join("dao"))
+        })
+        .unwrap_or_default();
+    assert!(
+        current.is_file(),
+        "daemon test binary was not found at either {} or {}",
+        compiled.display(),
+        current.display()
+    );
+    current
+}
+
 struct Harness {
     _serial: MutexGuard<'static, ()>,
     child: Child,
@@ -59,7 +86,8 @@ impl Harness {
             .iter()
             .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
             .collect();
-        let mut command = Command::new(env!("CARGO_BIN_EXE_dao"));
+        let binary = daemon_binary();
+        let mut command = Command::new(&binary);
         command
             .arg("daemon")
             .arg("serve")
@@ -71,21 +99,34 @@ impl Harness {
             .env("QI_AGENT_RUNTIME_DIR", &runtime)
             .env("QI_AGENT_STATE_DIR", &state)
             .env("QI_AGENT_REPOSITORY_ROOT", &repository)
+            .env(
+                "QI_AGENT_HOME",
+                fs::canonicalize(&root).unwrap().join("home"),
+            )
+            .env(
+                "QI_AGENT_PRESET_USER_ROOT",
+                fs::canonicalize(&root).unwrap().join("presets"),
+            )
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::inherit());
         for (key, value) in &extra_env {
             command.env(key, value);
         }
-        let mut child = command.spawn().unwrap();
+        let mut child = command.spawn().unwrap_or_else(|error| {
+            panic!(
+                "failed to start daemon test binary {}: {error}",
+                binary.display()
+            )
+        });
         let started = Instant::now();
-        while !socket.exists() {
+        while UnixStream::connect(&socket).is_err() {
             if let Some(status) = child.try_wait().unwrap() {
                 panic!("daemon exited before creating its socket: {status}");
             }
             assert!(
                 started.elapsed() < PROCESS_TIMEOUT,
-                "daemon socket did not appear"
+                "daemon socket did not become connectable"
             );
             thread::sleep(Duration::from_millis(25));
         }
@@ -107,7 +148,8 @@ impl Harness {
     fn kill_and_restart_daemon(&mut self) {
         self.child.kill().unwrap();
         self.child.wait().unwrap();
-        let mut command = Command::new(env!("CARGO_BIN_EXE_dao"));
+        let binary = daemon_binary();
+        let mut command = Command::new(&binary);
         command
             .arg("daemon")
             .arg("serve")
@@ -119,13 +161,26 @@ impl Harness {
             .env("QI_AGENT_RUNTIME_DIR", self.root.join("r"))
             .env("QI_AGENT_STATE_DIR", self.root.join("s"))
             .env("QI_AGENT_REPOSITORY_ROOT", &self.repository)
+            .env(
+                "QI_AGENT_HOME",
+                fs::canonicalize(&self.root).unwrap().join("home"),
+            )
+            .env(
+                "QI_AGENT_PRESET_USER_ROOT",
+                fs::canonicalize(&self.root).unwrap().join("presets"),
+            )
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::inherit());
         for (key, value) in &self.extra_env {
             command.env(key, value);
         }
-        self.child = command.spawn().unwrap();
+        self.child = command.spawn().unwrap_or_else(|error| {
+            panic!(
+                "failed to restart daemon test binary {}: {error}",
+                binary.display()
+            )
+        });
         let started = Instant::now();
         loop {
             if UnixStream::connect(&self.socket).is_ok() {
@@ -835,6 +890,109 @@ fn controller_is_exclusive_and_command_retry_is_idempotent() {
     second
         .call(None, "daemon.shutdown", json!({}), Some("shutdown"))
         .unwrap();
+}
+
+#[test]
+fn settings_mutations_require_controller_and_are_journaled() {
+    let root = PathBuf::from("/tmp").join(format!(
+        "qi-authority-{}",
+        &Uuid::new_v4().simple().to_string()[..8]
+    ));
+    fs::create_dir_all(&root).unwrap();
+    let config = root.join("settings.edn");
+    fs::write(
+        &config,
+        r#"{:plugins [{:ns qi.plugins.session}
+      {:ns qi.plugins.model-registry} {:ns qi.plugins.auth-store}
+      {:ns qi.plugins.provider-settings} {:ns qi.plugins.remote-registry}
+      {:ns qi.plugins.approval :config {:mode :deny}}
+      {:ns qi.plugins.runtime} {:ns qi.plugins.remote-api}]}"#,
+    )
+    .unwrap();
+    let settings = root.join("providers.json");
+    fs::write(
+        &settings,
+        json!({"version":1,"providers":[{"id":"review",
+      "protocol":"openai-completions","baseUrl":"https://example.invalid/v1",
+      "models":[{"id":"mock","thinkingLevels":["low","high"],"defaultThinkingLevel":"low"}]}]})
+        .to_string(),
+    )
+    .unwrap();
+    let harness = Harness::start_with_env(
+        config.to_str().unwrap(),
+        &[(
+            "QI_AGENT_PROVIDER_SETTINGS_FILE",
+            settings.to_str().unwrap(),
+        )],
+    );
+    let mut owner = TestClient::connect(&harness.socket, "settings-owner").unwrap();
+    let created = owner
+        .call(
+            None,
+            "agent.create",
+            json!({"workspace":harness.workspace()}),
+            Some("create"),
+        )
+        .unwrap();
+    let agent = created["agent"]["agent_id"].as_str().unwrap();
+    owner
+        .call(Some(agent), "agent.attach", json!({}), None)
+        .unwrap();
+    let mut observer = TestClient::connect(&harness.socket, "settings-observer").unwrap();
+    assert_eq!(
+        observer
+            .call(Some(agent), "agent.attach", json!({}), None)
+            .unwrap()["controller"],
+        false
+    );
+    for (method, params) in [
+        ("policy.select", json!({"mode":"allow"})),
+        ("model.thinking.select", json!({"level":"high"})),
+        ("provider.settings.reload", json!({})),
+    ] {
+        let denied = observer
+            .call(Some(agent), method, params.clone(), Some(method))
+            .unwrap_err();
+        assert!(denied["message"].as_str().unwrap().contains("observer"));
+        owner
+            .call(Some(agent), method, params, Some(method))
+            .unwrap();
+        let status = owner
+            .call(None, "command.status", json!({"command_id":method}), None)
+            .unwrap();
+        assert_eq!(status["status"], "completed");
+        assert_eq!(
+            observer
+                .call(None, "command.status", json!({"command_id":method}), None)
+                .unwrap()["status"],
+            "failed"
+        );
+    }
+    let denied = observer
+        .call(
+            Some(agent),
+            "plugin.unreviewed-write",
+            json!({}),
+            Some("unknown"),
+        )
+        .unwrap_err();
+    assert!(denied["message"].as_str().unwrap().contains("observer"));
+    assert_eq!(
+        owner
+            .call(Some(agent), "policy.status", json!({}), None)
+            .unwrap()["mode"],
+        "allow"
+    );
+    assert_eq!(
+        owner
+            .call(Some(agent), "model.list", json!({}), None)
+            .unwrap()["current"]["thinking-level"],
+        "high"
+    );
+    drop(observer);
+    drop(owner);
+    drop(harness);
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -1661,6 +1819,524 @@ fn one_shot_schedule_survives_daemon_restart_without_a_tui() {
                 .and_then(Value::as_str)
                 == Some("run after restart"))
     );
+    let schedules = reattached
+        .call(Some(&agent_id), "schedule.list", json!({}), None)
+        .unwrap();
+    let delivery_id = schedules
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|schedule| schedule["schedule_id"] == schedule_id)
+        .unwrap()["policy"]["last_delivery_id"]
+        .as_str()
+        .unwrap();
+    let database = rusqlite::Connection::open(harness.root.join("s/supervisor.sqlite")).unwrap();
+    let count: i64 = database
+        .query_row(
+            "SELECT COUNT(*) FROM tasks WHERE run_id=?1",
+            [delivery_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        count, 1,
+        "schedule delivery identity was not preserved through worker admission"
+    );
+}
+
+#[test]
+fn stop_dead_worker_does_not_hydrate_and_releases_uncertain_lease() {
+    let harness = Harness::start();
+    let mut client = TestClient::connect(&harness.socket, "stop-dead-client").unwrap();
+    let created = client
+        .call(
+            None,
+            "agent.create",
+            json!({"workspace": harness.workspace()}),
+            Some("create-stop-dead"),
+        )
+        .unwrap();
+    let agent_id = created["agent"]["agent_id"].as_str().unwrap();
+    client
+        .call(Some(agent_id), "agent.attach", json!({}), None)
+        .unwrap();
+    let doctor = client.call(None, "daemon.doctor", json!({}), None).unwrap();
+    let worker = &doctor["workers"][0];
+    let proxy = worker["pid"].as_u64().unwrap() as i32;
+    let descriptor_path = harness
+        .root
+        .join("s/workers")
+        .join(format!("{}.json", worker["worker_id"].as_str().unwrap()));
+    let mut descriptor: Value =
+        serde_json::from_slice(&fs::read(&descriptor_path).unwrap()).unwrap();
+    let generation = descriptor["generation"].clone();
+    // A stopped worker needs neither a usable model/config nor a new writer.
+    // Poison only this temporary descriptor so an accidental hydration fails.
+    descriptor["config_path"] = json!(harness.root.join("missing-agent.edn"));
+    fs::write(&descriptor_path, serde_json::to_vec(&descriptor).unwrap()).unwrap();
+    unsafe {
+        assert_eq!(libc::kill(-proxy, libc::SIGKILL), 0);
+    }
+    let deadline = Instant::now() + PROCESS_TIMEOUT;
+    loop {
+        let doctor = client.call(None, "daemon.doctor", json!({}), None).unwrap();
+        if doctor["workers"][0]["alive"] == false {
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(20));
+    }
+    let database = rusqlite::Connection::open(harness.root.join("s/supervisor.sqlite")).unwrap();
+    database
+        .execute(
+            "INSERT INTO leases(resource_type,resource_key,owner,expires_at_ms,uncertain_request_id) VALUES ('workspace-write',?1,?2,NULL,'stop-dead-unknown')",
+            rusqlite::params![created["agent"]["workspace_id"].as_str().unwrap(), agent_id],
+        )
+        .unwrap();
+    client
+        .call(Some(agent_id), "agent.stop", json!({}), Some("stop-dead"))
+        .unwrap();
+    let stopped: Value = serde_json::from_slice(&fs::read(&descriptor_path).unwrap()).unwrap();
+    assert_eq!(
+        stopped["generation"], generation,
+        "stop hydrated a new generation"
+    );
+    assert_eq!(
+        stopped["pid"], descriptor["pid"],
+        "stop replaced the old proxy"
+    );
+    let remaining: i64 = database
+        .query_row(
+            "SELECT COUNT(*) FROM leases WHERE owner=?1",
+            [agent_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(remaining, 0);
+    let update = client
+        .call(
+            None,
+            "daemon.update",
+            json!({}),
+            Some("update-after-stop-dead"),
+        )
+        .unwrap();
+    assert_eq!(update["worker_count"], 0);
+    let agents = client.call(None, "agent.list", json!({}), None).unwrap();
+    assert_eq!(agents[0]["status"], "stopped");
+    assert_ne!(unsafe { libc::kill(-proxy, 0) }, 0);
+    // Completed stops remain idempotent after ordinary descriptor cleanup.
+    fs::remove_file(&descriptor_path).unwrap();
+    client
+        .call(
+            Some(agent_id),
+            "agent.take_control",
+            json!({}),
+            Some("retake-stopped"),
+        )
+        .unwrap();
+    client
+        .call(
+            Some(agent_id),
+            "agent.stop",
+            json!({}),
+            Some("stop-dead-again"),
+        )
+        .unwrap();
+
+    // Losing process identity must not clear an unresolved writer lease.
+    database.execute(
+        "INSERT INTO leases(resource_type,resource_key,owner,expires_at_ms,uncertain_request_id) VALUES ('workspace-write',?1,?2,NULL,'unknown-without-descriptor')",
+        rusqlite::params![created["agent"]["workspace_id"].as_str().unwrap(), agent_id],
+    ).unwrap();
+    client
+        .call(
+            Some(agent_id),
+            "agent.take_control",
+            json!({}),
+            Some("retake-unknown"),
+        )
+        .unwrap();
+    let error = client
+        .call(
+            Some(agent_id),
+            "agent.stop",
+            json!({}),
+            Some("stop-unknown-without-identity"),
+        )
+        .unwrap_err();
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("cannot verify stopped worker process identity")
+    );
+    let retained: i64 = database
+        .query_row(
+            "SELECT COUNT(*) FROM leases WHERE owner=?1",
+            [agent_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(retained, 1);
+}
+
+#[test]
+fn killed_proxy_recovers_without_a_second_writer_or_daemon_restart() {
+    let harness = Harness::start();
+    let mut client = TestClient::connect(&harness.socket, "proxy-crash-client").unwrap();
+    let created = client
+        .call(
+            None,
+            "agent.create",
+            json!({"workspace":harness.workspace()}),
+            Some("create-proxy-crash"),
+        )
+        .unwrap();
+    let agent_id = created["agent"]["agent_id"].as_str().unwrap().to_owned();
+    client
+        .call(
+            Some(&agent_id),
+            "agent.attach",
+            json!({"agent_id":agent_id}),
+            None,
+        )
+        .unwrap();
+    let before = client.call(None, "daemon.doctor", json!({}), None).unwrap();
+    let proxy = before["workers"][0]["pid"].as_u64().unwrap() as i32;
+    let child = before["workers"][0]["child_pid"].as_u64().unwrap() as i32;
+    // Keep the old BB writer alive after proxy death; recovery must retire it.
+    unsafe {
+        assert_eq!(libc::kill(child, libc::SIGSTOP), 0);
+        assert_eq!(libc::kill(proxy, libc::SIGKILL), 0);
+    }
+    let deadline = Instant::now() + PROCESS_TIMEOUT;
+    loop {
+        let doctor = client.call(None, "daemon.doctor", json!({}), None).unwrap();
+        if doctor["workers"][0]["alive"] == false {
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(20));
+    }
+    client
+        .call(
+            None,
+            "daemon.update",
+            json!({}),
+            Some("recover-proxy-crash"),
+        )
+        .unwrap();
+    let recovered = client
+        .call(
+            Some(&agent_id),
+            "agent.attach",
+            json!({"agent_id":agent_id}),
+            None,
+        )
+        .unwrap();
+    assert!(recovered["snapshot"]["generation"].as_u64().unwrap() > 1);
+    assert_ne!(
+        unsafe { libc::kill(child, 0) },
+        0,
+        "old writer survived replacement"
+    );
+    let doctor = client.call(None, "daemon.doctor", json!({}), None).unwrap();
+    assert_eq!(doctor["workers"].as_array().unwrap().len(), 1);
+    assert_eq!(doctor["workers"][0]["alive"], true);
+    assert_ne!(doctor["workers"][0]["pid"].as_u64().unwrap(), proxy as u64);
+    // A second attach observes the same replacement rather than starting another.
+    let again = client
+        .call(
+            Some(&agent_id),
+            "agent.attach",
+            json!({"agent_id":agent_id}),
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        again["snapshot"]["generation"],
+        recovered["snapshot"]["generation"]
+    );
+    let proxy = doctor["workers"][0]["pid"].as_u64().unwrap() as i32;
+    let child = doctor["workers"][0]["child_pid"].as_u64().unwrap() as i32;
+    struct GroupCleanup(i32);
+    impl Drop for GroupCleanup {
+        fn drop(&mut self) {
+            unsafe {
+                libc::kill(-self.0, libc::SIGKILL);
+            }
+        }
+    }
+    let _cleanup = GroupCleanup(proxy);
+    let spawned = client.call(Some(&agent_id),"repl.eval",json!({"code":"(.pid (.start (ProcessBuilder. (into-array String [\"/bin/sleep\" \"60\"]))))"}),Some("spawn-orphan-tool")).unwrap();
+    let tool_pid = spawned["value"].as_str().unwrap().parse::<i32>().unwrap();
+    assert_eq!(unsafe { libc::getpgid(tool_pid) }, proxy);
+    unsafe {
+        assert_eq!(libc::kill(proxy, libc::SIGKILL), 0);
+        assert_eq!(libc::kill(child, libc::SIGKILL), 0);
+    }
+    let deadline = Instant::now() + PROCESS_TIMEOUT;
+    loop {
+        let doctor = client.call(None, "daemon.doctor", json!({}), None).unwrap();
+        if doctor["workers"][0]["alive"] == false {
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(20));
+    }
+    // The recorded BB PID is dead, but its tool still occupies the old group.
+    assert_eq!(unsafe { libc::kill(tool_pid, 0) }, 0);
+    client
+        .call(
+            None,
+            "daemon.update",
+            json!({}),
+            Some("recover-orphan-tool"),
+        )
+        .unwrap();
+    client
+        .call(
+            Some(&agent_id),
+            "agent.attach",
+            json!({"agent_id":agent_id}),
+            None,
+        )
+        .unwrap();
+    assert_ne!(
+        unsafe { libc::kill(tool_pid, 0) },
+        0,
+        "orphan tool survived replacement"
+    );
+    // Explicit stop is also the escape from an unresolved workspace delivery.
+    let database = rusqlite::Connection::open(harness.root.join("s/supervisor.sqlite")).unwrap();
+    database.execute("INSERT INTO leases(resource_type,resource_key,owner,expires_at_ms,uncertain_request_id) VALUES ('workspace-write',?1,?2,NULL,'unresolved-test')",
+        rusqlite::params![created["agent"]["workspace_id"].as_str().unwrap(),agent_id]).unwrap();
+    client
+        .call(
+            Some(&agent_id),
+            "agent.stop",
+            json!({}),
+            Some("stop-uncertain-worker"),
+        )
+        .unwrap();
+    let remaining: i64 = database
+        .query_row(
+            "SELECT COUNT(*) FROM leases WHERE owner=?1",
+            [&agent_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        remaining, 0,
+        "explicit stop retained an unresolved lease after killing the whole worker group"
+    );
+}
+
+#[test]
+fn session_archive_rejects_source_target_and_writer_lock_symlinks() {
+    use std::os::unix::fs::symlink;
+    let harness = Harness::start();
+    let mut client = TestClient::connect(&harness.socket, "archive-link-client").unwrap();
+    let outside = harness.workspace().join("outside.jsonl");
+    let source = harness.workspace().join("source.jsonl");
+    let target = harness.workspace().join("target.jsonl");
+    fs::write(&outside, b"original outside history").unwrap();
+    symlink(&outside, &source).unwrap();
+    assert!(
+        client
+            .call(
+                None,
+                "session.archive",
+                json!({"session_path":source,"archive_path":target}),
+                Some("source-link")
+            )
+            .is_err()
+    );
+    assert_eq!(fs::read(&outside).unwrap(), b"original outside history");
+    assert!(!target.exists());
+    fs::remove_file(&source).unwrap();
+    fs::write(&source, b"original session history").unwrap();
+    symlink(&outside, &target).unwrap();
+    assert!(
+        client
+            .call(
+                None,
+                "session.archive",
+                json!({"session_path":source,"archive_path":target}),
+                Some("target-link")
+            )
+            .is_err()
+    );
+    fs::remove_file(&target).unwrap();
+    let lock = PathBuf::from(format!("{}.writer.lock", source.display()));
+    symlink(&outside, &lock).unwrap();
+    assert!(
+        client
+            .call(
+                None,
+                "session.archive",
+                json!({"session_path":source,"archive_path":target}),
+                Some("lock-link")
+            )
+            .is_err()
+    );
+    assert_eq!(fs::read(&outside).unwrap(), b"original outside history");
+    assert_eq!(fs::read(&source).unwrap(), b"original session history");
+    assert!(!target.exists());
+}
+
+#[test]
+fn session_archive_stops_writer_updates_paths_and_is_retryable_after_restart() {
+    let mut harness = Harness::start();
+    let mut client = TestClient::connect(&harness.socket, "archive-client").unwrap();
+    let created = client
+        .call(
+            None,
+            "agent.create",
+            json!({"workspace":harness.workspace()}),
+            Some("create-archive"),
+        )
+        .unwrap();
+    let agent_id = created["agent"]["agent_id"].as_str().unwrap().to_owned();
+    let source = PathBuf::from(created["agent"]["session_path"].as_str().unwrap());
+    let target = harness.workspace().join("archive/sessions/test.jsonl");
+    client
+        .call(
+            Some(&agent_id),
+            "agent.attach",
+            json!({"agent_id":agent_id}),
+            None,
+        )
+        .unwrap();
+    let mut observer = TestClient::connect(&harness.socket, "archive-observer").unwrap();
+    let denied = observer
+        .call(
+            None,
+            "session.archive",
+            json!({"session_path":source,"archive_path":target}),
+            Some("observer-archive"),
+        )
+        .unwrap_err();
+    assert!(denied["message"].as_str().unwrap().contains("observer"));
+    assert!(source.exists());
+    assert!(!target.exists());
+    let socket = harness.socket.clone();
+    let in_flight_agent = agent_id.clone();
+    let started_marker = harness.workspace().join("archive-run-started");
+    let finished_marker = harness.workspace().join("archive-run-finished");
+    let code = format!(
+        "(do (spit {:?} \"started\") (Thread/sleep 30000) (spit {:?} \"finished\"))",
+        started_marker.to_string_lossy(),
+        finished_marker.to_string_lossy()
+    );
+    let in_flight = thread::spawn(move || {
+        let mut client = TestClient::connect(&socket, "archive-client").unwrap();
+        client.call(
+            Some(&in_flight_agent),
+            "repl.eval",
+            json!({"code":code}),
+            Some("archive-running-rpc"),
+        )
+    });
+    let deadline = Instant::now() + PROCESS_TIMEOUT;
+    while !started_marker.exists() {
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(20));
+    }
+    let before = fs::read(&source).unwrap();
+    let archived = client
+        .call(
+            None,
+            "session.archive",
+            json!({"session_path":source,"archive_path":target}),
+            Some("archive-first"),
+        )
+        .unwrap();
+    assert_eq!(archived["archived"], true);
+    if let Ok(result) = in_flight.join().unwrap() {
+        assert_eq!(result["ok"], false, "archived evaluation must not succeed");
+    }
+    assert!(
+        !finished_marker.exists(),
+        "archived worker continued its in-flight execution"
+    );
+    assert!(!source.exists());
+    assert_eq!(fs::read(&target).unwrap(), before);
+    assert!(
+        client
+            .call(
+                Some(&agent_id),
+                "agent.attach",
+                json!({"agent_id":agent_id}),
+                None
+            )
+            .is_err()
+    );
+    let status = client.call(None, "daemon.status", json!({}), None).unwrap();
+    assert_eq!(status["worker_count"], 0);
+    assert_eq!(
+        status["agents"][0]["session_path"],
+        target.canonicalize().unwrap().to_string_lossy().as_ref()
+    );
+    assert_eq!(status["agents"][0]["lifecycle"], "archived");
+    drop(client);
+    harness.kill_and_restart_daemon();
+    let mut client = TestClient::connect(&harness.socket, "archive-retry-client").unwrap();
+    assert_eq!(
+        client
+            .call(
+                None,
+                "session.archive",
+                json!({"session_path":source,"archive_path":target}),
+                Some("archive-retry")
+            )
+            .unwrap()["archived"],
+        true
+    );
+    assert!(
+        client
+            .call(
+                None,
+                "agent.create",
+                json!({"workspace":harness.workspace(),"session_path":source}),
+                Some("reopen-old-path")
+            )
+            .is_err()
+    );
+    assert!(!source.exists());
+    // Offline historical sessions use the same durable operation, without hydrate.
+    let historical = harness.workspace().join("historical.jsonl");
+    fs::write(&historical, b"{\"type\":\"session/test\"}\n").unwrap();
+    let destination = harness
+        .workspace()
+        .join("archive/sessions/historical.jsonl");
+    fs::write(&destination, b"unrelated history").unwrap();
+    assert!(
+        client
+            .call(
+                None,
+                "session.archive",
+                json!({"session_path":historical,"archive_path":destination}),
+                Some("archive-conflict")
+            )
+            .is_err()
+    );
+    assert_eq!(fs::read(&destination).unwrap(), b"unrelated history");
+    assert!(historical.exists());
+    fs::remove_file(&destination).unwrap();
+    assert_eq!(
+        client
+            .call(
+                None,
+                "session.archive",
+                json!({"session_path":historical,"archive_path":destination}),
+                Some("archive-history")
+            )
+            .unwrap()["archived"],
+        true
+    );
+    assert!(!historical.exists());
 }
 
 #[test]
@@ -1782,7 +2458,13 @@ fn canonical_session_path_has_only_one_resident_writer() {
         .iter()
         .filter(|agent| {
             agent.get("session_path").and_then(Value::as_str)
-                == Some(session_path.to_string_lossy().as_ref())
+                == Some(
+                    session_path
+                        .canonicalize()
+                        .unwrap()
+                        .to_string_lossy()
+                        .as_ref(),
+                )
         })
         .count();
     assert_eq!(owners, 1);
@@ -1865,4 +2547,208 @@ fn machine_restart_recreates_missing_proxy_and_restores_durable_repl_cells() {
         )
         .unwrap();
     assert_eq!(evaluated.get("value"), Some(&json!("73")));
+}
+
+#[test]
+fn long_rpc_can_be_interrupted_on_the_same_connection_and_from_another_connection() {
+    let harness = Harness::start();
+    let mut client = TestClient::connect(&harness.socket, "interrupt-client").unwrap();
+    let created = client
+        .call(
+            None,
+            "agent.create",
+            json!({"workspace":harness.workspace()}),
+            Some("interrupt-create"),
+        )
+        .unwrap();
+    let id = created["agent"]["agent_id"].as_str().unwrap().to_owned();
+    client
+        .call(Some(&id), "agent.attach", json!({}), None)
+        .unwrap();
+    for same_connection in [true, false] {
+        let marker = harness
+            .workspace()
+            .join(format!("started-{same_connection}"));
+        let completed = harness
+            .workspace()
+            .join(format!("completed-{same_connection}"));
+        let code = format!(
+            "(do (spit {:?} \"started\") (Thread/sleep 4000) (spit {:?} \"finished\"))",
+            marker, completed
+        );
+        let command = json!({"version":1,"type":"command","request_id":format!("eval-{same_connection}"),
+            "client_id":"interrupt-client","command_id":format!("eval-{same_connection}"),"agent_id":id,
+            "method":"repl.eval","params":{"code":code}});
+        serde_json::to_writer(&mut client.writer, &command).unwrap();
+        client.writer.write_all(b"\n").unwrap();
+        client.writer.flush().unwrap();
+        let deadline = Instant::now() + PROCESS_TIMEOUT;
+        while !marker.exists() {
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(10));
+        }
+        let started = Instant::now();
+        let interrupted = if same_connection {
+            client.call(
+                Some(&id),
+                "repl.interrupt",
+                json!({}),
+                Some("interrupt-same"),
+            )
+        } else {
+            let mut other = TestClient::connect(&harness.socket, "interrupt-client").unwrap();
+            // Discovery must remain available while this worker has a long RPC.
+            assert!(other.call(None, "agent.list", json!({}), None).is_ok());
+            other.call(
+                Some(&id),
+                "repl.interrupt",
+                json!({}),
+                Some("interrupt-other"),
+            )
+        }
+        .unwrap();
+        assert_eq!(interrupted["interrupted"], true);
+        assert!(started.elapsed() < Duration::from_secs(3));
+        assert!(!completed.exists());
+        assert!(
+            client
+                .call(
+                    Some(&id),
+                    "repl.eval",
+                    json!({"code":"(+ 1 2)"}),
+                    Some(if same_connection {
+                        "after-same"
+                    } else {
+                        "after-other"
+                    })
+                )
+                .is_ok()
+        );
+    }
+}
+
+#[test]
+fn stop_interrupts_a_long_rpc_on_its_existing_connection() {
+    let harness = Harness::start();
+    let mut client = TestClient::connect(&harness.socket, "stop-rpc-client").unwrap();
+    let created = client
+        .call(
+            None,
+            "agent.create",
+            json!({"workspace":harness.workspace()}),
+            Some("stop-create"),
+        )
+        .unwrap();
+    let id = created["agent"]["agent_id"].as_str().unwrap().to_owned();
+    client
+        .call(Some(&id), "agent.attach", json!({}), None)
+        .unwrap();
+    let started_marker = harness.workspace().join("stop-started");
+    let finished_marker = harness.workspace().join("stop-finished");
+    let code = format!(
+        "(do (spit {:?} \"started\") (Thread/sleep 4000) (spit {:?} \"finished\"))",
+        started_marker, finished_marker
+    );
+    serde_json::to_writer(
+        &mut client.writer,
+        &json!({"version":1,"type":"command","request_id":"stop-long-eval",
+        "client_id":"stop-rpc-client","command_id":"stop-long-eval","agent_id":id,
+        "method":"repl.eval","params":{"code":code}}),
+    )
+    .unwrap();
+    client.writer.write_all(b"\n").unwrap();
+    client.writer.flush().unwrap();
+    let deadline = Instant::now() + PROCESS_TIMEOUT;
+    while !started_marker.exists() {
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(10));
+    }
+    let start = Instant::now();
+    client
+        .call(Some(&id), "agent.stop", json!({}), Some("stop-active-rpc"))
+        .unwrap();
+    assert!(start.elapsed() < Duration::from_millis(3500));
+    assert!(!finished_marker.exists());
+    assert!(
+        client
+            .call(
+                Some(&id),
+                "repl.eval",
+                json!({"code":"(+ 1 2)"}),
+                Some("stopped-eval")
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn retained_child_repl_interrupt_bypasses_its_long_rpc() {
+    let harness = Harness::start_with_config("examples/daemon-subagent-mock.edn");
+    let mut client = TestClient::connect(&harness.socket, "child-interrupt-client").unwrap();
+    let created = client
+        .call(
+            None,
+            "agent.create",
+            json!({"workspace":harness.workspace()}),
+            Some("child-interrupt-create"),
+        )
+        .unwrap();
+    let root = created["agent"]["agent_id"].as_str().unwrap().to_owned();
+    client
+        .call(Some(&root), "agent.attach", json!({}), None)
+        .unwrap();
+    client
+        .call(
+            Some(&root),
+            "turn.submit",
+            json!({"message":"spawn the child"}),
+            Some("spawn-interrupt-child"),
+        )
+        .unwrap();
+    let deadline = Instant::now() + PROCESS_TIMEOUT;
+    let child = loop {
+        let agents = client.call(None, "agent.list", json!({}), None).unwrap();
+        if let Some(child) = agents
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|agent| agent["is_child"] == true)
+        {
+            break child["agent_id"].as_str().unwrap().to_owned();
+        }
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(20));
+    };
+    let marker = harness.workspace().join("child-started");
+    let finished = harness.workspace().join("child-finished");
+    let code = format!(
+        "(do (spit {:?} \"started\") (Thread/sleep 4000) (spit {:?} \"finished\"))",
+        marker, finished
+    );
+    serde_json::to_writer(
+        &mut client.writer,
+        &json!({"version":1,"type":"command","request_id":"child-long-eval",
+        "client_id":"child-interrupt-client","command_id":"child-long-eval","agent_id":child,
+        "method":"repl.eval","params":{"code":code}}),
+    )
+    .unwrap();
+    client.writer.write_all(b"\n").unwrap();
+    client.writer.flush().unwrap();
+    let deadline = Instant::now() + PROCESS_TIMEOUT;
+    while !marker.exists() {
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(10));
+    }
+    let started = Instant::now();
+    let interrupted = client
+        .call(
+            Some(&child),
+            "repl.interrupt",
+            json!({}),
+            Some("child-interrupt"),
+        )
+        .unwrap();
+    assert_eq!(interrupted["interrupted"], true);
+    assert!(started.elapsed() < Duration::from_secs(3));
+    assert!(!finished.exists());
 }

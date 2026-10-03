@@ -31,6 +31,8 @@ remains deliberately uncommitted, while plugins turn it into something useful.
 
 **器以载道 — the vessel carries the Way.**
 
+The default profiles include MCP, web tools, background jobs, reviewed plans and workflows, team tasks/mailboxes, automation and bounded plugin packages. The Web workspace adds files and attachments; editors can connect through ACP v1. See the [capability and verification record](docs/harness-parity-implementation.md) for configuration and limits, and [ACP setup](docs/acp.md) for the editor command.
+
 ## Design philosophy
 
 qì agent treats an agent as a composition of capabilities, not as a monolithic
@@ -65,6 +67,7 @@ interface without replacing its core.
 | Model adapters | OpenAI Responses, OpenAI-compatible APIs such as DeepSeek, and an experimental ChatGPT subscription adapter |
 | Local runtime | Resident workers, durable sessions, detach and reattach, forks, checkpoints, compaction, and recovery |
 | Coding tools | Read, write, edit, shell, search, anchored hash edits, persistent Clojure REPLs, and optional LSP queries |
+| Computer use | Opt-in Cua Driver MCP tools, screenshot-aware model adapters, and Web screenshot previews; [setup](docs/computer-use.md) |
 | Agent workflows | Streaming, cancellation, steering, follow-ups, background subagents, model switching, and skills |
 | Interfaces | Native Rust/Ratatui TUI, local Web UI, JSON event stream, stdin/stdout RPC, and a Clojure embedding API |
 | Safety | User-owned trust store, per-action approval, path-aware policy, execution-world isolation, and fail-closed process tools |
@@ -99,8 +102,9 @@ truth, so closing a client detaches from work instead of terminating it.
 
 | Dependency | Minimum | Required for |
 | --- | ---: | --- |
+| [Git](https://git-scm.com/) | 2.30 | Managed installation and updates |
 | [Babashka](https://babashka.org/) | 1.13 | Runtime, profiles, and installer |
-| [Rust](https://www.rust-lang.org/tools/install) | 1.85 | Native daemon and terminal UI |
+| [Rust](https://www.rust-lang.org/tools/install) | 1.88 | Native daemon and terminal UI |
 | [Node.js](https://nodejs.org/) | 22.12 | Web UI and Web test suite only |
 
 Linux and macOS are exercised in CI. Process sandboxing is currently strongest
@@ -115,9 +119,13 @@ cd qi-agent
 bb install
 ```
 
-The installer builds the release TUI, stages the application under
-`~/.qi-agent/app`, and creates `~/.local/bin/qi-agent`. If that directory is not
-already on your `PATH`:
+The installer creates a managed Git checkout under `~/.qi-agent/app`, builds the
+release TUI in that checkout, and creates `~/.local/bin/qi-agent`. User-owned
+data is deliberately kept outside the checkout: the active profile is
+`~/.qi-agent/agent.edn`, supervisor state and Web settings stay under
+`~/.qi-agent/state` and `~/.qi-agent/web`, and project conversations stay under
+each workspace's `.qi-agent/sessions/`. If the launcher directory is not already
+on your `PATH`:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
@@ -135,19 +143,34 @@ The launcher preserves the current working directory, so file operations and
 started. Trust decisions are stored in the user-owned trust store against that
 repository's canonical path.
 
-Run `bb install` again after updating the source checkout. The installer
-atomically replaces files it manages and preserves the installed `agent.edn`;
-use `bb install --reset-config` only when you intentionally want the repository
-default profile back.
+Future application updates no longer copy source files over the installation:
+
+```bash
+qi-agent upgrade --check
+qi-agent upgrade
+```
+
+The updater fetches the tracked Git branch, builds and validates a separate
+checkout, then swaps it into place with rollback on a reported activation
+failure. Normal updates do not overwrite existing user or project data; a
+missing external profile is created from the repository default. A dirty
+installed checkout is rejected instead of being reset or
+silently stashed. The first run of this installer migrates the legacy in-app
+`agent.edn` to `~/.qi-agent/agent.edn`; later updates preserve it. Use
+`qi-agent upgrade --reset-config` only when you intentionally want to replace
+that user profile with the repository default. (`qi-agent update` remains the
+daemon repair command.)
 
 Custom locations are supported:
 
 ```bash
-bb install --install-dir /absolute/app/path --bin-dir /absolute/bin/path
+bb install --install-dir /absolute/app/path --bin-dir /absolute/bin/path \
+  --repository https://github.com/rainmote/qi-agent.git --branch main
 ```
 
 The corresponding environment variables are `QI_AGENT_HOME`,
-`QI_AGENT_INSTALL_DIR`, and `QI_AGENT_BIN_DIR`.
+`QI_AGENT_INSTALL_DIR`, `QI_AGENT_BIN_DIR`, `QI_AGENT_REPOSITORY`, and
+`QI_AGENT_UPDATE_BRANCH`.
 
 ## Quick start
 
@@ -362,9 +385,20 @@ npm run test:web        # Web host integration tests
 npm run test:web-ui     # React UI tests
 ```
 
+Browser regressions use mocked API responses and do not access real sessions
+or credentials. The project pins Playwright and CI runs the production build in
+its matching Chromium: `npm ci`, `npx playwright install chromium`,
+`npm run web:build`, then `npm run test:web-browser:ci`. The last command starts
+and cleans up a local production preview automatically. For an existing preview,
+use `npm run test:web-browser` (`QI_AGENT_WEB_TEST_URL` selects its URL).
+`QI_AGENT_BROWSER_CHANNEL` and `QI_AGENT_PLAYWRIGHT_MODULE` remain optional local
+overrides; CI uses the locked project dependency and its managed browser.
+
 CI runs on Linux and macOS, checks Rust formatting and Clippy, exercises the
 Clojure, Rust, Web host, and React suites, and performs npm and RustSec
-dependency audits. Tagged releases are built for Linux and macOS on x86_64 and
+dependency audits. A separate build checks all Rust targets with the locked
+dependencies on Rust 1.88, the minimum version declared in `Cargo.toml`.
+Tagged releases are built for Linux and macOS on x86_64 and
 arm64 with checksums and GitHub artifact attestations.
 
 ### Repository map
@@ -394,7 +428,9 @@ docs/                      Architecture and operational documentation
 | [OMP foundation](docs/omp-plugin.md) | Anchored edits, roles, prompt assembly, and skills |
 | [Subagents](docs/subagent-plugin.md) | Delegation, isolation, lifecycle, and structured output |
 | [LSP integration](docs/lsp-plugin.md) | Language-server registry and read-only code intelligence |
+| [Computer use](docs/computer-use.md) | Installed desktop driver, explicit activation, screenshots, and uncertain-action recovery |
 | [Production readiness](docs/production-readiness.md) | Support boundary, backups, limits, and release checks |
+| [Hermes install/update research](docs/hermes-install-update-research.md) | Git-managed updates and code/data separation |
 | [Naming and migration](docs/qi-agent-migration.md) | `dao` to `qi-agent` compatibility rules |
 
 ## Project status

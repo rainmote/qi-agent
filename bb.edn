@@ -9,6 +9,9 @@
   install {:doc "Install qì agent for use from any workspace"
            :requires ([qi.install :as install])
            :task (apply install/entrypoint *command-line-args*)}
+  update {:doc "Update the installed qì agent Git checkout"
+          :requires ([qi.install :as install])
+          :task (apply install/update-entrypoint *command-line-args*)}
   tui-build {:doc "Build the Qwen-style Ratatui frontend"
              :task (shell "cargo build --release --manifest-path apps/tui-rs/Cargo.toml")}
   tui-test {:doc "Run Ratatui unit/UI tests and the real-PTY smoke test"

@@ -47,7 +47,7 @@
            {:register! register!
             :invoke! invoke!
             :method #(some-> (get @methods %) public-method)
-            :methods #(->> @methods vals (map public-method)
+            :methods #(->> @methods vals (remove :private) (map public-method)
                            (sort-by :method) vec)}]
        (kernel/register-service! ctx :remote/registry service))
      nil)})

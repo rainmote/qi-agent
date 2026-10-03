@@ -1,7 +1,8 @@
-import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { isIP } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { ensurePrivateDirectory, writePrivateFileAtomically } from "./storage.js";
 
 export type ProviderProtocol = "openai-completions" | "openai-responses" | "anthropic-messages"
   | "chatgpt-subscription";
@@ -255,6 +256,7 @@ export class ProviderRegistry {
   readonly statePath: string;
   readonly codexAuthFile: string;
   #providers = new Map<string, ProviderSettings>();
+  #mutations = Promise.resolve();
 
   constructor(stateDirectory: string, options: { codexAuthFile?: string } = {}) {
     this.stateDirectory = stateDirectory;
@@ -264,7 +266,7 @@ export class ProviderRegistry {
   }
 
   async load(): Promise<void> {
-    await mkdir(this.stateDirectory, { recursive: true, mode: 0o700 });
+    await ensurePrivateDirectory(this.stateDirectory);
     for (const provider of defaultProviders) this.#providers.set(provider.id, provider);
     try {
       const parsed = JSON.parse(await readFile(this.statePath, "utf8")) as ProviderState;
@@ -293,20 +295,36 @@ export class ProviderRegistry {
   }
 
   async upsert(input: ProviderSettings): Promise<PublicProviderSettings> {
-    const existing = this.#providers.get(String(input.id || "").trim());
-    const provider = normalizeProvider(input, existing);
-    this.#providers.set(provider.id, provider);
-    await this.save();
+    const provider = await this.mutate(async () => {
+      const existing = this.#providers.get(String(input.id || "").trim());
+      const normalized = normalizeProvider(input, existing);
+      this.#providers.set(normalized.id, normalized);
+      try {
+        await this.save();
+        return normalized;
+      } catch (error) {
+        if (existing) this.#providers.set(existing.id, existing);
+        else this.#providers.delete(normalized.id);
+        throw error;
+      }
+    });
     return publicProvider(provider, this.codexAuthFile);
   }
 
   async remove(id: string): Promise<boolean> {
-    const provider = this.#providers.get(id);
-    if (!provider) return false;
-    if (provider.builtin) throw new Error("内置提供方不能删除");
-    const removed = this.#providers.delete(id);
-    if (removed) await this.save();
-    return removed;
+    return this.mutate(async () => {
+      const provider = this.#providers.get(id);
+      if (!provider) return false;
+      if (provider.builtin) throw new Error("内置提供方不能删除");
+      this.#providers.delete(id);
+      try {
+        await this.save();
+        return true;
+      } catch (error) {
+        this.#providers.set(id, provider);
+        throw error;
+      }
+    });
   }
 
   async discover(input: { providerId?: string; baseUrl?: string; apiKey?: string }): Promise<ProviderModelSettings[]> {
@@ -341,9 +359,14 @@ export class ProviderRegistry {
   }
 
   async save(): Promise<void> {
-    const temporary = `${this.statePath}.${process.pid}.tmp`;
     const state: ProviderState = { version: 1, providers: [...this.#providers.values()] };
-    await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
-    await rename(temporary, this.statePath);
+    await writePrivateFileAtomically(this.statePath,
+      `${JSON.stringify(state, null, 2)}\n`);
+  }
+
+  private mutate<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.#mutations.catch(() => undefined).then(operation);
+    this.#mutations = result.then(() => undefined, () => undefined);
+    return result;
   }
 }

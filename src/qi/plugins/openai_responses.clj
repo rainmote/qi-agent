@@ -3,6 +3,7 @@
   (:require [qi.cancellation :as cancellation]
             [qi.kernel :as kernel]
             [qi.streaming :as streaming]
+            [qi.tool-images :as images]
             [babashka.http-client :as http]
             [cheshire.core :as json]
             [clojure.string :as str])
@@ -81,10 +82,7 @@
                   (fallback-assistant-items message))
     "tool" [{:type "function_call_output"
               :call_id (:tool_call_id message)
-              :output (let [content (:content message)]
-                        (if (string? content)
-                          content
-                          (json/generate-string content)))}]
+              :output (images/responses-output message)}]
     "system" [{:role "system" :content (:content message)}]
     (throw (ex-info "Unsupported message role for Responses API"
                     {:role (:role message)}))))
@@ -235,6 +233,7 @@
           response)))))
 
 (defn generate [ctx config request]
+  (images/require-tool-images! config #{:text :image} :openai request)
   (let [auth-id (or (:auth-id config) (:provider-id config) :openai)
         key (or (when-let [store (kernel/service ctx :auth/store)]
                   (:api-key ((:resolve! store) auth-id)))
@@ -341,7 +340,7 @@
      :default-thinking-level
      (or (:default-thinking-level config)
          (some-> (get-in config [:extra-body :reasoning :effort]) keyword))
-     :input-modalities (or (:input-modalities config) #{:text :image})
+     :input-modalities (images/input-modalities config #{:text :image})
      :generate (partial generate ctx (assoc config :base-url base-url))}))
 
 (def plugin

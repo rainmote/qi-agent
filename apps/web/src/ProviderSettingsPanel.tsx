@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "./api";
 import { Icon } from "./icons";
 import type { ProviderInput, ProviderModelSettings, ProviderPreset, ProviderProtocol,
-  ProviderSettings } from "./types";
+  ProviderSettings, ProviderReloadResult } from "./types";
 
 type ProviderDraft = ProviderInput;
 type Editor = {
@@ -107,7 +107,7 @@ function ProviderEditor({ editor, presets, onEditor, onSaved }: {
   editor: Editor;
   presets: ProviderPreset[];
   onEditor: (editor: Editor | null) => void;
-  onSaved: () => Promise<void>;
+  onSaved: (reload?: ProviderReloadResult) => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
   const [discovering, setDiscovering] = useState(false);
@@ -133,8 +133,8 @@ function ProviderEditor({ editor, presets, onEditor, onSaved }: {
     if (!validDraft(draft)) return;
     setBusy(true); setError(null);
     try {
-      await api.saveProvider(draft);
-      await onSaved();
+      const result = await api.saveProvider(draft);
+      await onSaved(result.reload);
       onEditor(null);
     } catch (value) { setError(value instanceof Error ? value.message : "无法保存提供方"); }
     finally { setBusy(false); }
@@ -144,8 +144,8 @@ function ProviderEditor({ editor, presets, onEditor, onSaved }: {
       || !window.confirm(`确定删除提供方“${draft.name}”吗？`)) return;
     setBusy(true); setError(null);
     try {
-      await api.removeProvider(draft.id);
-      await onSaved();
+      const result = await api.removeProvider(draft.id);
+      await onSaved(result.reload);
       onEditor(null);
     } catch (value) { setError(value instanceof Error ? value.message : "无法删除提供方"); }
     finally { setBusy(false); }
@@ -218,6 +218,24 @@ function ProviderEditor({ editor, presets, onEditor, onSaved }: {
   </div>;
 }
 
+export function ProviderReloadNotice({ report, retrying, onRetry }: {
+  report: ProviderReloadResult; retrying: boolean; onRetry: () => void;
+}) {
+  return <div className="provider-reload-notice" role="status">
+    <p>{report.failures.length ? `配置已保存，${report.failures.length} 个 Web 会话尚未生效。`
+      : report.applied.length ? `配置已保存，已更新 ${report.applied.length} 个 Web 会话。`
+        : "配置已保存，将在新打开的 Web 会话中加载。"}</p>
+    {!!report.warnings?.length && <ul>{report.warnings.map((warning, index) =>
+      <li key={`${warning.sessionId}-${index}`}><strong>{warning.sessionName}</strong>：{warning.message}</li>)}</ul>}
+    {report.failures.length > 0 && <>
+      <ul>{report.failures.map((failure) => <li key={failure.sessionId}>
+        <strong>{failure.sessionName}</strong>：{failure.message}</li>)}</ul>
+      <button type="button" className="button ghost" disabled={retrying} onClick={onRetry}>
+        {retrying ? "正在重试…" : "重试未生效会话"}</button>
+    </>}
+  </div>;
+}
+
 export function ProviderSettingsPanel({ onChanged }: { onChanged?: () => Promise<void> | void }) {
   const [providers, setProviders] = useState<ProviderSettings[]>([]);
   const [presets, setPresets] = useState<ProviderPreset[]>([]);
@@ -233,14 +251,33 @@ export function ProviderSettingsPanel({ onChanged }: { onChanged?: () => Promise
     finally { setLoading(false); }
   };
   useEffect(() => { void load(); }, []);
+  const [reload, setReload] = useState<ProviderReloadResult | null>(null);
+  const [retrying, setRetrying] = useState(false);
   const activeProvider = useMemo(() => editor?.kind === "edit" ? editor.draft.id : null, [editor]);
-  const saved = async () => { await load(); await onChanged?.(); };
+  const saved = async (report?: ProviderReloadResult) => {
+    if (report) setReload(report);
+    await load();
+    // Persistence already succeeded; a disconnected active view must not turn
+    // this into a misleading "save failed" result or hide the retry report.
+    try { await onChanged?.(); }
+    catch { setError("配置已保存，但当前页面信息未刷新，请重新打开会话。"); }
+  };
+  const retry = async () => {
+    if (!reload || retrying) return;
+    setRetrying(true); setError(null);
+    try {
+      const result = await api.reloadProviders(reload.failures.map((failure) => failure.sessionId));
+      await saved({ ...result, applied: [...new Set([...reload.applied, ...result.applied])] });
+    } catch (value) { setError(value instanceof Error ? value.message : "无法重新加载配置"); }
+    finally { setRetrying(false); }
+  };
   const firstPreset = presets[0];
   return <section className="provider-settings-panel">
     <h2>模型</h2>
     <p className="provider-settings-copy">API 提供方使用 API Key；ChatGPT 订阅会自动读取本机 Codex 登录状态。</p>
     {loading && !providers.length && <div className="settings-empty">正在读取提供方…</div>}
     {error && <p className="form-error">{error}</p>}
+    {reload && <ProviderReloadNotice report={reload} retrying={retrying} onRetry={() => void retry()} />}
     <div className="provider-list" role="list">
       {providers.map((provider) => <div className={`provider-card ${activeProvider === provider.id ? "editing" : ""}`}
         role="listitem" key={provider.id}>

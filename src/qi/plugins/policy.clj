@@ -15,6 +15,7 @@
 (def plugin
   {:id :policy/tool-gate
    :description "Tool deny-list, project trust, and approval gate."
+   :provides #{:tool/policy}
    :start
    (fn [ctx {:keys [deny-tools trusted-tools approval-tools terminate-on-deny]
              :or {deny-tools []
@@ -24,6 +25,7 @@
      (let [denied (set deny-tools)
            trust-required (set trusted-tools)
            approval-required (set approval-tools)]
+       (kernel/register-service! ctx :tool/policy {:metadata-gates true})
        (kernel/intercept!
         ctx :tool/pre-execute -100
         (fn [_ request next]
@@ -34,13 +36,15 @@
               (deny request "Denied by configured tool policy."
                     terminate-on-deny)
 
-              (and (contains? trust-required tool-name)
+              (and (or (contains? trust-required tool-name)
+                       (true? (get-in request [:tool :requires-trust])))
                    (not (and trust ((:trusted? trust)))))
               (deny request
                     "Tool requires a trusted project; use /trust allow to enable it."
                     terminate-on-deny)
 
-              (contains? approval-required tool-name)
+              (or (contains? approval-required tool-name)
+                  (true? (get-in request [:tool :requires-approval])))
               (let [approve (kernel/service ctx :approval/request)
                     approval-request
                     {:tool tool-name

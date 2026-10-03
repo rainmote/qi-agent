@@ -1,0 +1,20 @@
+{
+  "id": "dev-005-stale-hash-edit",
+  "title": "基于内容哈希的批量原子编辑",
+  "category": "bugfix",
+  "split": "dev",
+  "timeout_seconds": 180,
+  "allowed_files": ["src/hash-edit.mjs"],
+  "acceptance_tests": [
+    "SHA-256 uses UTF-8 and lowercase hex",
+    "single edit preserves inputs and untouched files",
+    "same-file edits use the original snapshot despite replacement length and new target text",
+    "cross-file stale conflict leaves every original file unchanged",
+    "missing files and inherited properties are not editable",
+    "missing, duplicate, and overlapping occurrences are rejected",
+    "adjacent Unicode regions and literal replacement special characters work",
+    "empty batch returns a new mapping including special own keys",
+    "malformed input is rejected without mutation"
+  ],
+  "verify_command": ["node", "--test", "tests/acceptance.test.mjs"]
+}

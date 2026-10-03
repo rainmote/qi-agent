@@ -1,0 +1,16 @@
+{
+  "description": "Command plans only. Copy to an ignored *.local file and set explicit values before real trials.",
+  "qi": {
+    "source_root": "/absolute/path/to/qi-agent",
+    "profile_path": "/absolute/path/to/isolated-evaluation-profile.edn",
+    "provider": "openai"
+  },
+  "codex": {
+    "model": "REPLACE_WITH_EXPLICIT_MODEL",
+    "reasoning_effort": "medium"
+  },
+  "claude": {
+    "model": "REPLACE_WITH_EXPLICIT_MODEL",
+    "max_budget_usd": 1
+  }
+}

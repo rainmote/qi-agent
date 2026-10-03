@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { api, type Bootstrap } from "./api";
+import { uncertainOperation, type PendingOperation, api, type Bootstrap } from "./api";
+import { RequestScope } from "./request-scope";
 import { BrandMark } from "./BrandMark";
 import { ContextMeter, ModelControl, PermissionControl } from "./ComposerControls";
 import { ApprovalDialog, FullAccessDialog, SettingsDialog, WorkspaceDialog } from "./Dialogs";
@@ -7,6 +8,12 @@ import { Icon } from "./icons";
 import { applyHostEvent, fromSnapshot, type Projection } from "./projection";
 import { Timeline } from "./Timeline";
 import { Trajectory } from "./Trajectory";
+import { WorkspacePanel } from "./WorkspacePanel";
+import { ComposerAttachments, ComposerReferences, type AttachmentRef } from "./ComposerAttachments";
+import { AutomationPanel } from "./AutomationPanel";
+import { OrchestrationPanel } from "./OrchestrationPanel";
+import { PluginPanel } from "./PluginPanel";
+import type { PluginSlot } from "./PluginSlots";
 import type { AgentPresetSummary, ContextStatus, HostEvent, ModelEntry, PolicyStatus, RuntimeStatus, SessionSnapshot, SessionSummary, SubagentStatus, Workspace } from "./types";
 
 type Theme = "dark" | "light" | "system";
@@ -130,6 +137,8 @@ export function App() {
   const [presets, setPresets] = useState<AgentPresetSummary[]>([]);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [activeSession, setActiveSession] = useState<SessionSummary | null>(null);
+  const activeSessionId = useRef<string | null>(null);
+  activeSessionId.current = activeSession?.id || null;
   const [draftSession, setDraftSession] = useState<SessionSummary | null>(null);
   const [projection, setProjection] = useState<Projection | null>(null);
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
@@ -138,8 +147,25 @@ export function App() {
   const [policy, setPolicy] = useState<PolicyStatus | null>(null);
   const [contextStatus, setContextStatus] = useState<ContextStatus | null>(null);
   const [connected, setConnected] = useState(false);
+  const [viewRevision, setViewRevision] = useState(0);
+  const viewScope = useRef(new RequestScope());
+  const navigationScope = useRef(new RequestScope());
+  const modelScope = useRef(new RequestScope());
+  const policyScope = useRef(new RequestScope());
+  const captureOperation = () => {
+    const view = viewScope.current.capture();
+    const navigation = navigationScope.current.capture();
+    return () => view() && navigation();
+  };
   const [busy, setBusy] = useState(false);
+  const [pendingOperation, setPendingOperation] = useState<PendingOperation | null>(null);
+  const [operationMissing, setOperationMissing] = useState(false);
+  const openingCursor = useRef<string | undefined>(undefined);
   const [composer, setComposer] = useState("");
+  const [attachments, setAttachments] = useState<AttachmentRef[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [workbench, setWorkbench] = useState<"files" | "automation" | "plugins" | "orchestration" | null>(null);
+  const [pluginSlots, setPluginSlots] = useState<PluginSlot[]>([]);
   const [commandIndex, setCommandIndex] = useState(0);
   const [pendingModel, setPendingModel] = useState<string | null>(null);
   const [pendingThinking, setPendingThinking] = useState<string | null>(null);
@@ -164,6 +190,14 @@ export function App() {
   const [resolving, setResolving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
+  useEffect(() => { setAttachments([]); setUploading(false); setWorkbench(null); }, [workspaceId, activeSession?.id]);
+  useEffect(() => {
+    let active = true; setPluginSlots([]);
+    if (activeSession) void api.rpc<{ slots: PluginSlot[] }>(activeSession.id, "plugins.ui-slots")
+      .then(result => { if (active && Array.isArray(result.slots)) setPluginSlots(result.slots); }).catch(() => undefined);
+    return () => { active = false; };
+  }, [activeSession?.id, workbench]);
+
   const allSessions = useMemo(() => bootstrap?.catalogs
     .find((catalog) => catalog.workspaceId === workspaceId)?.sessions || [], [bootstrap, workspaceId]);
   const sessions = useMemo(() => {
@@ -175,19 +209,10 @@ export function App() {
       : (a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
   }, [allSessions, search, sortBy]);
   const runSummary = useMemo(() => {
-    const events = projection?.events || [];
-    const turns = events.filter((event) => event.type === "message"
-      && (event.data.message as { role?: string } | undefined)?.role === "user").length;
-    const steps = events.filter((event) => event.type === "step/start").length;
-    const calls = events.filter((event) => event.type === "tool/call").length;
-    const durationMs = events.reduce((total, event) => {
-      if (event.type !== "tool/result") return total;
-      const value = event.data["duration-ms"] ?? event.data.duration_ms;
-      return total + (typeof value === "number" && Number.isFinite(value) ? value : 0);
-    }, 0);
+    const { turns, steps, calls, durationMs } = projection?.summary || { turns: 0, steps: 0, calls: 0, durationMs: 0 };
     const timing = durationMs > 0 ? ` · 工具调用 ${(durationMs / 1_000).toFixed(1)}s` : "";
-    return `${turns} 轮 · ${steps} 步 | ${calls} 次工具调用${timing} | ${events.length} 条轨迹`;
-  }, [projection?.events]);
+    return `${turns} 轮 · ${steps} 步 | ${calls} 次工具调用${timing} | ${projection?.events.length || 0} 条轨迹`;
+  }, [projection?.summary, projection?.events.length]);
 
   const flashNotice = useCallback((message: string, timeout = 4_000) => {
     setNotice(message);
@@ -198,6 +223,10 @@ export function App() {
   }, []);
 
   const showError = useCallback((error: unknown) => {
+    if (uncertainOperation(error) && activeSessionId.current) {
+      setPendingOperation(api.pendingOperation(activeSessionId.current));
+      setOperationMissing(false);
+    }
     flashNotice(error instanceof Error ? error.message : "操作失败", 5_000);
   }, [flashNotice]);
 
@@ -215,6 +244,8 @@ export function App() {
   }, [theme]);
 
   const loadRuntime = useCallback(async (id: string) => {
+    const current = viewScope.current.capture();
+    const policyCurrent = policyScope.current.capture();
     const fallbackPolicy: PolicyStatus = {
       // Workers that predate policy.status still use agent.edn's shipped
       // :allow default. Keep their composer truthful while they age out.
@@ -230,15 +261,13 @@ export function App() {
       api.rpc<SubagentStatus>(id, "subagent.status"),
       api.rpc<PolicyStatus>(id, "policy.status").catch(() => fallbackPolicy),
     ]);
+    if (!current() || activeSessionId.current !== id) return;
     setRuntime(runtimeStatus);
     setSubagents(subagentStatus);
-    setPolicy(policyStatus);
+    if (policyCurrent()) setPolicy(policyStatus);
   }, []);
 
-  const acceptOpen = useCallback((session: SessionSummary, snapshot: SessionSnapshot) => {
-    setActiveSession(session);
-    setDraftSession(null);
-    setWorkspaceId(session.workspaceId);
+  const acceptSnapshot = useCallback((snapshot: SessionSnapshot) => {
     setProjection(fromSnapshot(snapshot));
     setModels(snapshot.models);
     setPolicy(snapshot.policy || null);
@@ -246,18 +275,37 @@ export function App() {
     setPendingModel(snapshot.models?.current?.id || null);
     setPendingThinking(snapshot.models?.current?.["thinking-level"] || null);
     setPendingPolicy(snapshot.policy?.mode || null);
+  }, []);
+
+  const acceptOpen = useCallback((session: SessionSummary, snapshot: SessionSnapshot, eventCursor?: string) => {
+    openingCursor.current = eventCursor;
+    setPendingOperation(api.pendingOperation(session.id));
+    setOperationMissing(false);
+    viewScope.current.advance();
+    setViewRevision((revision) => revision + 1);
+    setBusy(false); setResolving(false); setFullAccessDialogOpen(false);
+    setRuntime(null); setSubagents(null);
+    activeSessionId.current = session.id;
+    setActiveSession(session);
+    setDraftSession(null);
+    setWorkspaceId(session.workspaceId);
+    acceptSnapshot(snapshot);
     setMobileSidebar(false);
     setSessionMenu(null);
     setNotice(null);
     setConversationView("chat");
-    void loadRuntime(session.id).catch(showError);
-  }, [loadRuntime, showError]);
+    const current = viewScope.current.capture();
+    void loadRuntime(session.id).catch((error) => { if (current()) showError(error); });
+  }, [acceptSnapshot, loadRuntime, showError]);
 
   const openSession = useCallback(async (session: SessionSummary) => {
+    const current = navigationScope.current.advance();
     setBusy(true);
-    try { const opened = await api.openSession(session.id); acceptOpen(opened.session, opened.snapshot); }
-    catch (error) { showError(error); }
-    finally { setBusy(false); }
+    try {
+      const opened = await api.openSession(session.id);
+      if (current()) acceptOpen(opened.session, opened.snapshot, opened.eventCursor);
+    } catch (error) { if (current()) showError(error); }
+    finally { if (current()) setBusy(false); }
   }, [acceptOpen, showError]);
 
   useEffect(() => {
@@ -279,7 +327,11 @@ export function App() {
   useEffect(() => {
     if (!activeSession) { setConnected(false); return; }
     setConnected(false);
-    return api.events(activeSession.id, (event: HostEvent) => {
+    let disposed = false;
+    const view = viewScope.current.capture();
+    const currentSession = () => !disposed && view() && activeSessionId.current === activeSession.id;
+    const close = api.events(activeSession.id, (event: HostEvent) => {
+      if (!currentSession()) return;
       setProjection((current) => current ? applyHostEvent(current, event) : current);
       if (event.durable && event.event === "session/name" && typeof event.data?.name === "string") {
         const name = String(event.data.name);
@@ -292,20 +344,19 @@ export function App() {
         })) } : current);
       }
       if (event.event?.startsWith("subagent/")) {
-        void api.rpc<SubagentStatus>(activeSession.id, "subagent.status").then(setSubagents).catch(() => undefined);
+        void api.rpc<SubagentStatus>(activeSession.id, "subagent.status")
+          .then((status) => { if (currentSession()) setSubagents(status); }).catch(() => undefined);
       }
       if (event.durable && ["message", "context/snapshot", "session/compaction", "session/clear"]
         .includes(event.event || "")) {
-        void api.rpc<ContextStatus>(activeSession.id, "context.status").then(setContextStatus).catch(() => undefined);
+        void api.rpc<ContextStatus>(activeSession.id, "context.status")
+          .then((status) => { if (currentSession()) setContextStatus(status); }).catch(() => undefined);
       }
-    }, setConnected);
-  }, [activeSession?.id]);
-
-  useEffect(() => {
-    if (conversationView !== "chat") return;
-    const element = timeline.current;
-    if (element) element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
-  }, [conversationView, projection?.events.length, projection?.state["partial-assistant"]]);
+    }, (status) => { if (currentSession()) setConnected(status); }, (snapshot) => {
+      if (currentSession() && snapshot.session_id === activeSession.id) acceptSnapshot(snapshot);
+    }, (message) => { if (currentSession()) flashNotice(message, 12_000); }, openingCursor.current);
+    return () => { disposed = true; close(); };
+  }, [activeSession?.id, viewRevision, acceptSnapshot, flashNotice]);
 
   useEffect(() => {
     if (conversationView === "trajectory") timeline.current?.scrollTo({ top: 0 });
@@ -319,12 +370,19 @@ export function App() {
   }, [workspaceId]);
 
   const startNewSession = () => {
+    navigationScope.current.advance();
+    const current = viewScope.current.advance();
+    setBusy(false); setResolving(false); setFullAccessDialogOpen(false);
     setPendingModel(models?.current?.id || null);
     setPendingThinking(models?.current?.["thinking-level"] || null);
     setPendingPolicy(policy?.mode || null);
     setPendingPreset(defaultPresetId(presets) || "standard");
+    activeSessionId.current = null;
+    setPendingOperation(null); setOperationMissing(false);
     setActiveSession(null); setDraftSession(null); setProjection(null); setConnected(false); setSubagents(null); setContextStatus(null);
-    setComposer(""); setCommandIndex(0); setDetailsOpen(false); setMobileSidebar(false); setConversationView("chat");
+    setComposer(""); setAttachments([]); setWorkbench(null); setCommandIndex(0); setDetailsOpen(false); setMobileSidebar(false); setConversationView("chat");
+    const modelCurrent = modelScope.current.capture();
+    const policyCurrent = policyScope.current.capture();
     const source = activeSession;
     if (source) {
       void Promise.all([
@@ -332,11 +390,15 @@ export function App() {
         api.rpc<{ current: ModelEntry | null; providers: ModelEntry[] }>(source.id, "model.list"),
         api.rpc<PolicyStatus>(source.id, "policy.status"),
       ]).then(([nextRuntime, nextModels, nextPolicy]) => {
-        setRuntime(nextRuntime); setModels(nextModels); setPolicy(nextPolicy);
-        setPendingModel(nextModels.current?.id || null);
-        setPendingThinking(nextModels.current?.["thinking-level"] || null);
-        setPendingPolicy(nextPolicy.mode);
-      }).catch(showError);
+        if (!current()) return;
+        setRuntime(nextRuntime);
+        if (modelCurrent()) {
+          setModels(nextModels);
+          setPendingModel(nextModels.current?.id || null);
+          setPendingThinking(nextModels.current?.["thinking-level"] || null);
+        }
+        if (policyCurrent()) { setPolicy(nextPolicy); setPendingPolicy(nextPolicy.mode); }
+      }).catch((error) => { if (current()) showError(error); });
     }
   };
 
@@ -351,20 +413,32 @@ export function App() {
 
   const refreshSnapshot = async (id = activeSession?.id) => {
     if (!id) return;
+    const current = viewScope.current.capture();
     const snapshot = await api.rpc<SessionSnapshot>(id, "session.snapshot");
+    if (!current() || activeSessionId.current !== id) return;
     setProjection(fromSnapshot(snapshot));
     setContextStatus(snapshot.context || null);
   };
 
   const send = async (mode: "auto" | "steer" = "auto") => {
-    if (!composer.trim() || busy || !workspaceId) return;
+    if ((!composer.trim() && !attachments.length) || busy || uploading || !workspaceId || pendingOperation) return;
+    let current = captureOperation();
     const message = composer.trim();
-    setComposer(""); setBusy(true);
+    const selectedAttachments = attachments;
+    if (message.startsWith("/") && selectedAttachments.length) { flashNotice("命令不能携带附件，请先发送附件或移除附件。"); return; }
+    setComposer(""); setAttachments([]); setBusy(true);
     let session = activeSession || draftSession;
+    let messageSubmitted = false;
     try {
+      // Freeze selected source text before journaling a mutation, so retries use identical content.
+      const expanded = /@(file|session):"/.test(message) ? await api.resolveReferences(workspaceId, message) : message;
+      if (!current()) return;
+      const content = selectedAttachments.length ? [...(expanded ? [{ type: "text", text: expanded }] : []), ...selectedAttachments] : expanded;
       if (!activeSession && session && session.presetId !== pendingPreset) {
         await api.archiveSession(session.id);
+        if (!current()) return;
         const created = await api.createSession(workspaceId, undefined, pendingPreset);
+        if (!current()) return;
         session = created.session;
         setDraftSession(created.session);
         setModels(created.snapshot.models);
@@ -372,19 +446,30 @@ export function App() {
       }
       if (!session) {
         const created = await api.createSession(workspaceId, undefined, pendingPreset);
+        if (!current()) return;
         session = created.session;
+        setDraftSession(created.session);
       }
       if (!activeSession) {
         if (pendingModel) await api.rpc(session.id, "model.select", { provider: pendingModel });
+        if (!current()) return;
         if (pendingThinking) await api.rpc(session.id, "model.thinking.select", { level: pendingThinking });
+        if (!current()) return;
         if (pendingPolicy) await api.rpc(session.id, "policy.select", { mode: pendingPolicy });
+        if (!current()) return;
         const snapshot = await api.rpc<SessionSnapshot>(session.id, "session.snapshot");
+        if (!current()) return;
         acceptOpen(session, snapshot);
+        current = captureOperation();
+        setBusy(true);
         await refreshCatalog(workspaceId);
       }
+      if (!current()) return;
+      messageSubmitted = true;
       if (message.startsWith("/")) {
         const result = await api.rpc<CommandResult>(session.id,
           "command.execute", { command: message });
+        if (!current()) return;
         if (result.error) throw new Error(result.error);
         if (result.ui === "model-selector" && result.output && typeof result.output === "object") {
           const output = result.output as { current?: ModelEntry | null; providers?: ModelEntry[] };
@@ -399,61 +484,110 @@ export function App() {
         }
         await refreshSnapshot(session.id);
       } else if (mode === "steer") {
-        await api.rpc(session.id, "turn.steer", { message });
+        await api.rpc(session.id, "turn.steer", { message: content });
       } else if (projection?.state.phase && projection.state.phase !== "idle") {
-        await api.rpc(session.id, "turn.follow-up", { message });
+        await api.rpc(session.id, "turn.follow-up", { message: content });
       } else {
-        await api.rpc(session.id, "turn.submit", { message });
+        await api.rpc(session.id, "turn.submit", { message: content });
       }
-    } catch (error) { setComposer(message); showError(error); }
-    finally { setBusy(false); }
+    } catch (error) { if (current()) {
+      if (!messageSubmitted || !uncertainOperation(error)) { setComposer(message); setAttachments(selectedAttachments); }
+      if (uncertainOperation(error) && session) {
+        setPendingOperation(api.pendingOperation(session.id));
+        setOperationMissing(false);
+      }
+      showError(error);
+    } }
+    finally { if (current()) setBusy(false); }
+  };
+
+  const reconcileOperation = async (retry = false) => {
+    if (!pendingOperation || busy) return;
+    const operation = pendingOperation;
+    const current = captureOperation();
+    setBusy(true);
+    try {
+      if (retry) {
+        await api.retryOperation(operation.sessionId);
+        if (!current()) return;
+        setPendingOperation(null); setOperationMissing(false);
+        flashNotice("已核对并完成提交");
+      } else {
+        const result = await api.operationStatus(operation.sessionId);
+        if (!current()) return;
+        setOperationMissing(result.status === "not_found");
+        if (result.status === "completed" || result.status === "failed") {
+          setPendingOperation(null);
+          if (result.status === "failed" && ["turn.submit", "turn.steer", "turn.follow-up"].includes(operation.method)) {
+            const content = operation.params.message;
+            const text = typeof content === "string" ? content : Array.isArray(content)
+              ? content.filter(block => block?.type === "text" && typeof block.text === "string").map(block => block.text).join("\n") : "";
+            const files = Array.isArray(content) ? content.filter(block => block?.type === "attachment" && block.workspaceId === workspaceId).slice(0, 8) as AttachmentRef[] : [];
+            setComposer(value => value || text); setAttachments(value => value.length ? value : files);
+          }
+          flashNotice(result.status === "completed" ? "已确认原操作完成，无需重复提交"
+            : result.error?.message || "已确认原操作失败，请检查后再操作", 8_000);
+        } else flashNotice(result.status === "pending" ? "仍在等待执行结果，请稍后再次核对"
+          : "尚未找到接纳记录，可使用原提交编号重试", 8_000);
+      }
+      await refreshSnapshot(operation.sessionId);
+    } catch (error) { if (current()) showError(error); }
+    finally { if (current()) setBusy(false); }
   };
 
   const resolveApproval = async (decision: "allow" | "allow-session" | "deny") => {
+    const current = captureOperation();
     const interaction = projection?.interactions[0];
     if (!interaction || !activeSession) return;
     setResolving(true);
     try {
       await api.rpc(activeSession.id, "interaction.resolve", { id: interaction.id, decision });
+      if (!current()) return;
       setProjection((current) => current ? { ...current,
         interactions: current.interactions.filter((entry) => entry.id !== interaction.id) } : current);
-    } catch (error) { showError(error); }
-    finally { setResolving(false); }
+    } catch (error) { if (current()) showError(error); }
+    finally { if (current()) setResolving(false); }
   };
 
   const renameSession = async (session = activeSession) => {
+    const current = captureOperation();
     if (!session) return;
     const name = window.prompt("会话名称", session.name || "");
     if (!name?.trim()) return;
     try {
       await api.rpc(session.id, "session.rename", { name: name.trim() });
-      if (session.id === activeSession?.id) setActiveSession({ ...activeSession, name: name.trim() });
+      if (current() && session.id === activeSessionId.current) setActiveSession((active) => active ? { ...active, name: name.trim() } : active);
       await refreshCatalog(session.workspaceId);
-    } catch (error) { showError(error); }
+    } catch (error) { if (current()) showError(error); }
   };
 
   const forkSession = async (session = activeSession) => {
+    const current = captureOperation();
     if (!session) return;
     setBusy(true);
     try {
       const forked = await api.forkSession(session.id, `${session.name || "未命名会话"} · 分支`);
-      acceptOpen(forked.session, forked.snapshot);
+      if (current()) acceptOpen(forked.session, forked.snapshot, forked.eventCursor);
       await refreshCatalog(session.workspaceId);
-    } catch (error) { showError(error); }
-    finally { setBusy(false); }
+    } catch (error) { if (current()) showError(error); }
+    finally { if (current()) setBusy(false); }
   };
 
   const archiveSession = async (session: SessionSummary) => {
-    if (!window.confirm(`归档会话“${session.name || "未命名会话"}”？会话文件会移到工作区的归档目录。`)) return;
+    const current = captureOperation();
+    if (!window.confirm(`归档会话“${session.name || "未命名会话"}”？正在运行的任务会停止，会话文件会移到工作区的归档目录。`)) return;
     try {
       await api.archiveSession(session.id);
-      if (activeSession?.id === session.id) startNewSession();
+      if (current() && activeSessionId.current === session.id) startNewSession();
       await refreshCatalog(session.workspaceId);
-      flashNotice("会话已归档");
-    } catch (error) { showError(error); }
+      if (current()) flashNotice("会话已归档");
+    } catch (error) { if (current()) showError(error); }
   };
 
   const selectModel = async (provider: string) => {
+    const viewCurrent = captureOperation();
+    const selectionCurrent = modelScope.current.advance();
+    const current = () => viewCurrent() && selectionCurrent();
     const local = models?.providers.find((entry) => entry.id === provider) || null;
     setPendingModel(provider);
     setPendingThinking(local?.["thinking-level"] || null);
@@ -464,15 +598,19 @@ export function App() {
     try {
       const selected = await api.rpc<ModelEntry>((activeSession || draftSession)!.id,
         "model.select", { provider });
+      if (!current()) return;
       setModels((current) => current ? { ...current, current: selected } : current);
       setPendingThinking(selected["thinking-level"] || null);
       void api.rpc<ContextStatus>((activeSession || draftSession)!.id, "context.status")
-        .then(setContextStatus).catch(() => undefined);
+        .then((status) => { if (current()) setContextStatus(status); }).catch(() => undefined);
       flashNotice(`已切换到 ${selected.model || provider}`);
-    } catch (error) { showError(error); }
+    } catch (error) { if (current()) showError(error); }
   };
 
   const selectThinking = async (level: string) => {
+    const viewCurrent = captureOperation();
+    const selectionCurrent = modelScope.current.advance();
+    const current = () => viewCurrent() && selectionCurrent();
     setPendingThinking(level);
     const applyLocal = (entry: ModelEntry) => ({ ...entry, "thinking-level": level });
     setModels((current) => current ? {
@@ -484,13 +622,17 @@ export function App() {
     try {
       const selected = await api.rpc<ModelEntry>((activeSession || draftSession)!.id,
         "model.thinking.select", { level });
+      if (!current()) return;
       setModels((current) => current ? { ...current, current: selected,
         providers: current.providers.map((entry) => entry.id === selected.id ? selected : entry) } : current);
       flashNotice(`推力强度已设为 ${level}`);
-    } catch (error) { showError(error); }
+    } catch (error) { if (current()) showError(error); }
   };
 
   const selectPolicy = async (mode: PolicyStatus["mode"]) => {
+    const viewCurrent = captureOperation();
+    const selectionCurrent = policyScope.current.advance();
+    const current = () => viewCurrent() && selectionCurrent();
     setPendingPolicy(mode);
     if (!activeSession && !draftSession) {
       setPolicy((current) => current ? { ...current, mode } : current);
@@ -498,8 +640,8 @@ export function App() {
     }
     try {
       await api.rpc((activeSession || draftSession)!.id, "policy.select", { mode });
-      setPolicy((current) => current ? { ...current, mode } : current);
-    } catch (error) { showError(error); }
+      if (current()) setPolicy((current) => current ? { ...current, mode } : current);
+    } catch (error) { if (current()) showError(error); }
   };
 
   const requestPolicy = (mode: PolicyStatus["mode"]) => {
@@ -564,7 +706,24 @@ export function App() {
     });
   };
 
+  const workbenchRpc = useCallback((method: string, params: Record<string, unknown> = {}) => {
+    const sessionId = activeSession?.id, current = viewScope.current.capture();
+    if (!sessionId) return Promise.reject(new Error("请先开始一个会话"));
+    return api.rpc(sessionId, method, params).catch(error => {
+      if (current() && activeSessionId.current === sessionId) showError(error);
+      throw error;
+    });
+  }, [activeSession?.id, showError]);
+
   const composerNode = <div className="composer-shell">
+    {workspaceId && <ComposerReferences workspaceId={workspaceId} value={composer} onChange={setComposer}
+      suggest={api.referenceSuggestions} disabled={busy || !!pendingOperation} />}
+    {pendingOperation && <div className="provider-reload-notice" role="status">
+      <p>上一项操作的结果尚未确认。核对完成前暂停新提交，以免重复执行。</p>
+      <button type="button" className="button ghost" disabled={busy} onClick={() => void reconcileOperation()}>核对结果</button>
+      {operationMissing && <button type="button" className="button ghost" disabled={busy}
+        onClick={() => void reconcileOperation(true)}>使用原编号重试</button>}
+    </div>}
     {commandSuggestions.length > 0 && <div id="command-suggestions" className="command-menu" role="listbox" aria-label="命令建议">
       <div className="command-menu-title">命令</div>
       {commandSuggestions.map((command, index) => <button type="button" role="option" key={command.name}
@@ -573,6 +732,8 @@ export function App() {
         <code>{command.name}</code><span>{command.description}</span></button>)}
     </div>}
     <div className={`composer ${phase !== "idle" ? "is-active" : ""} ${composer.trim() ? "has-content" : ""}`} aria-busy={busy}>
+      {workspaceId && <ComposerAttachments key={`${workspaceId}:${activeSession?.id || "draft"}`} workspaceId={workspaceId}
+        items={attachments} onChange={setAttachments} upload={api.uploadAttachment} disabled={busy || !!pendingOperation} onBusyChange={setUploading} />}
       <textarea ref={composerInput} rows={1} value={composer} disabled={!workspaceId} placeholder={workspaceId ? "描述目标、问题或想创建的能力…" : "选择一个工作区开始"}
         aria-controls={commandSuggestions.length ? "command-suggestions" : undefined}
         onChange={(event) => setComposer(event.target.value)} onKeyDown={(event) => {
@@ -606,10 +767,17 @@ export function App() {
           {phase !== "idle" && composer.trim() && <button type="button" className="steer-button" onClick={() => void send("steer")}>立即引导</button>}
           {phase !== "idle" && activeSession ? <button type="button" className="send-button stop"
             onClick={() => void api.rpc(activeSession.id, "turn.abort")} aria-label="停止运行"><Icon name="stop" /></button>
-            : <button type="button" className={`send-button ${busy ? "loading" : ""}`} disabled={!composer.trim() || busy || !workspaceId}
+            : <button type="button" className={`send-button ${busy ? "loading" : ""}`} disabled={(!composer.trim() && !attachments.length) || busy || uploading || !workspaceId || !!pendingOperation}
               aria-busy={busy} onClick={() => void send()} aria-label={busy ? "正在发送" : "发送消息"}><Icon name="send" /></button>}
         </div>
       </div>
+      <nav className="workbench-actions" aria-label="工作台工具">
+        <button type="button" disabled={!workspaceId} onClick={() => setWorkbench("files")}>文件与变更</button>
+        <button type="button" disabled={!activeSession} onClick={() => setWorkbench("orchestration")}>计划与协作</button>
+        <button type="button" disabled={!activeSession} onClick={() => setWorkbench("automation")}>自动化</button>
+        <button type="button" disabled={!activeSession} onClick={() => setWorkbench("plugins")}>插件</button>
+        <button type="button" disabled={!workspaceId || busy} onClick={() => setComposer(value => `${value}${value ? " " : ""}@`)}>引用文件 / 会话</button>
+      </nav>
     </div>
     <div className="composer-hint"><span>Enter 发送 · Shift + Enter 换行 · / 使用命令</span></div>
   </div>;
@@ -703,9 +871,9 @@ export function App() {
         <div className="view-tabs" role="tablist"><button type="button" role="tab" aria-selected={conversationView === "chat"}
           onClick={() => setConversationView("chat")}>对话</button><button type="button" role="tab" aria-selected={conversationView === "trajectory"}
             onClick={() => setConversationView("trajectory")}>轨迹</button></div>
-        <div className={`timeline ${conversationView === "trajectory" ? "trajectory-mode" : ""}`} ref={timeline} aria-live="polite">
-          {conversationView === "chat" && projection && <Timeline projection={projection} />}
-          {conversationView === "trajectory" && <Trajectory events={projection?.events || []} />}
+        <div className={`timeline ${conversationView === "trajectory" ? "trajectory-mode" : ""}`} ref={timeline} tabIndex={0} aria-label="会话内容">
+          {conversationView === "chat" && projection && <Timeline key={activeSession.id} projection={projection} scrollRef={timeline} pluginSlots={pluginSlots} />}
+          {conversationView === "trajectory" && <Trajectory key={activeSession.id} events={projection?.events || []} />}
         </div>
         <div className="composer-wrap">{composerNode}<div className="session-run-summary">{runSummary}</div></div>
       </section>}
@@ -721,6 +889,18 @@ export function App() {
         <span><strong>{runtime?.plugins.length ?? "—"}</strong>插件</span></div></section>
     </aside>}
 
+    {workbench && workspaceId && <section className="workbench-drawer" aria-label="工作台" onKeyDown={event => { if (event.key === "Escape") setWorkbench(null); }}>
+      {workbench === "files" ? <WorkspacePanel workspaceId={workspaceId} sessionId={activeSession?.id} api={api.workspaceFiles}
+        onClose={() => setWorkbench(null)} onReference={reference => { setComposer(value => `${value}${value ? " " : ""}${reference} `); setWorkbench(null); composerInput.current?.focus(); }} />
+        : <><header className="workbench-heading"><strong>{workbench === "automation" ? "自动化" : workbench === "plugins" ? "插件" : "计划与协作"}</strong>
+          <button type="button" onClick={() => setWorkbench(null)} aria-label="关闭工作台">×</button></header>
+          {activeSession && workbench === "automation" && <AutomationPanel agentId={activeSession.id} readOnly={policy?.mode === "deny"}
+            rpc={workbenchRpc} />}
+          {activeSession && workbench === "plugins" && <PluginPanel readOnly={policy?.mode === "deny"}
+            rpc={workbenchRpc} />}
+          {activeSession && workbench === "orchestration" && <OrchestrationPanel sessionId={activeSession.id} onError={showError} />}</>}
+    </section>}
+
     {projection?.interactions[0] && <ApprovalDialog interaction={projection.interactions[0]}
       resolving={resolving} onResolve={resolveApproval} />}
     {fullAccessDialogOpen && <FullAccessDialog onClose={() => setFullAccessDialogOpen(false)}
@@ -728,9 +908,12 @@ export function App() {
     {settingsOpen && <SettingsDialog workspaces={bootstrap?.workspaces || []} runtime={runtime}
       theme={theme} onThemeChange={setTheme} onClose={() => setSettingsOpen(false)}
       onProvidersChanged={async () => {
+        const current = captureOperation();
+        const modelCurrent = modelScope.current.capture();
         const source = activeSession || draftSession;
         if (!source) return;
         const next = await api.rpc<{ current: ModelEntry | null; providers: ModelEntry[] }>(source.id, "model.list");
+        if (!current() || !modelCurrent()) return;
         setModels(next);
         if (!next.providers.some((entry) => entry.id === pendingModel)) {
           setPendingModel(next.current?.id || null);

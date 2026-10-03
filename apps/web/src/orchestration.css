@@ -1,0 +1,27 @@
+.orchestration-panel { width: min(760px, 100%); max-height: 90vh; overflow: auto; padding: 20px; color: inherit; }
+.orchestration-header, .orchestration-header > div, .orchestration-actions, .orchestration-tabs { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.orchestration-header { justify-content: space-between; }
+.orchestration-header h2 { margin: 0; font-size: 19px; }
+.orchestration-tabs { margin: 16px 0; border-bottom: 1px solid color-mix(in srgb, currentColor 15%, transparent); padding-bottom: 10px; }
+.orchestration-tabs [aria-pressed=true] { font-weight: 700; text-decoration: underline; text-underline-offset: 5px; }
+.orchestration-body { display: grid; gap: 14px; }
+.orchestration-body > p { margin: 0; font-size: 13px; line-height: 1.7; opacity: .8; }
+.orchestration-card { border: 1px solid color-mix(in srgb, currentColor 16%, transparent); border-radius: 10px; padding: 14px; }
+.orchestration-card h3 { font-size: 15px; margin: 0 0 10px; }
+.orchestration-card h3 span, .orchestration-card li > div > span { font-size: 12px; font-weight: 400; margin-left: 8px; opacity: .7; }
+.orchestration-card p, .orchestration-card li { font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
+.orchestration-card li { margin: 10px 0; }
+.orchestration-card pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; font-size: 12px; }
+.orchestration-card summary { cursor: pointer; font-size: 13px; }
+.orchestration-form { display: grid; gap: 12px; margin-top: 12px; }
+.orchestration-form label { display: grid; gap: 6px; font-size: 13px; }
+.orchestration-panel input, .orchestration-panel textarea, .orchestration-panel select { color: inherit; background: transparent; border: 1px solid color-mix(in srgb, currentColor 24%, transparent); border-radius: 6px; padding: 8px; min-width: 0; max-width: 100%; font: inherit; }
+.orchestration-panel textarea { resize: vertical; min-height: 65px; }
+.orchestration-panel select[multiple] { min-height: 70px; }
+.orchestration-panel button { cursor: pointer; color: inherit; background: color-mix(in srgb, currentColor 5%, transparent); border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 6px; padding: 7px 12px; font: inherit; font-size: 12px; }
+.orchestration-panel button:disabled { cursor: default; opacity: .45; }
+.orchestration-panel button:focus-visible, .orchestration-panel input:focus-visible, .orchestration-panel textarea:focus-visible, .orchestration-panel select:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.orchestration-panel fieldset { border: 1px solid color-mix(in srgb, currentColor 15%, transparent); border-radius: 8px; display: grid; gap: 8px; padding: 12px; }
+.orchestration-panel legend { font-size: 12px; padding: 0 5px; }
+.orchestration-error { color: #bd4343; background: color-mix(in srgb, #bd4343 8%, transparent); padding: 10px; border-radius: 8px; font-size: 13px; overflow-wrap: anywhere; }
+@media (max-width: 480px) { .orchestration-panel { padding: 12px; max-height: 94vh; } .orchestration-card { padding: 11px; } .orchestration-actions > select { width: 100%; } }

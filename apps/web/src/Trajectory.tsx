@@ -1,5 +1,7 @@
-import { Fragment, useMemo, useRef, useState, type PointerEvent } from "react";
+import { useDeferredValue, useLayoutEffect, useMemo, useRef, useState, type PointerEvent } from "react";
+import { captureAnchor, restoreAnchor, timelineLayout, visibleRange } from "./virtual-timeline";
 import { Icon } from "./icons";
+import { imageDataReplacer } from "./ToolResultImages";
 import type { DurableEvent } from "./types";
 
 export type TrajectoryKind = "system" | "user" | "context" | "assistant" | "tool" | "error";
@@ -13,7 +15,7 @@ export interface TrajectoryRecord {
   kind: TrajectoryKind;
   label: string;
   text: string;
-  detail: string;
+  detail: () => string;
   startedAt: number;
   durationMs: number | null;
 }
@@ -33,7 +35,7 @@ function compactText(value: unknown): string {
     return compactText(block.text ?? block.content ?? part);
   }).filter(Boolean).join(" ");
   if (value === null || value === undefined) return "";
-  if (typeof value === "object") return JSON.stringify(value);
+  if (typeof value === "object") return JSON.stringify(value, imageDataReplacer);
   return String(value);
 }
 
@@ -63,8 +65,13 @@ function responseCallCount(message: Record<string, unknown>): number {
 }
 
 function detailJson(value: unknown): string {
-  try { return JSON.stringify(value, null, 2); }
+  try { return JSON.stringify(value, imageDataReplacer, 2); }
   catch { return String(value); }
+}
+
+function lazyDetail(value: unknown): () => string {
+  let cached: string | undefined;
+  return () => cached ??= detailJson(value);
 }
 
 function resultSummary(data: Record<string, unknown>): string {
@@ -121,7 +128,7 @@ export function buildTrajectoryRecords(events: readonly DurableEvent[]): Traject
     if (event.type === "session/start") {
       push({
         id: event.id, seq: event.seq, turn: 0, request: null, kind: "system", label: "SYSTEM",
-        text: "Initial System Prompt", detail: detailJson(data), startedAt, durationMs: null,
+        text: "Initial System Prompt", detail: lazyDetail(data), startedAt, durationMs: null,
       });
       continue;
     }
@@ -135,14 +142,14 @@ export function buildTrajectoryRecords(events: readonly DurableEvent[]): Traject
         activeRequest = null;
         push({
           id: event.id, seq: event.seq, turn, request: null, kind: "user", label: "USER",
-          text: content || "User message", detail: detailJson(data), startedAt, durationMs: null,
+          text: content || "User message", detail: lazyDetail(data), startedAt, durationMs: null,
         });
       } else if (role === "assistant") {
         const calls = responseCallCount(message);
         push({
           id: event.id, seq: event.seq, turn, request: activeRequest, kind: "assistant", label: "ASSISTANT",
           text: content || (calls ? `Preparing to call ${calls} tools` : "Assistant response"),
-          detail: detailJson(data), startedAt, durationMs: null,
+          detail: lazyDetail(data), startedAt, durationMs: null,
         });
       }
       // Tool-role messages mirror tool/result and would duplicate the ledger row.
@@ -163,7 +170,7 @@ export function buildTrajectoryRecords(events: readonly DurableEvent[]): Traject
         kind: paired && (paired.data.ok === false || paired.data["is-error"] === true) ? "error" : "tool",
         label: "TOOL",
         text: clipped(`${name}${args ? ` ${args}` : ""}${output ? ` → ${output}` : ""}`),
-        detail: detailJson({ call: data, result: paired?.data }),
+        detail: lazyDetail({ call: data, result: paired?.data }),
         startedAt,
         durationMs: paired ? duration(paired.data) : null,
       });
@@ -175,7 +182,7 @@ export function buildTrajectoryRecords(events: readonly DurableEvent[]): Traject
       push({
         id: event.id, seq: event.seq, turn, request: activeRequest, kind: "context", label: "CONTEXT",
         text: clipped(compactText(data.content) || "Runtime context"),
-        detail: detailJson(data), startedAt, durationMs: null,
+        detail: lazyDetail(data), startedAt, durationMs: null,
       });
       continue;
     }
@@ -184,7 +191,7 @@ export function buildTrajectoryRecords(events: readonly DurableEvent[]): Traject
       push({
         id: event.id, seq: event.seq, turn, request: activeRequest, kind: "error", label: "ERROR",
         text: clipped(compactText(data.message ?? data.error) || eventLabel(event.type)),
-        detail: detailJson(data), startedAt, durationMs: null,
+        detail: lazyDetail(data), startedAt, durationMs: null,
       });
       continue;
     }
@@ -192,7 +199,7 @@ export function buildTrajectoryRecords(events: readonly DurableEvent[]): Traject
     push({
       id: event.id, seq: event.seq, turn, request: activeRequest, kind: "context", label: "CONTEXT",
       text: clipped(`${eventLabel(event.type)}${Object.keys(data).length ? ` ${compactText(data)}` : ""}`),
-      detail: detailJson(data), startedAt, durationMs: duration(data),
+      detail: lazyDetail(data), startedAt, durationMs: duration(data),
     });
   }
 
@@ -221,8 +228,45 @@ function timelineGeometry(records: readonly TrajectoryRecord[], actualDuration: 
 
 function recordMatches(record: TrajectoryRecord, query: string): boolean {
   if (!query) return true;
-  const haystack = `${record.label} ${record.text} ${record.detail}`.toLocaleLowerCase();
+  const haystack = `${record.label} ${record.text} ${record.detail()}`.toLocaleLowerCase();
   return haystack.includes(query.toLocaleLowerCase());
+}
+
+export function overviewGeometry(records: readonly TrajectoryRecord[], actualDuration: boolean,
+  matches?: ReadonlySet<string>) {
+  const geometry = timelineGeometry(records, actualDuration);
+  // At most 120 time buckets per lane; retain individual events for small logs.
+  const stride = Math.max(1, Math.ceil(records.length / 120));
+  const buckets = new Map<string, typeof geometry[number] & { count: number; matched: boolean }>();
+  for (let index = 0; index < geometry.length; index++) {
+    const item = geometry[index];
+    const key = `${Math.floor(index / stride)}:${laneFor(item.record.kind)}`;
+    const matched = !matches || matches.has(item.record.id);
+    const bucket = buckets.get(key);
+    if (bucket) {
+      bucket.width = item.left + item.width - bucket.left;
+      bucket.count += 1;
+      if (matched && !bucket.matched) bucket.record = item.record;
+      bucket.matched ||= matched;
+    } else buckets.set(key, { ...item, count: 1, matched });
+  }
+  return [...buckets.values()];
+}
+
+export function trajectoryRows(records: readonly TrajectoryRecord[], collapsedTurns: ReadonlySet<number>,
+  callsCollapsed: boolean, selected: string | null) {
+  const seenTurns = new Set<number>();
+  const rows: Array<{ id: string; record: TrajectoryRecord; firstInTurn: boolean; detail: boolean; estimate: number }> = [];
+  for (const record of records) {
+    if (callsCollapsed && record.kind === "tool") continue;
+    if (record.turn > 0 && collapsedTurns.has(record.turn) && record.kind !== "user") continue;
+    const firstInTurn = record.turn > 0 && !seenTurns.has(record.turn);
+    seenTurns.add(record.turn);
+    rows.push({ id: record.id, record, firstInTurn, detail: false, estimate: 32 });
+    if (record.id === selected) rows.push({ id: `detail:${record.id}`, record,
+      firstInTurn: false, detail: true, estimate: 272 });
+  }
+  return rows;
 }
 
 export function Trajectory({ events }: { events: readonly DurableEvent[] }) {
@@ -231,11 +275,46 @@ export function Trajectory({ events }: { events: readonly DurableEvent[] }) {
   const [collapsedTurns, setCollapsedTurns] = useState<ReadonlySet<number>>(new Set());
   const [callsCollapsed, setCallsCollapsed] = useState(false);
   const [query, setQuery] = useState("");
+  const search = useDeferredValue(query.trim());
   const [selected, setSelected] = useState<string | null>(null);
   const [range, setRange] = useState<{ start: number; end: number } | null>(null);
   const dragStart = useRef<number | null>(null);
   const turns = useMemo(() => [...new Set(records.map((record) => record.turn).filter(Boolean))], [records]);
-  const geometry = useMemo(() => timelineGeometry(records, actualDuration), [records, actualDuration]);
+  const matches = useMemo(() => search ? new Set(records.filter((record) => recordMatches(record, search)).map((record) => record.id)) : undefined, [records, search]);
+  const geometry = useMemo(() => overviewGeometry(records, actualDuration, matches), [records, actualDuration, matches]);
+  const pane = useRef<HTMLDivElement>(null);
+  const [viewport, setViewport] = useState({ top: 0, height: 600 });
+  const rows = useMemo(() => trajectoryRows(records, collapsedTurns, callsCollapsed, selected), [records, collapsedTurns, callsCollapsed, selected]);
+  const layout = useMemo(() => timelineLayout(rows, new Map(), 0), [rows]);
+  const previousLayout = useRef(layout);
+  const pendingJump = useRef<string | null>(null);
+  const window = visibleRange(layout, viewport.top, viewport.height, 320);
+  useLayoutEffect(() => {
+    const element = pane.current;
+    if (!element) return;
+    const resize = () => setViewport({ top: element.scrollTop, height: element.clientHeight });
+    resize();
+    const observer = new ResizeObserver(resize); observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  useLayoutEffect(() => {
+    const element = pane.current;
+    if (!element) return;
+    const jump = pendingJump.current ? layout.index.get(pendingJump.current) : undefined;
+    const anchor = captureAnchor(previousLayout.current, element.scrollTop);
+    const top = jump === undefined ? restoreAnchor(layout, anchor) ?? element.scrollTop
+      : Math.max(0, layout.offsets[jump] - element.clientHeight / 2 + 16);
+    element.scrollTop = Math.max(0, Math.min(top, layout.total - element.clientHeight));
+    pendingJump.current = null;
+    previousLayout.current = layout;
+    setViewport({ top: element.scrollTop, height: element.clientHeight });
+  }, [layout]);
+  const focusRecord = (record: TrajectoryRecord) => {
+    pendingJump.current = record.id;
+    setCollapsedTurns((current) => { const next = new Set(current); next.delete(record.turn); return next; });
+    if (record.kind === "tool") setCallsCollapsed(false);
+    setSelected(record.id);
+  };
   const allTurnsCollapsed = turns.length > 0 && turns.every((turn) => collapsedTurns.has(turn));
 
   const toggleAllTurns = () => setCollapsedTurns(allTurnsCollapsed ? new Set() : new Set(turns));
@@ -249,11 +328,6 @@ export function Trajectory({ events }: { events: readonly DurableEvent[] }) {
     const position = index / (records.length - 1);
     return position >= range.start && position <= range.end;
   };
-  const visibleRecords = records.filter((record) => {
-    if (callsCollapsed && record.kind === "tool") return false;
-    if (record.turn > 0 && collapsedTurns.has(record.turn) && record.kind !== "user") return false;
-    return true;
-  });
   const fraction = (event: PointerEvent<HTMLDivElement>) => {
     const bounds = event.currentTarget.getBoundingClientRect();
     return Math.min(1, Math.max(0, (event.clientX - bounds.left) / Math.max(1, bounds.width)));
@@ -273,8 +347,7 @@ export function Trajectory({ events }: { events: readonly DurableEvent[] }) {
     const current = fraction(event);
     if (Math.abs(current - dragStart.current) < .008 && records.length) {
       const target = records[Math.min(records.length - 1, Math.round(current * (records.length - 1)))];
-      document.getElementById(`trajectory-${target.id}`)?.scrollIntoView({ block: "center" });
-      setSelected(target.id);
+      focusRecord(target);
       setRange(null);
     }
     dragStart.current = null;
@@ -307,29 +380,32 @@ export function Trajectory({ events }: { events: readonly DurableEvent[] }) {
       <div className="trajectory-lanes" role="slider" aria-label="Timeline overview; drag horizontally to focus events"
         aria-valuemin={0} aria-valuemax={100} aria-valuenow={range ? Math.round(range.end * 100) : 100}
         tabIndex={0} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}>
-        {geometry.map(({ record, left, width }) => <button type="button" key={record.id}
+        {geometry.map(({ record, left, width, count, matched }) => <button type="button" key={record.id}
           className={`trajectory-span lane-${laneFor(record.kind)} kind-${record.kind}`}
           style={{ left: `${left * 100}%`, width: `${width * 100}%` }}
-          data-match={recordMatches(record, query) || undefined}
-          aria-label={`${record.label}: ${record.text}`}
+          data-match={matched || undefined}
+          aria-label={`${record.label}: ${record.text}${count > 1 ? `（${count} 条记录）` : ""}`}
           onPointerDown={(event) => event.stopPropagation()}
-          onClick={() => {
-            document.getElementById(`trajectory-${record.id}`)?.scrollIntoView({ block: "center" });
-            setSelected(record.id);
-          }} />)}
+          onClick={() => focusRecord(record)} />)}
         {range && <span className="trajectory-range" style={{ left: `${range.start * 100}%`, width: `${Math.max(.2, (range.end - range.start) * 100)}%` }} />}
       </div>
     </div>
 
-    <div className="trajectory-table-pane">
-      {visibleRecords.length ? <table className="trajectory-table">
+    <div className="trajectory-table-pane" ref={pane} onScroll={(event) => {
+      const element = event.currentTarget;
+      setViewport({ top: element.scrollTop, height: element.clientHeight });
+    }}>
+      {rows.length ? <table className="trajectory-table" aria-rowcount={rows.length}>
         <colgroup><col className="trajectory-event-column" /><col /></colgroup>
-        <tbody>{visibleRecords.map((record, visibleIndex) => {
-          const firstInTurn = record.turn > 0 && visibleRecords.findIndex((item) => item.turn === record.turn) === visibleIndex;
-          const isSelected = selected === record.id;
-          const dimmed = !recordMatches(record, query) || !inRange(record.index - 1);
-          return <Fragment key={record.id}>
-            <tr id={`trajectory-${record.id}`} className={isSelected ? "selected" : ""}
+        <tbody>
+          <tr className="trajectory-spacer" aria-hidden="true"><td colSpan={2} style={{ height: layout.offsets[window.start] }} /></tr>
+          {rows.slice(window.start, window.end).map(({ record, firstInTurn, detail, id }, index) => {
+            if (detail) return <tr key={id} className="trajectory-detail-row" aria-rowindex={window.start + index + 1}>
+              <td colSpan={2}><pre>{record.detail()}</pre></td></tr>;
+            const isSelected = selected === record.id;
+            const dimmed = (matches && !matches.has(record.id)) || !inRange(record.index - 1);
+            return <tr key={id} id={`trajectory-${record.id}`} className={`trajectory-record ${isSelected ? "selected" : ""}`}
+              aria-rowindex={window.start + index + 1}
               data-turn-start={firstInTurn || undefined} data-dimmed={dimmed || undefined}
               onClick={() => setSelected((current) => current === record.id ? null : record.id)}>
               <td className="trajectory-event-cell">
@@ -340,10 +416,10 @@ export function Trajectory({ events }: { events: readonly DurableEvent[] }) {
                 <span className={`trajectory-tag kind-${record.kind}`}>{record.label}</span>
               </td>
               <td className="trajectory-content" title={record.text}>{record.text}</td>
-            </tr>
-            {isSelected && <tr className="trajectory-detail-row"><td colSpan={2}><pre>{record.detail}</pre></td></tr>}
-          </Fragment>;
-        })}</tbody>
+            </tr>;
+          })}
+          <tr className="trajectory-spacer" aria-hidden="true"><td colSpan={2} style={{ height: layout.total - layout.offsets[window.end] }} /></tr>
+        </tbody>
       </table> : <div className="trajectory-empty">暂无轨迹记录</div>}
     </div>
   </div>;

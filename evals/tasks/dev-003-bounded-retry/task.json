@@ -1,0 +1,19 @@
+{
+  "id": "dev-003-bounded-retry",
+  "title": "错误分类与有界重试退避",
+  "category": "bugfix",
+  "split": "dev",
+  "timeout_seconds": 180,
+  "allowed_files": ["src/retry.mjs"],
+  "acceptance_tests": [
+    "classifier respects explicit overrides and abort precedence",
+    "immediate success returns identity with no sleep",
+    "exponential backoff is capped and attempt numbers are one-based",
+    "default retry limit and final error identity",
+    "fatal and abort failures stop immediately without sleep",
+    "sleep must complete before the next attempt and its failure ends retries",
+    "zero delays and one-attempt budget have no extra waits",
+    "configuration validation happens before operation"
+  ],
+  "verify_command": ["node", "--test", "tests/acceptance.test.mjs"]
+}

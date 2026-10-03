@@ -132,15 +132,25 @@
                                     :id agent-id
                                     :agent_id agent-id
                                     :provider provider
-                                    :depth depth)]
-               (swap! jobs update agent-id
-                      #(when %
-                         (assoc % :status :completed
-                                  :completed-at completed-at
-                                  :result completed)))
-               (persist!)
+                                    :depth depth)
+                   [before _]
+                   (swap-vals! jobs
+                               (fn [current]
+                                 (if (identical? completion
+                                                 (get-in current [agent-id :completion]))
+                                   (update current agent-id assoc
+                                           :status :completed
+                                           :completed-at completed-at
+                                           :result completed)
+                                   current)))
+                   current-run? (identical? completion
+                                           (get-in before [agent-id :completion]))]
+               (when current-run? (persist!))
+               ;; A retained child's next run may start before this watcher is
+               ;; scheduled. Resolve old waiters without overwriting the new run.
                (deliver completion completed)
-               (kernel/emit! ctx :subagent/end completed)))
+               (when current-run?
+                 (kernel/emit! ctx :subagent/end completed))))
            watch!
            (fn [agent-id provider depth completion result]
              (future

@@ -95,6 +95,7 @@ export interface ProviderPreset {
 
 export interface Interaction {
   id: string;
+  revision?: number;
   title: string;
   message: string;
   createdAt?: string;
@@ -112,6 +113,7 @@ export interface SessionSnapshot {
   models: { current: ModelEntry | null; providers: ModelEntry[] } | null;
   context?: ContextStatus | null;
   interactions: Interaction[];
+  interactions_revision?: number;
   policy?: PolicyStatus | null;
 }
 
@@ -121,6 +123,7 @@ export interface PolicyStatus {
 }
 
 export interface AgentState {
+  revision?: number;
   phase: "idle" | "model" | "tool" | "retry" | "compacting" | string;
   "run-id"?: string | null;
   partialAssistant?: string;
@@ -157,4 +160,11 @@ export interface RuntimeStatus {
 export interface SubagentStatus {
   providers: Array<{ id: string; description?: string; capabilities?: Record<string, unknown> }>;
   jobs: Array<{ id: string; label: string; provider: string; status: string; result?: unknown }>;
+}
+
+export interface ProviderReloadResult {
+  scope: "open-web-sessions";
+  applied: string[];
+  failures: Array<{ sessionId: string; sessionName: string; message: string }>;
+  warnings?: Array<{ sessionId: string; sessionName: string; message: string }>;
 }

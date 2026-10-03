@@ -13,8 +13,39 @@ permissions:
   contents: read
 
 jobs:
+  verify:
+    name: Verify release source
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/tui-rs
+      - name: Install Babashka
+        run: |
+          scripts/install-ci-babashka.sh "$RUNNER_TEMP/qi-agent-bin"
+          echo "$RUNNER_TEMP/qi-agent-bin" >> "$GITHUB_PATH"
+      - name: Install web dependencies
+        run: npm ci --registry=https://registry.npmjs.org
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path apps/tui-rs/Cargo.toml --all -- --check
+      - name: Lint Rust
+        run: cargo clippy --locked --manifest-path apps/tui-rs/Cargo.toml --all-targets -- -D warnings
+      - name: Test all runtimes
+        run: npm test
+
   package:
     name: Package (${{ matrix.target }})
+    needs: verify
     strategy:
       fail-fast: false
       matrix:
@@ -36,6 +67,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -63,12 +97,14 @@ jobs:
           mkdir -p "dist/$package/apps/tui-rs/src"
           cp apps/tui-rs/target/release/qi-agent "dist/$package/apps/tui-rs/target/release/qi-agent"
           cp apps/tui-rs/target/release/dao "dist/$package/apps/tui-rs/target/release/dao"
-          cp -R src plugins presets scripts "dist/$package/"
+          cp -R src plugins presets scripts examples docs assets protocol "dist/$package/"
+          cp -R apps/web apps/web-host apps/shared apps/acp "dist/$package/apps/"
           cp apps/tui-rs/Cargo.toml apps/tui-rs/Cargo.lock "dist/$package/apps/tui-rs/"
           cp -R apps/tui-rs/src/. "dist/$package/apps/tui-rs/src/"
-          cp bb.edn agent.edn LICENSE README.md "dist/$package/"
+          cp bb.edn agent.edn package.json package-lock.json tsconfig.json vite.config.ts \
+            LICENSE README.md README.zh-CN.md "dist/$package/"
           tar -C dist -czf "dist/$package.tar.gz" "$package"
-          shasum -a 256 "dist/$package.tar.gz" > "dist/$package.tar.gz.sha256"
+          (cd dist && shasum -a 256 "$package.tar.gz" > "$package.tar.gz.sha256")
       - uses: actions/attest@v4
         with:
           subject-path: dist/*.tar.gz
@@ -102,10 +138,11 @@ jobs:
       - name: Publish immutable tag assets
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           QI_AGENT_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           if gh release view "$QI_AGENT_TAG" >/dev/null 2>&1; then
-            gh release upload "$QI_AGENT_TAG" dist/* --clobber
+            gh release upload "$QI_AGENT_TAG" dist/*
           else
             gh release create "$QI_AGENT_TAG" dist/* --verify-tag --generate-notes
           fi

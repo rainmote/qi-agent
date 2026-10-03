@@ -47,6 +47,8 @@
    :start
    (fn [ctx {:keys [default-provider]}]
      (let [providers (atom {})
+           aliases (atom {})
+           resolve-id (fn [id] (get @aliases id id))
            selected (atom default-provider)
            selected-thinking (atom {})
            upsert!
@@ -95,15 +97,16 @@
                (when (= id @selected)
                  (reset! selected (first (keys @providers))))))
            select!
-           (fn [id]
-             (when-not (contains? @providers id)
-               (throw (ex-info "Provider is not registered"
-                               {:provider id
-                                :available (set (keys @providers))})))
-             (reset! selected id)
-             (kernel/emit! ctx :llm/model-selected
-                           {:provider id :model (:model (get @providers id))})
-             (with-thinking-level (get @providers id) @selected-thinking))
+           (fn [requested]
+             (let [id (resolve-id requested)]
+               (when-not (contains? @providers id)
+                 (throw (ex-info "Provider is not registered"
+                                 {:provider id
+                                  :available (set (keys @providers))})))
+               (reset! selected id)
+               (kernel/emit! ctx :llm/model-selected
+                             {:provider id :model (:model (get @providers id))})
+               (with-thinking-level (get @providers id) @selected-thinking)))
            select-thinking!
            (fn [level]
              (let [id @selected
@@ -122,11 +125,11 @@
                              {:provider id :level normalized})
                (with-thinking-level entry @selected-thinking)))
            current (fn []
-                     (with-thinking-level (get @providers @selected)
+                     (with-thinking-level (get @providers (resolve-id @selected))
                                           @selected-thinking))
            generate
            (fn [request]
-             (let [requested (or (get-in request [:options :provider]) @selected)
+             (let [requested (resolve-id (or (get-in request [:options :provider]) @selected))
                    entry (get @providers requested)
                    level (get @selected-thinking requested)]
                (when-not entry
@@ -142,9 +145,35 @@
            registry
            {:register! register!
             :upsert! upsert!
+            :alias! (fn [alias target]
+                      (let [previous (get @aliases alias)]
+                        (swap! aliases assoc alias target)
+                        (fn [] (if previous (swap! aliases assoc alias previous)
+                                 (swap! aliases dissoc alias)))))
+            :mask! (fn [id]
+                     (let [previous (get @providers id)
+                           level (get @selected-thinking id)]
+                       (swap! providers dissoc id)
+                       (swap! selected-thinking dissoc id)
+                       (fn []
+                         (when previous
+                           (swap! providers assoc id previous)
+                           (when level (swap! selected-thinking assoc id level))))))
+            :restore-selection!
+            (fn [id levels]
+              (doseq [[provider level] levels]
+                (when (some #{level} (thinking-levels (get @providers provider)))
+                  (swap! selected-thinking assoc provider level)))
+              (when-let [next-id (if (contains? @providers id) id
+                                  (first (sort (keys @providers))))]
+                (select! next-id)))
             :select! select!
             :select-thinking! select-thinking!
             :current current
+            :lookup (fn [id]
+                      (some-> (with-thinking-level (get @providers (resolve-id id))
+                                                    @selected-thinking)
+                              (dissoc :generate)))
             :providers (fn []
                          (->> @providers vals
                               (mapv #(some-> (with-thinking-level %

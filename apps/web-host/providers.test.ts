@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,9 +9,13 @@ import { ProviderRegistry } from "./providers.js";
 test("provider registry persists secrets privately and returns redacted settings", async () => {
   const root = await mkdtemp(join(tmpdir(), "qi-agent-provider-test-"));
   try {
+    if (process.platform !== "win32") await chmod(root, 0o755);
     const authFile = join(root, "codex-auth.json");
     const registry = new ProviderRegistry(root, { codexAuthFile: authFile });
     await registry.load();
+    if (process.platform !== "win32") {
+      assert.equal((await stat(root)).mode & 0o777, 0o700);
+    }
     assert.deepEqual((await registry.list()).slice(0, 3).map((provider) => provider.id),
       ["deepseek", "openai", "chatgpt"]);
     const missingSubscription = (await registry.list()).find((provider) => provider.id === "chatgpt");
@@ -33,6 +37,20 @@ test("provider registry persists secrets privately and returns redacted settings
     const persisted = await readFile(registry.statePath, "utf8");
     assert.match(persisted, /secret-value/);
     assert.equal((await stat(registry.statePath)).mode & 0o777, 0o600);
+
+    await Promise.all(Array.from({ length: 8 }, (_, index) => registry.upsert({
+      id: `parallel-${index}`,
+      name: `Parallel ${index}`,
+      protocol: "openai-completions",
+      baseUrl: `https://gateway-${index}.example/v1`,
+      apiKey: `parallel-secret-${index}`,
+      models: [{ id: `parallel-model-${index}`, name: `Parallel model ${index}` }],
+    })));
+    const concurrentState = JSON.parse(await readFile(registry.statePath, "utf8")) as {
+      providers: Array<{ id: string }>;
+    };
+    assert.equal(concurrentState.providers.filter(({ id }) => id.startsWith("parallel-")).length, 8);
+    assert.deepEqual((await readdir(root)).filter((name) => name.endsWith(".tmp")), []);
 
     const restored = new ProviderRegistry(root);
     await restored.load();

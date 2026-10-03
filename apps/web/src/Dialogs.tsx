@@ -40,8 +40,8 @@ export function ApprovalDialog({ interaction, resolving, onResolve }: {
     <pre className="approval-detail">{interaction.message}</pre>
     <div className="dialog-actions approval-actions">
       <button type="button" className="button ghost" disabled={resolving} onClick={() => onResolve("deny")}>拒绝</button>
-      <button type="button" className="button secondary" disabled={resolving}
-        onClick={() => onResolve("allow-session")}>本会话允许</button>
+      {interaction.items?.some(item => item.value === "allow-session") && <button type="button" className="button secondary" disabled={resolving}
+        onClick={() => onResolve("allow-session")}>本会话允许</button>}
       <button type="button" className="button primary" disabled={resolving} onClick={() => onResolve("allow")}>仅允许一次</button>
     </div>
   </DialogFrame>;

@@ -32,6 +32,9 @@ temp/
 *.log
 node_modules/
 apps/web/dist/
+evals/results/
+evals/exports/
+evals/**/__pycache__/
 
 # Editor and operating-system files
 .DS_Store

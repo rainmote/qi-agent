@@ -204,9 +204,11 @@
 
 (defn- stop-worker! [worker]
   (when worker
+    ;; Closing a reader can wait for the lock held by its blocking read. Stop
+    ;; the process first so that read wakes up and interruption stays bounded.
+    (try (process/destroy-tree (:process worker)) (catch Throwable _))
     (try (.close ^java.io.Writer (:writer worker)) (catch Throwable _))
-    (try (.close ^java.io.Reader (:reader worker)) (catch Throwable _))
-    (try (process/destroy-tree (:process worker)) (catch Throwable _)))
+    (try (.close ^java.io.Reader (:reader worker)) (catch Throwable _)))
   nil)
 
 (defn- worker-alive? [worker]
@@ -301,17 +303,20 @@
 
 (defn- request! [state lock lifecycle config request]
   (locking lock
-    (let [worker (if (worker-alive? @state)
-                   @state
-                   (start-and-replay! state lifecycle config))
-          id (str (random-uuid))
-          request (merge {:id id
-                          :op :eval
-                          :max-output-chars (:max-output-chars config)
-                          :print-length (:print-length config)
-                          :print-level (:print-level config)}
-                         request)]
-      (swap! lifecycle assoc :status :busy :current-eval id)
+    (let [[worker request]
+          (locking (:admission-lock config)
+            (when @(:closed? config)
+              (throw (ex-info "REPL is closed" {})))
+            (let [worker (if (worker-alive? @state)
+                           @state
+                           (start-and-replay! state lifecycle config))
+                  id (str (random-uuid))]
+              (swap! lifecycle assoc :status :busy :current-eval id)
+              [worker (merge {:id id :op :eval
+                              :max-output-chars (:max-output-chars config)
+                              :print-length (:print-length config)
+                              :print-level (:print-level config)}
+                             request)]))]
       (try
         (let [response (exchange! worker config request)]
           (swap! lifecycle assoc :status :ready :current-eval nil
@@ -457,7 +462,11 @@
                    (when store
                      ((:append! store) "repl/restarted" data))
                    (kernel/emit! ctx :repl/restarted data)))
-               config {:backend backend
+               closed? (atom false)
+               admission-lock (Object.)
+               config {:closed? closed?
+                       :admission-lock admission-lock
+                       :backend backend
                        :root workspace-root
                        :command command-path
                        :sandbox mode
@@ -514,32 +523,42 @@
                        (assoc :replay_safe replay-safe?)))))
                interrupt!
                (fn [eval-id]
-                 (let [current (:current-eval @lifecycle)]
-                   (if (and current (or (nil? eval-id) (= current eval-id)))
-                     (do
-                       (stop-worker! @state)
-                       (reset! state nil)
-                       (swap! lifecycle update :restart-count inc)
-                       (swap! lifecycle assoc :status :cold :pid nil
-                              :current-eval nil :last-error "evaluation interrupted"
-                              :restart-reason :interrupt)
-                       true)
-                     false)))
+                 ;; Serialize interrupt cleanup with the next eval's admission,
+                 ;; without taking the eval lock held by the operation to stop.
+                 (locking admission-lock
+                   (let [current (:current-eval @lifecycle)]
+                     (if (and current (or (nil? eval-id) (= current eval-id)))
+                       (do
+                         (stop-worker! @state)
+                         (reset! state nil)
+                         (swap! lifecycle update :restart-count inc)
+                         (swap! lifecycle assoc :status :cold :pid nil
+                                :current-eval nil :last-error "evaluation interrupted"
+                                :restart-reason :interrupt)
+                         true)
+                       false))))
                reset-repl!
                (fn [_options]
                  (locking lock
-                   (stop-worker! @state)
-                   (reset! state nil)
-                   (swap! lifecycle update :restart-count inc)
-                   (swap! lifecycle assoc :status :cold :pid nil
-                          :current-eval nil :last-error nil
-                          :restart-reason :reset)
-                   (start-and-replay! state lifecycle config)
-                   {:reset true
-                    :namespace (repl-namespace agent-id)
-                    :replayed-cells (:replayed-cells @lifecycle)}))
+                   (locking admission-lock
+                     (when @closed? (throw (ex-info "REPL is closed" {})))
+                     (stop-worker! @state)
+                     (reset! state nil)
+                     (swap! lifecycle update :restart-count inc)
+                     (swap! lifecycle assoc :status :cold :pid nil
+                            :current-eval nil :last-error nil
+                            :restart-reason :reset)
+                     (start-and-replay! state lifecycle config)
+                     {:reset true
+                      :namespace (repl-namespace agent-id)
+                      :replayed-cells (:replayed-cells @lifecycle)})))
                close!
                (fn []
+                 ;; Prevent queued evals from entering while the active reader
+                 ;; is being released; acquire the eval lock only after that.
+                 (locking admission-lock
+                   (reset! closed? true)
+                   (stop-worker! @state))
                  (locking lock
                    (stop-worker! @state)
                    (reset! state nil)
@@ -571,8 +590,4 @@
                                   :recovery :durable-state-and-replay-safe-cells})
                 :close! close!}]
            (kernel/register-service! ctx :execution/repl service)
-           #(locking lock
-              (stop-worker! @state)
-              (reset! state nil)
-              (swap! lifecycle assoc :status :closed :pid nil
-                     :current-eval nil)))))))})
+           close!)))))})

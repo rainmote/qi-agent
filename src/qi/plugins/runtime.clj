@@ -1,6 +1,7 @@
 (ns qi.plugins.runtime
   "Controllable agent session, deterministic tool batches, and the default loop."
-  (:require [qi.cancellation :as cancellation]
+  (:require [qi.attachments :as attachments]
+            [qi.cancellation :as cancellation]
             [qi.kernel :as kernel]
             [qi.schema :as schema]
             [qi.system-prompt :as system]
@@ -72,19 +73,24 @@
    :execution execution
    :error message
    :details details
-   :content (str "ERROR: " message)})
+   :content (str "ERROR: " message
+                 (when (:uncertain details)
+                   " Outcome is uncertain: the action may already have happened. Inspect current state before any retry."))})
 
 (defn- cancelled-error? [error]
   (true? (:cancelled (ex-data error))))
 
 (defn- cancelled-result [execution]
-  {:ok false
+  (let [uncertain? (and (:uncertain-on-cancel execution) (:started-at execution))]
+   {:ok false
    :is-error true
    :cancelled true
    :execution execution
    :error "Agent run was cancelled"
-   :details {:cancelled true}
-   :content "Tool execution was cancelled."})
+   :details (cond-> {:cancelled true} uncertain? (assoc :uncertain true))
+   :content (if uncertain?
+              "Tool execution was cancelled. Outcome is uncertain: desktop input may already have happened. Inspect current state before any retry."
+              "Tool execution was cancelled.")}))
 
 (defn- cancelled-result? [result]
   (or (true? (:cancelled result))
@@ -95,18 +101,23 @@
     (cancellation/throw-if-cancelled! (:cancel-token execution))
     (let [value ((:execute tool) (:arguments execution) execution)
           details (when-let [details-fn (:result-details tool)]
-                    (details-fn (:arguments execution) value))]
+                    (details-fn (:arguments execution) value))
+          images (when-let [images-fn (:result-images tool)]
+                   (images-fn (:arguments execution) value))
+          is-error (boolean (when-let [error-fn (:result-error? tool)]
+                              (error-fn (:arguments execution) value)))]
       (when-let [output-schema (:output-schema tool)]
         (schema/validate! output-schema value
                           "Tool returned invalid canonical output"))
-      {:ok true
-       :is-error false
+      (cond-> {:ok (not is-error)
+       :is-error is-error
        :execution execution
        :value value
        :details details
        :content (if-let [render (or (:render-model tool) (:render tool))]
                   (render (:arguments execution) value)
-                  (result-content value))})
+                  (result-content value))}
+        (seq images) (assoc :images images)))
     (catch Throwable error
       (if (cancelled-error? error)
         (cancelled-result execution)
@@ -130,7 +141,9 @@
                         :call-id call-id
                         :name tool-name
                         :cancel-token cancel-token
-                        :on-update on-update}]
+                        :on-update on-update
+                        :uncertain-on-cancel (:uncertain-on-cancel tool)
+                        :stop-batch-on-error (:stop-batch-on-error tool)}]
     (cond
       (cancellation/cancelled? cancel-token)
       {:call tool-call :result (cancelled-result base-execution)}
@@ -245,7 +258,7 @@
                       (max 0 (quot (- (System/nanoTime) started-at-nanos)
                                    1000000)))
         status (result-status result)]
-    {:name (get-in call [:function :name])
+    (cond-> {:name (get-in call [:function :name])
      :call-id (:id call)
      :execution-id (:token execution)
      :started-at (:started-at execution)
@@ -254,10 +267,13 @@
      :ok (:ok result)
      :is-error (:is-error result)
      :error (:error result)
-     :value (:value result)
+     :value (if (and (seq (:images result)) (map? (:value result)))
+              (dissoc (:value result) :images)
+              (:value result))
      :details (:details result)
      :content (:content result)
-     :duration-ms duration-ms}))
+     :duration-ms duration-ms}
+      (seq (:images result)) (assoc :images (:images result)))))
 
 (defn- emit-tool-end! [ctx entry]
   (let [result-data (tool-result-data entry)]
@@ -285,7 +301,8 @@
 
 (defn- sequential-batch? [prepared]
   (boolean
-   (some #(= :sequential (get-in % [:prepared :tool :execution-mode]))
+   (some #(or (= :sequential (get-in % [:prepared :tool :execution-mode]))
+              (true? (get-in % [:result :execution :stop-batch-on-error])))
          prepared)))
 
 (defn- completion-slot [entry]
@@ -329,13 +346,35 @@
                              (cancelled-result execution))))))
 
 (defn- execute-slots-sequentially! [ctx slots cancel-token]
-  (doseq [{:keys [entry terminal?] :as slot} slots]
-    (when-not @terminal?
-      (if (cancellation/cancelled? cancel-token)
-        (cancel-slot! ctx slot)
-        (complete-slot! ctx slot
-                        (execute-prepared!
-                         ctx entry #(begin-slot! ctx slot %)))))))
+  (loop [[{:keys [entry terminal? execution completion] :as slot} & remaining] slots
+         blocked-by nil]
+    (when slot
+      (when-not @terminal?
+        (cond
+          (cancellation/cancelled? cancel-token)
+          (cancel-slot! ctx slot)
+
+          blocked-by
+          (complete-slot!
+           ctx slot
+           (assoc entry :result
+                  (failure @execution
+                           "Skipped because an earlier desktop tool in this batch failed; inspect the current state before continuing."
+                           {:skipped true :blocked-by blocked-by})))
+
+          :else
+          (complete-slot! ctx slot
+                          (execute-prepared!
+                           ctx entry #(begin-slot! ctx slot %)))))
+      ;; Preflight failures have already completed their slots. Include them in
+      ;; the same stop rule as execution failures, without emitting a second
+      ;; terminal event. Only tools opting into this rule halt the batch.
+      (let [{:keys [call result]} @completion
+            blocked-by (or blocked-by
+                           (when (and (get-in result [:execution :stop-batch-on-error])
+                                      (not= :success (result-status result)))
+                             (:id call)))]
+        (recur remaining blocked-by)))))
 
 (defn- execute-slots-in-parallel! [ctx slots tasks]
   (doseq [{:keys [entry terminal?] :as slot} slots
@@ -392,9 +431,11 @@
           (dispose-cancel))))))
 
 (defn- tool-result-message [tool-call result]
-  {:role "tool"
+  (cond-> {:role "tool"
    :tool_call_id (:id tool-call)
-   :content (:content result)})
+   :content (:content result)}
+    (seq (:images result)) (assoc :images (:images result))
+    (:is-error result) (assoc :is-error true)))
 
 (defn- add-usage [total usage]
   (merge-with (fn [left right]
@@ -411,13 +452,16 @@
     event))
 
 (defn- set-phase! [ctx state listeners phase & [extra]]
-  (let [next-state (cond-> (merge @state {:phase phase} extra)
-                     (= phase :model)
-                     (assoc :partial-assistant "" :partial-reasoning "")
+  (let [next-state
+        (swap! state
+               (fn [current]
+                 (cond-> (-> (merge current {:phase phase} extra)
+                             (assoc :revision (inc (or (:revision current) 0))))
+                   (= phase :model)
+                   (assoc :partial-assistant "" :partial-reasoning "")
 
-                     (not= phase :model)
-                     (dissoc :partial-assistant :partial-reasoning))]
-    (reset! state next-state)
+                   (not= phase :model)
+                   (dissoc :partial-assistant :partial-reasoning))))]
     (publish! ctx listeners :agent/state next-state)
     next-state))
 
@@ -429,19 +473,25 @@
                   nil)
           delta (:delta event)]
       (when (and field (string? delta))
-        (let [next-state (swap! state update field str delta)]
-          (publish! ctx listeners :agent/state next-state))))))
+        (let [[before next-state]
+              (swap-vals! state
+                          (fn [current]
+                            (if (= :model (:phase current))
+                              (-> current
+                                  (update field str delta)
+                                  (update :revision (fnil inc 0)))
+                              current)))]
+          (when (not= (:revision before) (:revision next-state))
+            (publish! ctx listeners :agent/state next-state)))))))
 
 (defn- drain-kind! [queue kind]
-  (let [selected (atom [])]
-    (swap! queue
-           (fn [items]
-             (reduce (fn [remaining item]
-                       (if (= kind (:kind item))
-                         (do (swap! selected conj item) remaining)
-                         (conj remaining item)))
-                     [] items)))
-    @selected))
+  (loop []
+    (let [items @queue
+          selected (filterv #(= kind (:kind %)) items)
+          remaining (filterv #(not= kind (:kind %)) items)]
+      (if (compare-and-set! queue items remaining)
+        selected
+        (recur)))))
 
 (defn- inject-queued! [ctx queue listeners kind]
   (let [items (drain-kind! queue kind)]
@@ -518,13 +568,13 @@
         context (kernel/service ctx :context/manager)
         max-retries (or (:max-retries config) 2)
         retry-delay-ms (or (:retry-delay-ms config) 250)]
-    (loop [attempt 0 overflow-retried? false]
+    (loop [attempt 0 overflow-retried? false request request]
       (cancellation/throw-if-cancelled! cancel-token)
       (let [prepared (if context ((:prepare! context) request) request)]
         (set-phase! ctx state listeners :model {:attempt attempt})
         (let [outcome (try
                         {:response (kernel/waterfall ctx :llm/request
-                                                     prepared llm)}
+                                                     prepared #(llm (attachments/resolve-request ctx %)))}
                         (catch Throwable error {:error error}))
               error (:error outcome)]
           (cond
@@ -541,7 +591,8 @@
                                                       [:options :provider])})
               (publish! ctx listeners :agent/retry
                         {:reason :context-overflow :attempt (inc attempt)})
-              (recur (inc attempt) true))
+              (recur (inc attempt) true
+                     (assoc prepared :messages (messages ctx))))
 
             (and (retryable? error) (< attempt max-retries))
             (do
@@ -553,7 +604,7 @@
                          :delay-ms (* retry-delay-ms (inc attempt))})
               (cancellable-wait! cancel-token
                                  (* retry-delay-ms (inc attempt)))
-              (recur (inc attempt) overflow-retried?))
+              (recur (inc attempt) overflow-retried? prepared))
 
             :else (throw error)))))))
 
@@ -674,6 +725,7 @@
   [ctx config active admission-lock prompt options queue state listeners]
   (let [token (or (:cancel-token options) (cancellation/create-token))
         run-id (str (random-uuid))]
+    (cancellation/throw-if-cancelled! token)
     (locking admission-lock
       (when-not (compare-and-set! active nil {:token token :run-id run-id
                                               :accepting-queue? true})
@@ -725,7 +777,7 @@
            admission-lock (Object.)
            queue (atom [])
            listeners (atom {})
-           state (atom {:phase :idle :run-id nil})
+           state (atom {:phase :idle :run-id nil :revision 0})
            run (fn
                  ([prompt] (run-agent! ctx config active admission-lock prompt
                                        {} queue state listeners))

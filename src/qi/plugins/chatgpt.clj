@@ -3,6 +3,7 @@
   (:require [qi.cancellation :as cancellation]
             [qi.kernel :as kernel]
             [qi.streaming :as streaming]
+            [qi.tool-images :as images]
             [babashka.http-client :as http]
             [cheshire.core :as json]
             [clojure.java.io :as io]
@@ -152,7 +153,7 @@
                   (fallback-assistant-items message))
     "tool" [{:type "function_call_output"
               :call_id (:tool_call_id message)
-              :output (:content message)}]
+              :output (images/responses-output message)}]
     "system" [{:role "system" :content (:content message)}]
     (throw (ex-info "Unsupported message role for Responses API"
                     {:role (:role message)}))))
@@ -385,6 +386,7 @@
           (:response result))))))
 
 (defn- generate [ctx config transport request]
+  (images/require-tool-images! config #{:text :image} :chatgpt-subscription request)
   ;; Re-read the cache for every request so a token refreshed by Codex is picked
   ;; up without restarting this agent.
   (let [auth-id (or (:auth-id config) (:provider-id config) :chatgpt)
@@ -503,8 +505,7 @@
               (or (:default-thinking-level config)
                   (some-> (get-in config [:extra-body :reasoning :effort])
                           keyword))
-              :input-modalities (or (:input-modalities config)
-                                    #{:text :image})
+              :input-modalities (images/input-modalities config #{:text :image})
               :experimental true
               :generate generator}))
            (kernel/register-service! ctx :llm/generate generator)))

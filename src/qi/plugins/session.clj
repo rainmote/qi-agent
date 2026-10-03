@@ -2,6 +2,7 @@
   "Recoverable append-only JSONL sessions with checkpoints and safe forks."
   (:require [qi.kernel :as kernel]
             [qi.secure-files :as secure]
+            [qi.tool-images :as images]
             [cheshire.core :as json]
             [clojure.java.io :as io]
             [clojure.string :as str])
@@ -113,7 +114,7 @@
 
 (defn- message-summary [message]
   (let [role (:role message)
-        content (:content message)
+        content (images/text-only-content (:content message))
         tool-names (->> (:tool_calls message)
                         (keep #(get-in % [:function :name]))
                         (str/join ", "))]
@@ -122,12 +123,39 @@
            (and (string? content) (not (str/blank? content))) content
            (seq content) (pr-str content)
            (not (str/blank? tool-names)) (str "called tools " tool-names)
-           :else "[no text]"))))
+           :else "[no text]")
+         (when (seq (:images message)) " [Screenshot omitted; recapture if needed.]"))))
 
 (defn- deterministic-summary [messages max-chars]
   (let [text (str/join "\n" (map message-summary messages))]
     (str (subs text 0 (min max-chars (count text)))
          (when (> (count text) max-chars) "\n[summary truncated]"))))
+
+(defn compaction-plan
+  "Split a snapshot without separating an assistant tool batch from its results.
+  Retention is a minimum: a boundary inside a batch moves before that batch."
+  [messages retain]
+  (let [messages (vec messages)
+        target (max 0 (- (count messages) retain))
+        boundary
+        (loop [index 0 pending #{} safe 0]
+          (if (= index target)
+            safe
+            (let [message (nth messages index)
+                  pending (cond
+                            (seq (:tool_calls message))
+                            (into pending (map :id (:tool_calls message)))
+
+                            (= "tool" (:role message))
+                            (disj pending (:tool_call_id message))
+
+                            :else pending)
+                  next-index (inc index)]
+              (recur next-index pending
+                     (if (empty? pending) next-index safe)))))]
+    {:messages messages
+     :dropped (subvec messages 0 boundary)
+     :retained (subvec messages boundary)}))
 
 (defn- write-events-atomically! [destination events]
   (ensure-parent! destination)
@@ -207,18 +235,25 @@
                           (notify! item)))))
            messages #(effective-messages @events)
            compact-body!
-           (fn [{:keys [summary retain]
+           (fn [{:keys [summary retain plan]
                  :or {retain retain-messages}}]
               (when-not (pos-int? retain)
                 (throw (ex-info ":retain must be a positive integer"
                                 {:retain retain})))
-              (let [current (messages)
-                    dropped-count (max 0 (- (count current) retain))]
-                (if (zero? dropped-count)
+              (locking lock
+               (let [current (messages)
+                     {:keys [dropped retained] :as plan}
+                     (or plan (compaction-plan current retain))]
+                (cond
+                  (not= current (:messages plan))
+                  {:compacted false :reason :context-changed
+                   :message-count (count current)}
+
+                  (empty? dropped)
                   {:compacted false :message-count (count current)}
-                  (let [dropped (take dropped-count current)
-                        kept (take-last retain current)
-                        summary-text (if (str/blank? summary)
+
+                  :else
+                  (let [summary-text (if (str/blank? summary)
                                        (deterministic-summary
                                         dropped max-summary-chars)
                                        summary)
@@ -227,15 +262,15 @@
                                     :content
                                     (str "Previous conversation summary:\n"
                                          summary-text)}
-                                   kept))
+                                   retained))
                         item (append!
                               "session/compaction"
                               {:original_message_count (count current)
-                               :retained_message_count retain
+                               :retained_message_count (count retained)
                                :replacement_messages replacement})]
                     {:compacted true
                      :event-id (:id item)
-                     :message-count (count replacement)}))))
+                     :message-count (count replacement)})))))
            compact! (fn
                       ([] (compact-body! {}))
                       ([options] (compact-body! options)))

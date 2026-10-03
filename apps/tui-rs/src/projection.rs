@@ -118,19 +118,25 @@ pub fn from_snapshot(snapshot: Snapshot) -> UiProjection {
     let mut projection = UiProjection {
         session_id: snapshot.session_id,
         cursor: snapshot.cursor,
-        state: normalize_state(&snapshot.state),
-        interactions: snapshot
-            .interactions
-            .iter()
-            .filter_map(normalize_interaction)
-            .collect(),
-        models: snapshot.models,
         ..UiProjection::default()
     };
     let mut events = snapshot.events;
     events.sort_by_key(|event| event.seq);
     for event in events {
         if !event.id.is_empty() && !projection.seen_event_ids.insert(event.id.clone()) {
+            continue;
+        }
+        // History is durable; runtime state and approvals belong to the current
+        // worker snapshot, even when an old worker died before resolving them.
+        if matches!(
+            event.event.as_str(),
+            "agent/state"
+                | "runtime/state"
+                | "llm/stream"
+                | "interaction/request"
+                | "interaction/resolved"
+                | "approval/event"
+        ) {
             continue;
         }
         projection = apply_event(
@@ -142,12 +148,35 @@ pub fn from_snapshot(snapshot: Snapshot) -> UiProjection {
             Some(event.seq),
         );
     }
+    projection.state_revision = u64_at(&snapshot.state, &["revision"]);
+    projection.state = normalize_state(&snapshot.state);
+    projection.snapshot_interaction_revision = snapshot.interactions_revision;
+    for raw in &snapshot.interactions {
+        if let Some(interaction) = normalize_interaction(raw) {
+            if let Some(revision) = raw.get("revision").and_then(Value::as_u64) {
+                projection
+                    .interaction_revisions
+                    .insert(interaction.id.clone(), revision);
+            }
+            projection.interactions.push(interaction);
+        }
+    }
+    projection.models = snapshot.models;
+    if projection.state.phase == "idle" {
+        terminalize_open_tools(&mut projection, "Turn ended before tool completion");
+    }
     sync_streaming(&mut projection);
     projection
 }
 
 pub fn apply_envelope(mut projection: UiProjection, envelope: &Envelope) -> UiProjection {
-    if envelope.kind != "event" {
+    if envelope.kind != "event"
+        || envelope
+            .cursor
+            .map(|c| c.generation)
+            .or(envelope.generation)
+            .is_some_and(|generation| generation < projection.cursor.generation)
+    {
         return projection;
     }
     if let Some(id) = envelope.event_id.as_ref()
@@ -173,6 +202,29 @@ pub fn apply_envelope(mut projection: UiProjection, envelope: &Envelope) -> UiPr
     }
     sync_streaming(&mut projection);
     projection
+}
+
+fn accept_interaction_revision(
+    projection: &mut UiProjection,
+    id: &str,
+    revision: Option<u64>,
+) -> bool {
+    let known = projection
+        .interaction_revisions
+        .get(id)
+        .copied()
+        .into_iter()
+        .chain(projection.snapshot_interaction_revision)
+        .max();
+    if known.is_some_and(|known| revision.is_none_or(|next| next <= known)) {
+        return false;
+    }
+    if let Some(revision) = revision {
+        projection
+            .interaction_revisions
+            .insert(id.to_owned(), revision);
+    }
+    true
 }
 
 fn record_run_error(projection: &mut UiProjection, text: String, fallback_id: String) {
@@ -203,13 +255,27 @@ fn apply_event(
     match event {
         "message" | "session/message" => add_message(&mut projection, data, fallback_id),
         "agent/state" | "runtime/state" => {
+            let state = object_at(data, &["state"]).unwrap_or(data);
+            let revision = u64_at(state, &["revision"]);
+            if projection
+                .state_revision
+                .is_some_and(|known| revision.is_none_or(|next| next <= known))
+            {
+                return projection;
+            }
+            projection.state_revision = revision;
             let previous_phase = projection.state.phase.clone();
-            projection.state = normalize_state(object_at(data, &["state"]).unwrap_or(data));
+            projection.state = normalize_state(state);
             if previous_phase != "idle" && projection.state.phase == "idle" {
                 terminalize_open_tools(&mut projection, "Turn ended before tool completion");
             }
         }
         "llm/stream" => {
+            // Versioned states carry the complete text. Reapplying deltas would
+            // duplicate it and could resurrect a completed run.
+            if projection.state_revision.is_some() {
+                return projection;
+            }
             let stream_type = string_at(data, &["type"]).unwrap_or_default();
             let delta = string_at(data, &["delta"]).unwrap_or_default();
             if !delta.is_empty() {
@@ -253,6 +319,10 @@ fn apply_event(
             let fallback = Value::Object(data.clone());
             let source = value_at(data, &["interaction", "request"]).unwrap_or(&fallback);
             if let Some(interaction) = normalize_interaction(source) {
+                let revision = source.get("revision").and_then(Value::as_u64);
+                if !accept_interaction_revision(&mut projection, &interaction.id, revision) {
+                    return projection;
+                }
                 projection
                     .interactions
                     .retain(|item| item.id != interaction.id);
@@ -261,6 +331,9 @@ fn apply_event(
         }
         "interaction/resolved" | "approval/event" => {
             if let Some(id) = string_at(data, &["id", "interaction-id", "interaction_id"]) {
+                if !accept_interaction_revision(&mut projection, &id, u64_at(data, &["revision"])) {
+                    return projection;
+                }
                 projection.interactions.retain(|item| item.id != id);
             }
         }
@@ -608,6 +681,94 @@ fn sync_streaming(projection: &mut UiProjection) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn envelope(event: &str, data: Value) -> Envelope {
+        serde_json::from_value(json!({"type":"event", "event":event, "data":data})).unwrap()
+    }
+
+    #[test]
+    fn snapshot_is_authoritative_after_worker_restart() {
+        let snapshot = serde_json::from_value(json!({
+            "state":{"phase":"idle","revision":0}, "interactions":[], "interactions_revision":0,
+            "events":[
+                {"id":"request","seq":1,"type":"interaction/request","data":{"id":"expired","revision":9}},
+                {"id":"state","seq":2,"type":"agent/state","data":{"phase":"model","revision":10}},
+                {"id":"message","seq":3,"type":"message","data":{"message":{"role":"user","content":"preserved"}}}
+            ]
+        })).unwrap();
+        let p = from_snapshot(snapshot);
+        assert!(p.interactions.is_empty());
+        assert_eq!(p.state.phase, "idle");
+        assert_eq!(p.state_revision, Some(0));
+        assert_eq!(p.history.len(), 1);
+    }
+
+    #[test]
+    fn state_revisions_reject_late_events_and_unversioned_deltas() {
+        let snapshot =
+            serde_json::from_value(json!({"state":{"phase":"idle","revision":4}})).unwrap();
+        let mut p = from_snapshot(snapshot);
+        for event in [
+            envelope("agent/state", json!({"phase":"model","revision":3})),
+            envelope("runtime/state", json!({"phase":"model","revision":4})),
+            envelope("agent/state", json!({"phase":"model"})),
+            envelope("llm/stream", json!({"type":"text/delta","delta":"stale"})),
+        ] {
+            p = apply_envelope(p, &event);
+        }
+        assert_eq!(p.state.phase, "idle");
+        assert!(p.state.partial_assistant.is_empty());
+        let p = apply_envelope(
+            p,
+            &envelope(
+                "agent/state",
+                json!({"phase":"model","revision":5,"partial-assistant":"fresh"}),
+            ),
+        );
+        assert_eq!(p.state.partial_assistant, "fresh");
+    }
+
+    #[test]
+    fn interaction_versions_are_per_id_and_keep_resolved_tombstones() {
+        let snapshot =
+            serde_json::from_value(json!({"interactions":[],"interactions_revision":5})).unwrap();
+        let mut p = from_snapshot(snapshot);
+        for (kind, data) in [
+            (
+                "interaction/request",
+                json!({"id":"snapshot-old","revision":5}),
+            ),
+            (
+                "interaction/resolved",
+                json!({"id":"resolved","revision":9}),
+            ),
+            ("interaction/request", json!({"id":"resolved","revision":8})),
+            ("interaction/request", json!({"id":"other","revision":6})),
+        ] {
+            p = apply_envelope(p, &envelope(kind, data));
+        }
+        assert_eq!(p.interactions.len(), 1);
+        assert_eq!(p.interactions[0].id, "other");
+        let p = apply_envelope(
+            p,
+            &envelope("interaction/resolved", json!({"id":"other","revision":7})),
+        );
+        assert!(p.interactions.is_empty());
+    }
+
+    #[test]
+    fn older_generation_cannot_override_a_new_snapshot() {
+        let snapshot = serde_json::from_value(
+            json!({"cursor":{"generation":2,"sequence":0},"state":{"phase":"idle","revision":0}}),
+        )
+        .unwrap();
+        let mut event = envelope("agent/state", json!({"phase":"model","revision":99}));
+        event.generation = Some(1);
+        assert_eq!(
+            apply_envelope(from_snapshot(snapshot), &event).state.phase,
+            "idle"
+        );
+    }
 
     #[test]
     fn snapshot_and_live_tool_events_share_a_batch() {

@@ -4,16 +4,35 @@
             [qi.cli :as cli]
             [qi.install :as install]
             [qi.api :as api]
+            [qi.env :as env]
             [qi.kernel :as kernel]
             [qi.plugin :as plugin]
+            [qi.presets :as presets]
             [qi.presets-test]
             [qi.runtime-inspect-test]
             [qi.runtime-lab-test]
+            [qi.runtime-recovery-test]
+            [qi.remote-snapshot-test]
+            [qi.remote-interaction-cancel-test]
+            [qi.computer-use-test]
+            [qi.mcp-stdio-test]
+            [qi.tool-images-test]
+            [qi.attachments-test]
+            [qi.jobs-test]
+            [qi.mcp-http-test]
+            [qi.mcp-client-test]
+            [qi.web-tools-test]
+            [qi.orchestration-test]
+            [qi.orchestration-recovery-test]
+            [qi.planning-protocol-test]
+            [qi.automation-test]
+            [qi.plugin-manager-test]
             [qi.session-title-test]
             [qi.protocol :as protocol]
             [qi.sandbox :as sandbox]
             [qi.ui :as ui]
             [qi.web-test]
+            [babashka.process :as process]
             [qi.plugins.chatgpt]
             [qi.plugins.omp]
             [qi.plugins.openai]
@@ -38,6 +57,70 @@
 
 (declare delete-tree! tool-call)
 
+(deftest shipped-harness-profiles-mount-offline-with-parent-only-capabilities
+  (let [new-plugins '#{qi.plugins.jobs qi.plugins.mcp-client qi.plugins.web-tools
+                      qi.plugins.planning qi.plugins.workflow qi.plugins.team
+                      qi.plugins.automation qi.plugins.plugin-manager}
+        expected-services #{:execution/jobs :mcp/runtime :web/runtime
+                            :planning/runtime :workflow/runtime :team/runtime
+                            :automation/control :plugins/manager}]
+    (doseq [path ["agent.edn" "presets/standard/agent.edn" "presets/creator/agent.edn"]]
+      (let [root (fs/real-path (fs/create-temp-dir {:prefix "qi-harness-profile-"}))
+            config (plugin/read-config path)
+            specs (:plugins config)
+            child-config (some #(when (= 'qi.plugins.subagent-in-process (:ns %))
+                                  (:config %)) specs)
+            namespaces (mapv :ns specs)
+            isolated
+            (update config :plugins
+                    #(mapv (fn [spec]
+                             (update spec :config
+                                     (fn [options]
+                                       (let [options (or options {})
+                                             options (cond-> options
+                                                       (contains? options :root) (assoc :root (str root)))]
+                                         (case (:ns spec)
+                                           qi.plugins.session-catalog (assoc options :directory (str (fs/path root "sessions")))
+                                           qi.plugins.trust (assoc options :trusted false :trust-file (str (fs/path root "trust.edn")))
+                                           qi.plugins.resources (assoc options :user-dir (str (fs/path root "resources")))
+                                           qi.plugins.presets (assoc options :user-root (str (fs/path root "presets")))
+                                           qi.plugins.plugin-manager (assoc options :user-dir (str (fs/path root "packages")))
+                                           options))))) %))]
+        (try
+          (is (every? (set namespaces) new-plugins) path)
+          (is (< (.indexOf namespaces 'qi.plugins.jobs) (.indexOf namespaces 'qi.plugins.tools)) path)
+          (is (not-any? new-plugins (map :ns (get-in child-config [:child-profile :plugins]))) path)
+          (is (not-any? #{"bash" "write" "edit" "job_kill" "web_search" "plugin_manage"}
+                        (:allowed-tools child-config)) path)
+          ;; Mount the real composition without reading personal trust, resource,
+          ;; provider-settings, session or plugin-package data. No model runs.
+          (with-redefs [env/get (fn [& _] nil) env/home (constantly (str root))]
+            (let [ctx (plugin/boot! isolated)]
+              (try
+                (is (every? #(kernel/service ctx %) expected-services) path)
+                (is (= [] (:servers ((:status (kernel/require-service ctx :mcp/runtime))))) path)
+                (is (false? (:search-enabled ((:status (kernel/require-service ctx :web/runtime))))) path)
+                (is (false? (:available? (kernel/require-service ctx :automation/control))) path)
+                (is (empty? ((:list (kernel/require-service ctx :execution/jobs)))) path)
+                (finally (kernel/dispose-all! ctx)))))
+          (finally (fs/delete-tree root)))))))
+
+(deftest shared-read-only-method-catalog-keeps-new-mutations-private
+  (let [catalog (json/parse-string (slurp "protocol/methods.json") true)
+        read-only (set (:readOnly catalog))
+        exempt (into read-only (:connection catalog))]
+    (is (every? read-only ["mcp.status" "web.status" "planning.show"
+                          "workflow.show" "workflow.status" "team.show" "team.mailbox"
+                          "plugins.list" "plugins.inspect" "plugins.ui-slots"]))
+    (is (not-any? exempt ["mcp.control" "mcp.configure" "plugins.manage"
+                         "planning.submit" "planning.approve" "workflow.run"
+                         "workflow.resume" "workflow.cancel" "team.claim"
+                         "team.send" "schedule.add" "schedule.update" "schedule.pause"
+                         "schedule.resume" "schedule.cancel" "goal.set" "goal.update"
+                         "goal.pause" "goal.resume" "goal.cancel" "goal.complete"
+                         "automation.resolve"]))
+    (is (= (count (:readOnly catalog)) (count read-only)))))
+
 (deftest legacy-plugin-namespaces-resolve-to-qi-builtins
   (let [ctx (plugin/boot! {:plugins [{:ns 'agent.plugins.math}]})]
     (try
@@ -47,52 +130,83 @@
       (finally
         (kernel/dispose-all! ctx)))))
 
-(deftest global-installer-keeps-the-callers-workspace
-  (let [launcher (install/launcher-script "/opt/qi-agent")]
+(deftest global-installer-keeps-code-data-and-the-callers-workspace-separated
+  (let [launcher (install/launcher-script "/opt/qi-agent"
+                                          "/var/lib/qi-agent-user"
+                                          "/opt/bin")]
     (is (str/includes? launcher "# Managed by qi-agent `bb install`."))
+    (is (str/includes? launcher "QI_AGENT_HOME='/var/lib/qi-agent-user'"))
+    (is (str/includes? launcher "\"${1:-}\" = \"upgrade\""))
+    (is (str/includes? launcher "bb --config \"$INSTALL_DIR/bb.edn\" update"))
     (is (str/includes?
          launcher
          "\"$INSTALL_DIR/apps/tui-rs/target/release/qi-agent\""))
     (is (str/includes? launcher "--repository-root \"$INSTALL_DIR\""))
-    (is (str/includes? launcher "--config \"$INSTALL_DIR/agent.edn\""))
+    (is (str/includes? launcher "--config \"$QI_AGENT_HOME/agent.edn\""))
     (is (str/includes? launcher "\"$@\""))
     (is (not (str/includes? launcher "cd ")))
     (is (install/path-entry? "/usr/bin:/opt/tools" "/opt/tools"))
     (is (not (install/path-entry? "/usr/bin:/opt/toolsmith" "/opt/tools")))))
 
-(deftest installer-stages-only-runtime-sources-and-one-release-binary
+(deftest installer-rejects-overlapping-code-and-data-layouts
+  (let [assert-safe! (var-get (ns-resolve 'qi.install 'assert-safe-layout!))]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"must not overlap"
+                          (assert-safe! "/srv/qi/source"
+                                        "/srv/qi/source/installed"
+                                        "/var/lib/qi-agent")))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"must not overlap"
+                          (assert-safe! "/srv/qi/source"
+                                        "/srv/qi"
+                                        "/var/lib/qi-agent")))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"must not be inside"
+                          (assert-safe! "/srv/qi/source"
+                                        "/opt/qi-agent"
+                                        "/opt/qi-agent/user-data")))))
+
+(deftest installer-restores-the-old-application-when-activation-fails
+  (let [root (.toFile (java.nio.file.Files/createTempDirectory
+                       "qi-agent-activation-rollback-"
+                       (make-array java.nio.file.attribute.FileAttribute 0)))
+        installed (io/file root "app")
+        missing-stage (io/file root "missing-stage")
+        activate! (var-get (ns-resolve 'qi.install 'activate-stage!))]
+    (try
+      (.mkdirs installed)
+      (spit (io/file installed "version") "old")
+      (is (thrown? Throwable (activate! missing-stage installed)))
+      (is (= "old" (slurp (io/file installed "version"))))
+      (finally (delete-tree! root)))))
+
+(deftest installer-reports-backup-cleanup-separately-from-activation
+  (let [root (.toFile (java.nio.file.Files/createTempDirectory
+                       "qi-agent-activation-cleanup-"
+                       (make-array java.nio.file.attribute.FileAttribute 0)))
+        installed (io/file root "app")
+        stage (io/file root "stage")
+        warnings (java.io.StringWriter.)
+        activate! (var-get (ns-resolve 'qi.install 'activate-stage!))]
+    (try
+      (.mkdirs installed)
+      (.mkdirs stage)
+      (spit (io/file installed "version") "old")
+      (spit (io/file stage "version") "new")
+      (with-redefs [fs/delete-tree
+                    (fn [_]
+                      (throw (ex-info "simulated cleanup failure" {})))]
+        (binding [*err* warnings]
+          (is (nil? (activate! stage installed)))))
+      (is (= "new" (slurp (io/file installed "version"))))
+      (is (str/includes? (str warnings) "old application backup"))
+      (finally (delete-tree! root)))))
+
+(deftest installer-prunes-build-intermediates-and-keeps-one-release-binary
   (let [root (.toFile (java.nio.file.Files/createTempDirectory
                        "qi-agent-install-stage-"
                        (make-array java.nio.file.attribute.FileAttribute 0)))
-        source (io/file root "source")
         stage (io/file root "stage")
-        copy-source! (var-get (ns-resolve 'qi.install 'copy-source!))
         prune-build-stage! (var-get (ns-resolve 'qi.install
                                                 'prune-build-stage!))]
     (try
-      (doseq [directory ["src/qi" "plugins/example" "presets/standard"
-                         "apps/tui-rs/src"
-                         "apps/tui-rs/target/debug" "apps/web/src"]]
-        (.mkdirs (io/file source directory)))
-      (doseq [[path value]
-              [["src/qi/cli.clj" "runtime"]
-               ["plugins/example/tool.clj" "plugin"]
-               ["presets/standard/preset.edn" "{:name \"Standard\"}"]
-               ["presets/standard/agent.edn" "{:plugins []}"]
-               ["apps/tui-rs/src/main.rs" "fn main() {}"]
-               ["apps/tui-rs/Cargo.toml" "[package]"]
-               ["apps/tui-rs/Cargo.lock" "# lock"]
-               ["apps/tui-rs/target/debug/cache" "large-cache"]
-               ["apps/web/src/App.tsx" "web-source"]
-               ["bb.edn" "{}"] ["agent.edn" "{}"]
-               ["LICENSE" "MIT"] ["README.md" "qi-agent"]]]
-        (spit (io/file source path) value))
-      (copy-source! source stage)
-      (is (.isFile (io/file stage "src/qi/cli.clj")))
-      (is (.isFile (io/file stage "presets/standard/agent.edn")))
-      (is (.isFile (io/file stage "apps/tui-rs/src/main.rs")))
-      (is (not (.exists (io/file stage "apps/tui-rs/target"))))
-      (is (not (.exists (io/file stage "apps/web"))))
       (let [release (io/file stage "apps/tui-rs/target/release")]
         (.mkdirs release)
         (spit (io/file release "qi-agent") "binary")
@@ -102,28 +216,170 @@
                (->> (.listFiles release) (map #(.getName %)) sort vec))))
       (finally (delete-tree! root)))))
 
-(deftest installer-preserves-an-active-profile-unless-reset-is-explicit
+(deftest installer-migrates-the-legacy-in-app-profile-to-private-user-data
   (let [root (.toFile (java.nio.file.Files/createTempDirectory
                        "qi-agent-config-preservation-"
                        (make-array java.nio.file.attribute.FileAttribute 0)))
         install-path (io/file root "installed")
-        stage (io/file root "stage")
-        preserve! (var-get (ns-resolve 'qi.install
-                                       'preserve-installed-config!))]
+        data-path (io/file root "user-data")
+        template (io/file root "default-agent.edn")
+        ensure! (var-get (ns-resolve 'qi.install 'ensure-user-profile!))]
     (try
       (.mkdirs install-path)
-      (.mkdirs stage)
       (spit (io/file install-path "agent.edn") "{:provider :chatgpt}")
-      (spit (io/file stage "agent.edn") "{:provider :openai}")
+      (spit template "{:provider :openai}")
 
-      (is (true? (preserve! install-path stage false)))
+      (is (= :migrated (ensure! data-path install-path template false)))
       (is (= "{:provider :chatgpt}"
-             (slurp (io/file stage "agent.edn"))))
+             (slurp (io/file data-path "agent.edn"))))
 
-      (spit (io/file stage "agent.edn") "{:provider :openai}")
-      (is (nil? (preserve! install-path stage true)))
+      (is (= :preserved (ensure! data-path install-path template false)))
+      (is (= "{:provider :chatgpt}"
+             (slurp (io/file data-path "agent.edn"))))
+
+      (is (= :reset (ensure! data-path install-path template true)))
       (is (= "{:provider :openai}"
-             (slurp (io/file stage "agent.edn"))))
+             (slurp (io/file data-path "agent.edn"))))
+      (finally (delete-tree! root)))))
+
+(defn- git-test! [directory & arguments]
+  (-> (apply process/shell {:dir (str directory) :out :string :err :string}
+             "git" arguments)
+      :out
+      str/trim))
+
+(defn- write-test-file! [root path value]
+  (let [file (io/file (str root) path)]
+    (.mkdirs (.getParentFile file))
+    (spit file value)
+    file))
+
+(defn- fake-release-build! [stage]
+  (let [binary (write-test-file! stage
+                                 "apps/tui-rs/target/release/qi-agent"
+                                 "test-binary")]
+    (.setExecutable binary true false)
+    binary))
+
+(deftest git-install-and-update-preserve-all-user-and-project-data
+  (let [root (.toFile (java.nio.file.Files/createTempDirectory
+                       "qi-agent-git-update-"
+                       (make-array java.nio.file.attribute.FileAttribute 0)))
+        origin (io/file root "origin.git")
+        source (io/file root "source")
+        data (io/file root "home")
+        installed (io/file data "app")
+        bin (io/file root "bin")
+        workspace (io/file root "workspace")
+        install-options {:source-root (str source)
+                         :repository (str "file://" origin)
+                         :branch "main"
+                         :install-dir (str installed)
+                         :data-dir (str data)
+                         :bin-dir (str bin)
+                         :build-fn fake-release-build!
+                         :validate-fn (constantly true)}]
+    (try
+      (.mkdirs source)
+      (git-test! root "init" "--bare" (str origin))
+      (git-test! source "init" "--initial-branch=main")
+      (git-test! source "config" "user.name" "qì Agent Test")
+      (git-test! source "config" "user.email" "test@qi-agent.invalid")
+      (doseq [[path value]
+              [[".gitignore" "target/\n"]
+               ["bb.edn" "{:paths [\"src\" \"plugins\"]}\n"]
+               ["agent.edn" "{:profile :default-v1}\n"]
+               ["src/qi/install.clj" "(ns qi.install)\n"]
+               ["src/qi/version.clj" "(def version 1)\n"]
+               ["plugins/.keep" ""]
+               ["presets/.keep" ""]
+               ["apps/tui-rs/Cargo.toml" "[package]\nname='fixture'\nversion='0.1.0'\n"]]]
+        (write-test-file! source path value))
+      (git-test! source "add" ".")
+      (git-test! source "commit" "-m" "initial")
+      (git-test! source "remote" "add" "origin" (str origin))
+      (git-test! source "push" "-u" "origin" "main")
+
+      (install/install! install-options)
+      (is (.isDirectory (io/file installed ".git")))
+      (is (= "{:profile :default-v1}\n"
+             (slurp (io/file data "agent.edn"))))
+      (is (str/includes? (slurp (io/file bin "qi-agent"))
+                         "--config \"$QI_AGENT_HOME/agent.edn\""))
+
+      (spit (io/file data "agent.edn") "{:profile :personal}\n")
+      (write-test-file! data "memories/MEMORY.md" "remember-me\n")
+      (write-test-file! data "trust.edn" "{:roots {\"/workspace\" :allow}}\n")
+      (write-test-file! data "state/supervisor.sqlite" "database-sentinel")
+      (write-test-file! data "web/providers.json" "provider-sentinel")
+      (write-test-file! workspace ".qi-agent/sessions/history.jsonl"
+                        "conversation-sentinel\n")
+
+      (write-test-file! source "agent.edn" "{:profile :default-v2}\n")
+      (write-test-file! source "src/qi/version.clj" "(def version 2)\n")
+      (git-test! source "add" ".")
+      (git-test! source "commit" "-m" "update")
+      (git-test! source "push" "origin" "main")
+
+      (let [result (install/update! (dissoc install-options :source-root))]
+        (is (true? (:updated result)))
+        (is (not= (:previous result) (:current result))))
+      (is (= "(def version 2)\n"
+             (slurp (io/file installed "src/qi/version.clj"))))
+      (is (= "{:profile :default-v2}\n"
+             (slurp (io/file installed "agent.edn"))))
+      (is (= "{:profile :personal}\n" (slurp (io/file data "agent.edn"))))
+      (is (= "remember-me\n" (slurp (io/file data "memories/MEMORY.md"))))
+      (is (= "{:roots {\"/workspace\" :allow}}\n"
+             (slurp (io/file data "trust.edn"))))
+      (is (= "database-sentinel"
+             (slurp (io/file data "state/supervisor.sqlite"))))
+      (is (= "provider-sentinel" (slurp (io/file data "web/providers.json"))))
+      (is (= "conversation-sentinel\n"
+             (slurp (io/file workspace ".qi-agent/sessions/history.jsonl"))))
+      (is (str/blank? (git-test! installed "status" "--porcelain"
+                                  "--untracked-files=all")))
+
+      (let [result (install/update! (assoc (dissoc install-options :source-root)
+                                           :check true))]
+        (is (false? (:available result)))
+        (is (false? (:updated result))))
+
+      (write-test-file! source "src/qi/version.clj" "(def version 3)\n")
+      (git-test! source "add" ".")
+      (git-test! source "commit" "-m" "broken-build-candidate")
+      (git-test! source "push" "origin" "main")
+      (let [error (try
+                    (install/update!
+                     (assoc (dissoc install-options :source-root)
+                            :build-fn
+                            (fn [_]
+                              (throw (ex-info "simulated build failure" {})))))
+                    nil
+                    (catch Throwable value value))]
+        (is (some? error))
+        (is (= "simulated build failure" (ex-message error))))
+      (is (= "(def version 2)\n"
+             (slurp (io/file installed "src/qi/version.clj"))))
+      (is (= "{:profile :personal}\n" (slurp (io/file data "agent.edn"))))
+      (is (= "conversation-sentinel\n"
+             (slurp (io/file workspace ".qi-agent/sessions/history.jsonl"))))
+
+      (let [result (install/update! (dissoc install-options :source-root))]
+        (is (true? (:updated result))))
+      (is (= "(def version 3)\n"
+             (slurp (io/file installed "src/qi/version.clj"))))
+
+      (spit (io/file installed "src/qi/version.clj") "local-edit\n")
+      (let [error (try
+                    (install/update! (dissoc install-options :source-root))
+                    nil
+                    (catch Throwable value value))]
+        (is (some? error))
+        (is (str/includes? (ex-message error) "local changes")))
+      (is (= "{:profile :personal}\n" (slurp (io/file data "agent.edn"))))
+      (is (= "conversation-sentinel\n"
+             (slurp (io/file workspace ".qi-agent/sessions/history.jsonl"))))
       (finally (delete-tree! root)))))
 
 (deftest reversible-kernel-effects
@@ -745,6 +1001,59 @@
       (finally
         (kernel/dispose-all! ctx)
         (delete-tree! directory)))))
+
+(deftest interrupted-repl-cleanup-cannot-discard-the-next-evaluation
+  (let [directory (fs/create-temp-dir {:prefix "qi-repl-interrupt-"})
+        marker (fs/path directory "started")
+        ctx (plugin/boot!
+             {:plugins [{:ns 'qi.plugins.bb-repl
+                         :config {:root (str directory) :sandbox :none
+                                  :timeout-ms 10000}}]})
+        repl (kernel/require-service ctx :execution/repl)
+        stop-var (ns-resolve 'qi.plugins.bb-repl 'stop-worker!)
+        stop-worker! @stop-var
+        intercepted? (atom false)
+        killed (promise)
+        release-cleanup (promise)]
+    (try
+      (with-redefs-fn
+        {stop-var (fn [worker]
+                    (if (compare-and-set! intercepted? false true)
+                      (do (stop-worker! worker)
+                          (deliver killed true)
+                          (deref release-cleanup 5000 nil))
+                      (stop-worker! worker)))}
+        (fn []
+          (let [running (future ((:eval! repl)
+                                 (str "(do (spit " (pr-str (str marker))
+                                      " \"started\") (Thread/sleep 8000))")))]
+            (loop [remaining 300]
+              (when (and (pos? remaining) (not (fs/exists? marker)))
+                (Thread/sleep 10)
+                (recur (dec remaining))))
+            (is (fs/exists? marker) "the first evaluation reached its blocking operation")
+            (let [interrupt (future ((:interrupt! repl) nil))]
+              (is (= true (deref killed 5000 ::timeout)))
+              (is (= false (:ok (deref running 5000 {}))))
+              ;; Keep the interrupt's cleanup open after the old eval has
+              ;; returned, then try to enter a new evaluation concurrently.
+              (let [entering (promise)
+                    next-eval (future (deliver entering true)
+                                      ((:eval! repl) "(def survivor 42)"))]
+                (is (= true (deref entering 5000 ::timeout)))
+                (is (= ::waiting (deref next-eval 100 ::waiting)))
+                (deliver release-cleanup true)
+                (is (= true (deref interrupt 5000 ::timeout)))
+                (is (= true (:ok (deref next-eval 5000 {}))))
+                (is (= "42" (:value ((:eval! repl) "survivor")))))))))
+      (is (= {:closed true} ((:close! repl))))
+      (is (= :closed (:status ((:status repl)))))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"REPL is closed"
+                            ((:eval! repl) "42")))
+      (finally
+        (deliver release-cleanup true)
+        (kernel/dispose-all! ctx)
+        (fs/delete-tree directory)))))
 
 (deftest jvm-clojure-repl-builds-an-isolated-project-classpath
   (let [directory (.toFile (java.nio.file.Files/createTempDirectory
@@ -3486,11 +3795,13 @@
           (let [registry (kernel/require-service ctx :llm/registry)
                 auth (kernel/require-service ctx :auth/store)
                 settings-service (kernel/require-service ctx :provider/settings)]
-            (is (= #{:acme :acme--2} (set (map :id ((:providers registry))))))
+            (is (= #{"acme-chat" "acme-reason"} (set (map :model ((:providers registry))))))
+            (is (= "acme-chat" (:model ((:select! registry) :acme)))
+                "legacy provider aliases resolve to a stable model identity")
             (is (= "Acme Chat" (:display-name ((:current registry)))))
             (is (= :off (:thinking-level ((:current registry)))))
             (is (= {:api-key "acme-secret"} ((:resolve! auth) :acme)))
-            ((:select! registry) :acme--2)
+            ((:select! registry) (:id (first (filter #(= "acme-reason" (:model %)) ((:providers registry))))))
             (write-settings!
              [{:id "acme"
                :name "Acme Updated"
@@ -3500,7 +3811,7 @@
                :models [{:id "acme-chat" :name "Acme Chat"}
                         {:id "acme-reason" :name "Acme Reason Updated"}]}])
             ((:reload! settings-service))
-            (is (= :acme--2 (:id ((:current registry))))
+            (is (= "acme-reason" (:model ((:current registry))))
                 "editing a provider preserves the selected model")
             (write-settings!
              [{:id "bravo"
@@ -3510,10 +3821,57 @@
                :apiKey "bravo-secret"
                :models [{:id "bravo-1" :name "Bravo One"}]}])
             (is (= {:providers 1 :models 1 :path (str settings)}
-                   ((:reload! settings-service))))
-            (is (= #{:bravo} (set (map :id ((:providers registry))))))
+                   (dissoc ((:reload! settings-service)) :warnings)))
+            (is (= #{"bravo-1"} (set (map :model ((:providers registry))))))
             (is (= {:api-key "bravo-secret"} ((:resolve! auth) :bravo)))
             (is (thrown? clojure.lang.ExceptionInfo ((:resolve! auth) :acme))))
+          (finally (kernel/dispose-all! ctx))))
+      (finally (delete-tree! directory)))))
+
+(deftest web-provider-reload-preserves-semantic-selection-and-thinking
+  (let [directory (.toFile (java.nio.file.Files/createTempDirectory
+                            "qi-provider-identity-" (make-array java.nio.file.attribute.FileAttribute 0)))
+        file (io/file directory "settings.json")
+        model (fn [id] {:id id :thinkingLevels ["low" "high"] :defaultThinkingLevel "low"})
+        write! (fn [models] (spit file (json/generate-string
+                                       {:version 1 :providers [{:id "other" :protocol "openai-completions"
+                                                                :baseUrl "https://example.invalid/v1" :models [(model "Z")]}
+                                                               {:id "review" :protocol "openai-completions"
+                                                                :baseUrl "https://example.invalid/v1"
+                                                                :models models}]})))]
+    (try
+      (write! (mapv model ["A" "B" "C"]))
+      (let [ctx (plugin/boot! {:plugins [{:ns 'qi.plugins.model-registry :config {:default-provider :review}}
+                                       {:ns 'qi.plugins.auth-store}
+                                       {:ns 'qi.plugins.provider-settings :config {:path (str file)}}]})]
+        (try
+          (let [registry (kernel/require-service ctx :llm/registry)
+                reload! (:reload! (kernel/require-service ctx :provider/settings))
+                entries (into {} (map (juxt :model :id) ((:providers registry))))
+                current (:current registry)]
+            (is (= "A" (:model (current))) "configured provider alias survives stable identity registration")
+            ((:select! registry) (get entries "A"))
+            ((:select-thinking! registry) :high)
+            ((:select! registry) (get entries "B"))
+            ((:select-thinking! registry) :high)
+            (doseq [ids [["A" "B" "C"] ["C" "B" "A"] ["X" "B" "C"] ["B" "C"]]]
+              (write! (mapv model ids))
+              (is (empty? (:warnings (reload!))))
+              (is (= (get entries "B") (:id (current))))
+              (is (= "B" (:model (current))))
+              (is (= :high (:thinking-level (current))))
+              (when (some #{"A"} ids)
+                (is (= :high (:thinking-level (first (filter #(= "A" (:model %)) ((:providers registry))))))
+                    "also retain effort for models not currently selected")))
+            (write! [(assoc (model "B") :thinkingLevels ["low"]) (model "C")])
+            (is (= 1 (count (:warnings (reload!)))))
+            (is (= :low (:thinking-level (current))))
+            (write! [(model "C")])
+            (is (= 1 (count (:warnings (reload!)))))
+            (is (= "C" (:model (current))))
+            (spit file "invalid-json")
+            (is (thrown? Exception (reload!)))
+            (is (= "C" (:model (current))) "invalid replacement leaves the working registry intact"))
           (finally (kernel/dispose-all! ctx))))
       (finally (delete-tree! directory)))))
 
@@ -3885,6 +4243,14 @@
   (let [{:keys [fail error]}
         (run-tests 'qi.test-runner 'qi.web-test 'qi.presets-test
                    'qi.runtime-inspect-test 'qi.runtime-lab-test
-                   'qi.session-title-test)]
+                   'qi.session-title-test 'qi.runtime-recovery-test
+                   'qi.remote-snapshot-test 'qi.remote-interaction-cancel-test
+                   'qi.computer-use-test
+                   'qi.mcp-stdio-test 'qi.tool-images-test
+                   'qi.attachments-test 'qi.jobs-test
+                   'qi.mcp-http-test 'qi.mcp-client-test 'qi.web-tools-test
+                   'qi.orchestration-test 'qi.orchestration-recovery-test
+                   'qi.planning-protocol-test 'qi.automation-test
+                   'qi.plugin-manager-test)]
     (when (pos? (+ fail error))
       (throw (ex-info "Tests failed" {:fail fail :error error})))))

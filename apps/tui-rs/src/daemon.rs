@@ -7,6 +7,8 @@ use crate::{
     worker_proxy::{WorkerDescriptor, read_descriptor, write_descriptor},
 };
 use anyhow::{Context, Result, anyhow, bail};
+use chrono::{Datelike, NaiveDate, TimeZone, Utc};
+use chrono_tz::Tz;
 use fs2::FileExt;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
@@ -28,7 +30,7 @@ use std::{
         mpsc::{self, SyncSender, TrySendError},
     },
     thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use uuid::Uuid;
 
@@ -37,7 +39,7 @@ const ATTACHMENT_QUEUE_LIMIT: usize = 256;
 const SNAPSHOT_INLINE_LIMIT: usize = 256 * 1024;
 const SNAPSHOT_CHUNK_CHARS: usize = 64 * 1024;
 const WORKER_RPC_TIMEOUT: Duration = Duration::from_secs(60);
-const SCHEMA_REVISION: i64 = 4;
+const SCHEMA_REVISION: i64 = 6;
 const DEFAULT_LOG_MAX_BYTES: u64 = 10 * 1024 * 1024;
 const DEFAULT_LOG_BACKUPS: usize = 3;
 const DEFAULT_MAX_WORKER_LOGS: usize = 100;
@@ -98,14 +100,29 @@ struct WorkerConnection {
 
 impl WorkerConnection {
     fn call(&self, method: &str, parameters: Value, timeout: Duration) -> Result<Value> {
-        let _guard = self
-            .lifecycle
-            .lock()
-            .expect("worker lifecycle mutex poisoned");
-        self.call_inner(method, parameters, timeout)
+        let started = Instant::now();
+        let pending = {
+            let _guard = self
+                .lifecycle
+                .lock()
+                .expect("worker lifecycle mutex poisoned");
+            self.begin_call(method, parameters)?
+        };
+        // Admission is fenced against retirement; waiting for the result must
+        // not prevent another caller from interrupting this operation.
+        self.finish_call(method, pending, timeout.saturating_sub(started.elapsed()))
     }
 
     fn call_inner(&self, method: &str, parameters: Value, timeout: Duration) -> Result<Value> {
+        let pending = self.begin_call(method, parameters)?;
+        self.finish_call(method, pending, timeout)
+    }
+
+    fn begin_call(
+        &self,
+        method: &str,
+        parameters: Value,
+    ) -> Result<(String, mpsc::Receiver<Value>)> {
         if !self.alive.load(Ordering::SeqCst) {
             bail!("worker {} is unavailable", self.descriptor.worker_id);
         }
@@ -130,8 +147,19 @@ impl WorkerConnection {
                 .lock()
                 .expect("worker pending mutex poisoned")
                 .remove(&id);
-            return Err(error);
+            return Err(error).with_context(|| {
+                format!("worker RPC {method} write failed; outcome is uncertain")
+            });
         }
+        Ok((id, rx))
+    }
+
+    fn finish_call(
+        &self,
+        method: &str,
+        (id, rx): (String, mpsc::Receiver<Value>),
+        timeout: Duration,
+    ) -> Result<Value> {
         let response = rx.recv_timeout(timeout).map_err(|error| {
             self.pending
                 .lock()
@@ -267,10 +295,12 @@ struct ScheduleClaim {
     expression: String,
     policy: Value,
     claim: String,
+    delivery_id: String,
 }
 
 #[derive(Clone, Debug)]
 struct GoalContinuation {
+    previous_request_id: Option<String>,
     goal_id: String,
     agent_id: String,
     objective: String,
@@ -426,6 +456,7 @@ impl Database {
               resource_key TEXT NOT NULL,
               owner TEXT NOT NULL,
               expires_at_ms INTEGER,
+              uncertain_request_id TEXT,
               PRIMARY KEY (resource_type, resource_key)
             );
             CREATE TABLE IF NOT EXISTS messages (
@@ -437,6 +468,12 @@ impl Database {
               delivery_json TEXT,
               created_at_ms INTEGER NOT NULL,
               delivered_at_ms INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS session_archives (
+              source_path TEXT PRIMARY KEY,
+              archive_path TEXT NOT NULL UNIQUE,
+              agent_id TEXT,
+              status TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS agents_workspace_idx ON agents(workspace_id);
             CREATE INDEX IF NOT EXISTS tasks_agent_idx ON tasks(agent_id);
@@ -450,6 +487,12 @@ impl Database {
                 "agents",
                 "preset_id",
                 "ALTER TABLE agents ADD COLUMN preset_id TEXT",
+            )?;
+            ensure_column(
+                &connection,
+                "leases",
+                "uncertain_request_id",
+                "ALTER TABLE leases ADD COLUMN uncertain_request_id TEXT",
             )?;
             ensure_column(
                 &connection,
@@ -469,6 +512,14 @@ impl Database {
                 "inactive_reason",
                 "ALTER TABLE agents ADD COLUMN inactive_reason TEXT",
             )?;
+            for table in ["schedules", "goals"] {
+                ensure_column(
+                    &connection,
+                    table,
+                    "revision",
+                    &format!("ALTER TABLE {table} ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"),
+                )?;
+            }
             connection.pragma_update(None, "user_version", SCHEMA_REVISION)?;
             Ok(())
         })();
@@ -534,6 +585,7 @@ impl Database {
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)
              ON CONFLICT(agent_id) DO UPDATE SET
               session_id=excluded.session_id, status=excluded.status,
+              session_path=excluded.session_path,
               preset_id=excluded.preset_id,
               controller_client_id=excluded.controller_client_id,
               lifecycle=excluded.lifecycle,
@@ -653,7 +705,7 @@ impl Database {
               created_at_ms,updated_at_ms)
              VALUES (?1,?2,?3,?4,?5,'pending',?6,?6)",
             params![
-                command.client_id,
+                command.journal_client_id(),
                 command_id,
                 command.agent_id,
                 command.method,
@@ -664,13 +716,25 @@ impl Database {
         if inserted == 1 {
             return Ok(JournalEntry::New);
         }
-        let existing: (String, Option<String>, String, String) = connection.query_row(
-            "SELECT status,outcome_json,method,params_json FROM commands
+        let existing: (String, Option<String>, String, String, Option<String>) = connection
+            .query_row(
+                "SELECT status,outcome_json,method,params_json,agent_id FROM commands
              WHERE client_id=?1 AND command_id=?2",
-            params![command.client_id, command_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-        )?;
-        if existing.2 != command.method || existing.3 != serde_json::to_string(&command.params)? {
+                params![command.journal_client_id(), command_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )?;
+        if existing.2 != command.method
+            || existing.3 != serde_json::to_string(&command.params)?
+            || existing.4 != command.agent_id
+        {
             bail!("command_id was already used for a different mutation")
         }
         let parsed = existing
@@ -684,6 +748,28 @@ impl Database {
             "failed" => JournalEntry::Failed(parsed),
             _ => JournalEntry::Pending,
         })
+    }
+
+    fn command_status(&self, client_id: &str, command_id: &str) -> Result<Value> {
+        let connection = self.connection()?;
+        let row: Option<(String, Option<String>)> = connection
+            .query_row(
+                "SELECT status,outcome_json FROM commands WHERE client_id=?1 AND command_id=?2",
+                params![client_id, command_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((status, outcome)) = row else {
+            return Ok(json!({"status": "not_found", "command_id": command_id}));
+        };
+        let outcome: Value = outcome
+            .as_deref()
+            .map(serde_json::from_str)
+            .transpose()?
+            .unwrap_or(Value::Null);
+        Ok(json!({"status": status, "command_id": command_id,
+            "result": if status == "completed" { outcome.clone() } else { Value::Null },
+            "error": if status == "failed" { outcome } else { Value::Null }}))
     }
 
     fn finish_command(
@@ -751,14 +837,21 @@ impl Database {
             )?;
             let current = connection
                 .query_row(
-                    "SELECT owner FROM leases
+                    "SELECT owner,expires_at_ms FROM leases
                      WHERE resource_type='workspace-write' AND resource_key=?1",
                     params![workspace_id],
-                    |row| row.get::<_, String>(0),
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?)),
                 )
                 .optional()?;
-            if current.as_deref().is_some_and(|value| value != owner) {
-                bail!("workspace write lease is held by {}", current.unwrap())
+            if let Some((current_owner, expiry)) = current {
+                if current_owner != owner {
+                    bail!("workspace write lease is held by {current_owner}")
+                }
+                if expiry.is_none() {
+                    bail!(
+                        "workspace has an unresolved worker delivery; reconcile or stop the worker before submitting more work"
+                    )
+                }
             }
             connection.execute(
                 "INSERT INTO leases(resource_type,resource_key,owner,expires_at_ms)
@@ -783,6 +876,33 @@ impl Database {
              AND resource_key=?1 AND owner=?2",
             params![workspace_id, owner],
         )?;
+        Ok(())
+    }
+
+    fn retain_uncertain_workspace_lease(
+        &self,
+        workspace_id: &str,
+        owner: &str,
+        request_id: Option<&str>,
+    ) -> Result<()> {
+        self.connection()?.execute(
+            "UPDATE leases SET expires_at_ms=NULL,uncertain_request_id=COALESCE(uncertain_request_id,?3) WHERE resource_type='workspace-write'
+             AND resource_key=?1 AND owner=?2",
+            params![workspace_id, owner,request_id],
+        )?;
+        Ok(())
+    }
+
+    fn release_workspace_lease_after_run(
+        &self,
+        workspace_id: &str,
+        owner: &str,
+        request_id: &str,
+    ) -> Result<()> {
+        self.connection()?.execute(
+            "DELETE FROM leases WHERE resource_type='workspace-write' AND resource_key=?1 AND owner=?2
+             AND (expires_at_ms IS NOT NULL OR uncertain_request_id=?3)",
+            params![workspace_id,owner,request_id])?;
         Ok(())
     }
 
@@ -813,16 +933,13 @@ impl Database {
                     json!("daemon restarted while the tick outcome was uncertain; the tick was not replayed"),
                 );
             }
-            let next = next_schedule_time(&expression, now_ms_i64());
-            let status = if next.is_some() {
-                "active"
-            } else {
-                "uncertain"
-            };
+            // Even recurring schedules must wait for reconciliation: a later
+            // tick can repeat the same external action as the interrupted tick.
+            let _ = expression;
             recovered += connection.execute(
-                "UPDATE schedules SET status=?2,next_at_ms=?3,claim=NULL,policy_json=?4
+                "UPDATE schedules SET status='uncertain',next_at_ms=NULL,claim=NULL,policy_json=?2,revision=revision+1
                  WHERE schedule_id=?1 AND status='claimed'",
-                params![schedule_id, status, next, serde_json::to_string(&policy)?],
+                params![schedule_id, serde_json::to_string(&policy)?],
             )?;
         }
         Ok(recovered)
@@ -854,17 +971,18 @@ impl Database {
             "expression": expression,
             "next_at_ms": next_at_ms,
             "policy": policy,
-            "status": "active"
+            "status": "active",
+            "revision": 1
         }))
     }
 
     fn list_schedules(&self, agent_id: Option<&str>) -> Result<Vec<Value>> {
         let connection = self.connection()?;
         let sql = if agent_id.is_some() {
-            "SELECT schedule_id,agent_id,expression,next_at_ms,claim,policy_json,status
+            "SELECT schedule_id,agent_id,expression,next_at_ms,claim,policy_json,status,revision
              FROM schedules WHERE agent_id=?1 ORDER BY next_at_ms"
         } else {
-            "SELECT schedule_id,agent_id,expression,next_at_ms,claim,policy_json,status
+            "SELECT schedule_id,agent_id,expression,next_at_ms,claim,policy_json,status,revision
              FROM schedules ORDER BY next_at_ms"
         };
         let mut statement = connection.prepare(sql)?;
@@ -878,6 +996,7 @@ impl Database {
                 "claim": row.get::<_, Option<String>>(4)?,
                 "policy": serde_json::from_str::<Value>(&policy_text).unwrap_or(Value::Null),
                 "status": row.get::<_, String>(6)?,
+                "revision": row.get::<_, i64>(7)?,
             }))
         };
         let rows = if let Some(agent_id) = agent_id {
@@ -910,12 +1029,63 @@ impl Database {
             .collect())
     }
 
-    fn cancel_schedule(&self, schedule_id: &str) -> Result<bool> {
-        Ok(self.connection()?.execute(
-            "UPDATE schedules SET status='cancelled',claim=NULL,next_at_ms=NULL
-             WHERE schedule_id=?1 AND status IN ('active','claimed')",
-            params![schedule_id],
-        )? > 0)
+    fn revise_schedule(
+        &self,
+        schedule_id: &str,
+        revision: i64,
+        expression: &str,
+        next: Option<i64>,
+        policy: &Value,
+        status: &str,
+    ) -> Result<()> {
+        let changed = self.connection()?.execute(
+            "UPDATE schedules SET expression=?3,next_at_ms=?4,policy_json=?5,status=?6,
+             revision=revision+1,claim=NULL WHERE schedule_id=?1 AND revision=?2",
+            params![
+                schedule_id,
+                revision,
+                expression,
+                next,
+                serde_json::to_string(policy)?,
+                status
+            ],
+        )?;
+        if changed != 1 {
+            return Err(api_error(
+                "revision_conflict",
+                "schedule changed; refresh before retrying",
+            ));
+        }
+        Ok(())
+    }
+
+    fn revise_goal(
+        &self,
+        goal_id: &str,
+        revision: i64,
+        objective: &str,
+        max: u64,
+        status: &str,
+    ) -> Result<()> {
+        let changed = self.connection()?.execute(
+            "UPDATE goals SET objective=?3,max_continuations=?4,status=?5,updated_at_ms=?6,
+             revision=revision+1 WHERE goal_id=?1 AND revision=?2",
+            params![
+                goal_id,
+                revision,
+                objective,
+                max as i64,
+                status,
+                now_ms_i64()
+            ],
+        )?;
+        if changed != 1 {
+            return Err(api_error(
+                "revision_conflict",
+                "goal changed; refresh before retrying",
+            ));
+        }
+        Ok(())
     }
 
     fn claim_due_schedule(&self) -> Result<Option<ScheduleClaim>> {
@@ -942,10 +1112,20 @@ impl Database {
             return Ok(None);
         };
         let claim = format!("claim-{}", Uuid::new_v4());
+        let mut policy: Value = serde_json::from_str(&policy_text)?;
+        let object = policy
+            .as_object_mut()
+            .context("schedule policy must be an object")?;
+        let delivery_id = object
+            .get("delivery_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("schedule-delivery-{}", Uuid::new_v4()));
+        object.insert("delivery_id".into(), json!(delivery_id));
         let updated = connection.execute(
-            "UPDATE schedules SET status='claimed',claim=?2
+            "UPDATE schedules SET status='claimed',claim=?2,policy_json=?3,revision=revision+1
              WHERE schedule_id=?1 AND status='active'",
-            params![schedule_id, claim],
+            params![schedule_id, claim, serde_json::to_string(&policy)?],
         )?;
         if updated == 0 {
             connection.execute_batch("ROLLBACK")?;
@@ -956,8 +1136,9 @@ impl Database {
             schedule_id,
             agent_id,
             expression,
-            policy: serde_json::from_str(&policy_text).unwrap_or(Value::Null),
+            policy,
             claim,
+            delivery_id,
         }))
     }
 
@@ -969,7 +1150,7 @@ impl Database {
         policy: &Value,
     ) -> Result<()> {
         self.connection()?.execute(
-            "UPDATE schedules SET status=?3,next_at_ms=?4,policy_json=?5,claim=NULL
+            "UPDATE schedules SET status=?3,next_at_ms=?4,policy_json=?5,claim=NULL,revision=revision+1
              WHERE schedule_id=?1 AND claim=?2",
             params![
                 claim.schedule_id,
@@ -984,11 +1165,15 @@ impl Database {
 
     fn create_goal(&self, agent_id: &str, objective: &str, max: u64) -> Result<Value> {
         let connection = self.connection()?;
-        connection.execute(
-            "UPDATE goals SET status='superseded',updated_at_ms=?2
-             WHERE agent_id=?1 AND status='active'",
-            params![agent_id, now_ms_i64()],
-        )?;
+        connection.execute_batch("BEGIN IMMEDIATE")?;
+        let unfinished: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM goals WHERE agent_id=?1 AND status IN ('active','paused','blocked','uncertain','budget_exhausted')",
+            params![agent_id], |row| row.get(0))?;
+        if unfinished > 0 {
+            bail!(
+                "agent already has an unfinished goal; complete or cancel it before creating another"
+            )
+        }
         let goal_id = format!("goal-{}", Uuid::new_v4());
         connection.execute(
             "INSERT INTO goals
@@ -997,6 +1182,7 @@ impl Database {
              VALUES (?1,?2,?3,'active',0,?4,?5,?5)",
             params![goal_id, agent_id, objective, max as i64, now_ms_i64()],
         )?;
+        connection.execute_batch("COMMIT")?;
         Ok(json!({
             "goal_id": goal_id,
             "agent_id": agent_id,
@@ -1004,6 +1190,7 @@ impl Database {
             "status": "active",
             "continuation_count": 0,
             "max_continuations": max,
+            "revision": 1,
         }))
     }
 
@@ -1011,11 +1198,11 @@ impl Database {
         let connection = self.connection()?;
         let sql = if agent_id.is_some() {
             "SELECT goal_id,agent_id,objective,status,continuation_count,
-                    max_continuations,last_request_id,last_error,created_at_ms,updated_at_ms
+                    max_continuations,last_request_id,last_error,created_at_ms,updated_at_ms,revision
              FROM goals WHERE agent_id=?1 ORDER BY created_at_ms DESC"
         } else {
             "SELECT goal_id,agent_id,objective,status,continuation_count,
-                    max_continuations,last_request_id,last_error,created_at_ms,updated_at_ms
+                    max_continuations,last_request_id,last_error,created_at_ms,updated_at_ms,revision
              FROM goals ORDER BY created_at_ms DESC"
         };
         let mut statement = connection.prepare(sql)?;
@@ -1031,6 +1218,7 @@ impl Database {
                 "last_error": row.get::<_, Option<String>>(7)?,
                 "created_at_ms": row.get::<_, i64>(8)?,
                 "updated_at_ms": row.get::<_, i64>(9)?,
+                "revision": row.get::<_, i64>(10)?,
             }))
         };
         let rows = if let Some(agent_id) = agent_id {
@@ -1041,13 +1229,6 @@ impl Database {
         Ok(rows.filter_map(Result::ok).collect())
     }
 
-    fn set_goal_status(&self, goal_id: &str, status: &str) -> Result<bool> {
-        Ok(self.connection()?.execute(
-            "UPDATE goals SET status=?2,updated_at_ms=?3 WHERE goal_id=?1",
-            params![goal_id, status, now_ms_i64()],
-        )? > 0)
-    }
-
     fn record_goal_run(&self, goal_id: &str, request_id: &str) -> Result<()> {
         let connection = self.connection()?;
         connection.execute(
@@ -1056,7 +1237,7 @@ impl Database {
             params![request_id, goal_id, now_ms_i64()],
         )?;
         connection.execute(
-            "UPDATE goals SET last_request_id=?2,updated_at_ms=?3 WHERE goal_id=?1",
+            "UPDATE goals SET last_request_id=?2,updated_at_ms=?3,revision=revision+1 WHERE goal_id=?1",
             params![goal_id, request_id, now_ms_i64()],
         )?;
         Ok(())
@@ -1096,7 +1277,7 @@ impl Database {
             None
         } else if count >= max {
             connection.execute(
-                "UPDATE goals SET status='budget_exhausted',updated_at_ms=?2
+                "UPDATE goals SET status='budget_exhausted',updated_at_ms=?2,revision=revision+1
                  WHERE goal_id=?1",
                 params![goal_id, now_ms_i64()],
             )?;
@@ -1104,10 +1285,11 @@ impl Database {
         } else {
             let next = count + 1;
             connection.execute(
-                "UPDATE goals SET continuation_count=?2,updated_at_ms=?3 WHERE goal_id=?1",
+                "UPDATE goals SET continuation_count=?2,updated_at_ms=?3,revision=revision+1 WHERE goal_id=?1",
                 params![goal_id, next as i64, now_ms_i64()],
             )?;
             Some(GoalContinuation {
+                previous_request_id: Some(request_id.to_owned()),
                 goal_id,
                 agent_id,
                 objective,
@@ -1141,8 +1323,8 @@ impl Database {
 
     fn mark_goal_error(&self, goal_id: &str, error: &str) -> Result<()> {
         self.connection()?.execute(
-            "UPDATE goals SET status='blocked',last_error=?2,updated_at_ms=?3
-             WHERE goal_id=?1",
+            "UPDATE goals SET status='blocked',last_error=?2,updated_at_ms=?3,revision=revision+1
+             WHERE goal_id=?1 AND status='active'",
             params![goal_id, error, now_ms_i64()],
         )?;
         Ok(())
@@ -1150,7 +1332,12 @@ impl Database {
 
     fn record_task(&self, agent_id: &str, request_id: &str) -> Result<String> {
         let task_id = format!("task-{}", Uuid::new_v4());
-        self.connection()?.execute(
+        let connection = self.connection()?;
+        connection.execute(
+            "DELETE FROM tasks WHERE run_id=?1 AND status='failed'",
+            params![request_id],
+        )?;
+        connection.execute(
             "INSERT INTO tasks(task_id,agent_id,run_id,status,created_at_ms,updated_at_ms)
              VALUES (?1,?2,?3,'running',?4,?4)",
             params![task_id, agent_id, request_id, now_ms_i64()],
@@ -1206,8 +1393,8 @@ impl Database {
             connection.execute(
                 "UPDATE goals SET status='uncertain',
                    last_error='machine restart interrupted a run; inspect side effects before continuing',
-                   updated_at_ms=?2
-                 WHERE agent_id=?1 AND status='active'",
+                   updated_at_ms=?2,revision=revision+1
+                 WHERE agent_id=?1 AND status IN ('active','paused')",
                 params![agent_id, now_ms_i64()],
             )?;
             Ok(())
@@ -1408,6 +1595,7 @@ pub fn serve(repository_root: Option<&Path>, config_path: Option<&Path>) -> Resu
         next_idle_sweep_at_ms: AtomicU64::new(0),
     });
     runtime.restore_agents()?;
+    runtime.recover_session_archives();
     runtime.adopt_workers();
     runtime.recover_missing_workers();
     spawn_scheduler(Arc::clone(&runtime));
@@ -1591,11 +1779,25 @@ impl Runtime {
             let Ok(descriptor) = read_descriptor(&path) else {
                 continue;
             };
+            let residency = self
+                .residency
+                .lock()
+                .expect("runtime residency mutex poisoned");
+            if self
+                .agents
+                .lock()
+                .expect("agents mutex poisoned")
+                .get(&descriptor.agent_id)
+                .is_some_and(|agent| matches!(agent.status.as_str(), "stopped" | "inactive"))
+            {
+                continue;
+            }
             if self
                 .workers
                 .lock()
                 .expect("workers mutex poisoned")
-                .contains_key(&descriptor.worker_id)
+                .get(&descriptor.worker_id)
+                .is_some_and(|worker| worker.alive.load(Ordering::SeqCst))
             {
                 continue;
             }
@@ -1608,18 +1810,23 @@ impl Runtime {
                     .expect("workers mutex poisoned")
                     .insert(descriptor.worker_id.clone(), Arc::clone(&worker));
                 let _ = self.database.upsert_worker(&descriptor, &path);
+                // A registered worker may already be stopping. Never wait on
+                // its lifecycle while holding the residency or agent registry.
+                drop(residency);
+                let summary = worker
+                    .call("session.summary", json!({}), Duration::from_millis(750))
+                    .ok();
                 if let Some(agent) = self
                     .agents
                     .lock()
                     .expect("agents mutex poisoned")
                     .get_mut(&descriptor.agent_id)
+                    && !matches!(agent.status.as_str(), "stopped" | "inactive")
                 {
                     agent.status = "idle".into();
                     agent.session_id = descriptor.session_id.clone();
                     agent.inactive_reason = None;
-                    if let Ok(summary) =
-                        worker.call("session.summary", json!({}), Duration::from_millis(750))
-                    {
+                    if let Some(summary) = summary {
                         apply_session_summary(agent, &summary);
                     }
                     let _ = self.database.upsert_agent(agent);
@@ -1633,8 +1840,9 @@ impl Runtime {
             .workers
             .lock()
             .expect("workers mutex poisoned")
-            .keys()
-            .cloned()
+            .iter()
+            .filter(|(_, worker)| worker.alive.load(Ordering::SeqCst))
+            .map(|(id, _)| id.clone())
             .collect();
         let agents: Vec<_> = self
             .agents
@@ -1648,79 +1856,23 @@ impl Runtime {
             .cloned()
             .collect();
         for agent in agents {
-            let descriptor_path = self.paths.worker_descriptor(&agent.worker_id);
-            let Ok(mut descriptor) = read_descriptor(&descriptor_path) else {
-                continue;
-            };
-            if process_alive(descriptor.pid) {
-                continue;
-            }
-            let _ = self
-                .database
-                .mark_interrupted_agent_work_uncertain(&agent.agent_id);
-            descriptor.generation = descriptor.generation.saturating_add(1);
-            descriptor.pid = None;
-            descriptor.child_pid = None;
-            descriptor.status = "starting".into();
-            descriptor.socket_path = self.paths.worker_socket(&agent.worker_id);
-            if write_descriptor(&descriptor_path, &descriptor).is_err() {
-                continue;
-            }
-            let spawned_pid = match spawn_worker_proxy(&descriptor_path) {
-                Ok(pid) => pid,
-                Err(_) => {
-                    terminate_failed_worker_start(&descriptor_path, false, None);
-                    continue;
-                }
-            };
-            let connected_descriptor =
-                match wait_for_worker(&descriptor_path, Duration::from_secs(20)) {
-                    Ok(descriptor) => descriptor,
-                    Err(_) => {
-                        terminate_failed_worker_start(&descriptor_path, false, Some(spawned_pid));
-                        continue;
-                    }
-                };
-            let worker = match connect_worker(connected_descriptor.clone(), self.database.clone()) {
-                Ok(worker) => worker,
-                Err(_) => {
-                    terminate_failed_worker_start(&descriptor_path, false, Some(spawned_pid));
-                    continue;
-                }
-            };
-            let _ = self
-                .database
-                .upsert_worker(&connected_descriptor, &descriptor_path);
-            self.workers
-                .lock()
-                .expect("workers mutex poisoned")
-                .insert(agent.worker_id.clone(), worker);
-            if let Some(current) = self
-                .agents
-                .lock()
-                .expect("agents mutex poisoned")
-                .get_mut(&agent.agent_id)
-            {
-                current.status = "idle".into();
-                current.session_id = connected_descriptor.session_id;
-                current.inactive_reason = None;
-                if let Some(worker) = self
-                    .workers
-                    .lock()
-                    .expect("workers mutex poisoned")
-                    .get(&agent.worker_id)
-                    .cloned()
-                    && let Ok(summary) =
-                        worker.call("session.summary", json!({}), Duration::from_millis(750))
-                {
-                    apply_session_summary(current, &summary);
-                }
-                let _ = self.database.upsert_agent(current);
+            if let Err(error) = self.hydrate_root(&agent.agent_id) {
+                eprintln!("worker recovery failed for {}: {error:#}", agent.agent_id);
             }
         }
     }
 
     fn create_agent(self: &Arc<Self>, parameters: &Value) -> Result<Value> {
+        if configured_idle_eviction().is_some()
+            && self.workers.lock().expect("workers mutex poisoned").len()
+                >= configured_max_workers()
+        {
+            self.sweep_idle_workers_with_threshold(Duration::ZERO, true)?;
+        }
+        let _residency = self
+            .residency
+            .lock()
+            .expect("runtime residency mutex poisoned");
         let max_workers = configured_max_workers();
         if self.workers.lock().expect("workers mutex poisoned").len() >= max_workers {
             bail!("worker quota reached ({max_workers}); stop an agent before creating another")
@@ -1782,6 +1934,14 @@ impl Runtime {
                     &Uuid::new_v4().to_string()[..8]
                 ))
             };
+        let session_path = normalize_session_path(&session_path)?;
+        if self.database.connection()?.query_row(
+            "SELECT EXISTS(SELECT 1 FROM session_archives WHERE source_path=?1 OR archive_path=?1)",
+            params![session_path.to_string_lossy()],
+            |row| row.get::<_, bool>(0),
+        )? {
+            bail!("session is archived; the original path cannot be reopened")
+        }
         if let Some(parent) = session_path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -1890,16 +2050,21 @@ impl Runtime {
             apply_session_summary(current, &summary);
             self.database.upsert_agent(current)?;
         }
-        Ok(json!({
-            "agent": self.public_agent(&agent_id)?,
-            "snapshot": decorate_snapshot(
+        // Startup owns residency only until the worker is published. Public
+        // inspection can wait on an existing worker's lifecycle or rehydrate
+        // after a crash, neither of which may run under this lock.
+        drop(_residency);
+        let mut result = json!({"agent": self.public_agent(&agent_id)?});
+        if parameters.get("include_snapshot").and_then(Value::as_bool) != Some(false) {
+            result["snapshot"] = decorate_snapshot(
                 &connected_descriptor,
                 worker.generation.load(Ordering::SeqCst),
                 &agent_id,
                 snapshot_sequence,
                 snapshot,
-            )
-        }))
+            );
+        }
+        Ok(result)
     }
 
     fn submit_turn(
@@ -1908,25 +2073,58 @@ impl Runtime {
         parameters: Value,
         goal_id: Option<&str>,
     ) -> Result<Value> {
-        let message = parameters
-            .get("message")
-            .and_then(Value::as_str)
-            .context("turn.submit requires message")?;
-        if message.is_empty() {
-            bail!("turn message cannot be empty")
-        }
-        if message.len() > 256 * 1024 {
-            bail!("turn message exceeds the 256 KiB limit")
-        }
+        self.submit_turn_with_id(agent_id, parameters, goal_id, None)
+    }
+
+    fn submit_turn_with_id(
+        &self,
+        agent_id: &str,
+        mut parameters: Value,
+        goal_id: Option<&str>,
+        delivery_id: Option<&str>,
+    ) -> Result<Value> {
+        validate_turn_message(
+            parameters
+                .get("message")
+                .context("turn.submit requires message")?,
+        )?;
         enforce_model_quotas(&parameters)?;
         let worker = self.worker_for_agent(agent_id)?;
         let root_agent_id = self.root_agent_id_for(agent_id)?;
+        let _lifecycle = worker
+            .lifecycle
+            .lock()
+            .expect("worker lifecycle mutex poisoned");
         self.database
             .acquire_workspace_lease(&worker.descriptor.workspace_id, &root_agent_id)?;
+        let request_id = delivery_id
+            .map(str::to_owned)
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        parameters
+            .as_object_mut()
+            .context("turn parameters must be an object")?
+            .insert("request_id".into(), json!(request_id));
+        // Persist admission before the worker can emit a fast run-result.
+        let admission = self
+            .database
+            .record_task(agent_id, &request_id)
+            .and_then(|_| {
+                if let Some(goal_id) = goal_id {
+                    self.database.record_goal_run(goal_id, &request_id)?;
+                }
+                Ok(())
+            });
+        if let Err(error) = admission {
+            let _ = self.database.finish_task(&request_id, false);
+            let _ = self
+                .database
+                .release_workspace_lease(&worker.descriptor.workspace_id, &root_agent_id);
+            return Err(error);
+        }
         let result = if root_agent_id == agent_id {
-            worker.call("turn.submit", parameters, WORKER_RPC_TIMEOUT)
+            worker.call_inner("turn.submit", parameters, WORKER_RPC_TIMEOUT)
         } else {
-            worker.call(
+            worker.call_inner(
                 "subagent.invoke",
                 json!({
                     "agent_id": agent_id,
@@ -1939,19 +2137,30 @@ impl Runtime {
         let result = match result {
             Ok(result) => result,
             Err(error) => {
-                let _ = self
-                    .database
-                    .release_workspace_lease(&worker.descriptor.workspace_id, &root_agent_id);
+                if !uncertain_worker_failure(&error.to_string()) {
+                    let _ = self.database.finish_task(&request_id, false);
+                    let _ = self.database.finish_goal_run_failed(&request_id);
+                    let _ = self
+                        .database
+                        .release_workspace_lease(&worker.descriptor.workspace_id, &root_agent_id);
+                } else {
+                    let _ = self.database.retain_uncertain_workspace_lease(
+                        &worker.descriptor.workspace_id,
+                        &root_agent_id,
+                        Some(&request_id),
+                    );
+                }
                 return Err(error);
             }
         };
-        let request_id = result
-            .get("request_id")
-            .and_then(Value::as_str)
-            .context("worker accepted a turn without request_id")?;
-        self.database.record_task(agent_id, request_id)?;
-        if let Some(goal_id) = goal_id {
-            self.database.record_goal_run(goal_id, request_id)?;
+        let returned_id = result.get("request_id").and_then(Value::as_str);
+        if returned_id != Some(request_id.as_str()) {
+            let _ = self.database.retain_uncertain_workspace_lease(
+                &worker.descriptor.workspace_id,
+                &root_agent_id,
+                Some(&request_id),
+            );
+            bail!("worker accepted a different request id; outcome is uncertain")
         }
         Ok(result)
     }
@@ -2062,6 +2271,7 @@ impl Runtime {
                 .lock()
                 .expect("workers mutex poisoned")
                 .get(&root.worker_id)
+                .filter(|worker| worker.alive.load(Ordering::SeqCst))
                 .cloned()
             {
                 return Ok(worker);
@@ -2104,6 +2314,12 @@ impl Runtime {
     }
 
     fn hydrate_root(&self, agent_id: &str) -> Result<Arc<WorkerConnection>> {
+        if configured_idle_eviction().is_some()
+            && self.workers.lock().expect("workers mutex poisoned").len()
+                >= configured_max_workers()
+        {
+            self.sweep_idle_workers_with_threshold(Duration::ZERO, true)?;
+        }
         let _residency = self
             .residency
             .lock()
@@ -2123,10 +2339,15 @@ impl Runtime {
             .lock()
             .expect("workers mutex poisoned")
             .get(&agent.worker_id)
+            .filter(|worker| worker.alive.load(Ordering::SeqCst))
             .cloned()
         {
             return Ok(worker);
         }
+        self.workers
+            .lock()
+            .expect("workers mutex poisoned")
+            .remove(&agent.worker_id);
         if self.workers.lock().expect("workers mutex poisoned").len() >= configured_max_workers() {
             bail!("worker quota reached; no inactive worker could be resumed")
         }
@@ -2145,11 +2366,14 @@ impl Runtime {
             {
                 descriptor.clone()
             } else {
+                retire_orphaned_worker(&descriptor)?;
                 if agent.status != "inactive" {
                     let _ = self
                         .database
                         .mark_interrupted_agent_work_uncertain(agent_id);
                 }
+                self.database
+                    .release_workspace_lease(&descriptor.workspace_id, &descriptor.root_agent_id)?;
                 descriptor.generation = descriptor.generation.saturating_add(1);
                 descriptor.pid = None;
                 descriptor.child_pid = None;
@@ -2168,7 +2392,9 @@ impl Runtime {
         let (connected_descriptor, worker, summary) = match startup {
             Ok(started) => started,
             Err(error) => {
-                terminate_failed_worker_start(&descriptor_path, false, spawned_pid);
+                if spawned_pid.is_some() {
+                    terminate_failed_worker_start(&descriptor_path, false, spawned_pid);
+                }
                 return Err(error).context("could not hydrate resident worker");
             }
         };
@@ -2267,7 +2493,7 @@ impl Runtime {
             "msg-{}",
             Uuid::new_v5(
                 &Uuid::NAMESPACE_OID,
-                format!("{}:{command_id}", command.client_id).as_bytes(),
+                format!("{}:{command_id}", command.journal_client_id()).as_bytes(),
             )
         );
         self.database
@@ -2360,17 +2586,27 @@ impl Runtime {
                 .lifecycle
                 .lock()
                 .expect("worker lifecycle mutex poisoned");
+            // Subscribe before snapshot construction: events arriving during
+            // the read are replayed and deduplicated by snapshot revisions.
+            let sequence =
+                worker.attach_at_sequence(attachment_id.to_owned(), agent_id.to_owned(), sender);
             let snapshot = if root_agent_id == agent_id {
-                worker.call_inner("session.snapshot", json!({}), WORKER_RPC_TIMEOUT)?
+                worker.call_inner("session.snapshot", json!({}), WORKER_RPC_TIMEOUT)
             } else {
                 worker.call_inner(
                     "subagent.invoke",
                     json!({"agent_id": agent_id, "method": "session.snapshot", "params": {}}),
                     WORKER_RPC_TIMEOUT,
-                )?
+                )
             };
-            let sequence =
-                worker.attach_at_sequence(attachment_id.to_owned(), agent_id.to_owned(), sender);
+            let snapshot = match snapshot {
+                Ok(snapshot) => snapshot,
+                Err(error) => {
+                    worker.detach(attachment_id);
+                    let _ = self.release_control(agent_id, client_id);
+                    return Err(error);
+                }
+            };
             (snapshot, sequence)
         };
         Ok(json!({
@@ -2440,6 +2676,14 @@ impl Runtime {
         let now = now_ms();
         let threshold_ms = threshold.as_millis();
         let mut pin_reasons = Vec::new();
+        if !worker
+            .pending
+            .lock()
+            .expect("worker pending mutex poisoned")
+            .is_empty()
+        {
+            pin_reasons.push("worker-call-in-flight".into());
+        }
         let mut agent_ids = HashSet::from([worker.descriptor.root_agent_id.clone()]);
         let mut last_activity_at_ms = None;
         let root_summary = invoke("session.summary", json!({}), Duration::from_millis(1_500))?;
@@ -2617,6 +2861,14 @@ impl Runtime {
                 .lifecycle
                 .lock()
                 .expect("worker lifecycle mutex poisoned");
+            if !worker
+                .pending
+                .lock()
+                .expect("worker pending mutex poisoned")
+                .is_empty()
+            {
+                continue;
+            }
             if worker
                 .attachments
                 .lock()
@@ -2691,6 +2943,14 @@ impl Runtime {
         let Some(threshold) = configured_idle_eviction() else {
             return Ok(Vec::new());
         };
+        self.sweep_idle_workers_with_threshold(threshold, false)
+    }
+
+    fn sweep_idle_workers_with_threshold(
+        &self,
+        threshold: Duration,
+        capacity: bool,
+    ) -> Result<Vec<Value>> {
         if self
             .idle_sweep_running
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -2735,7 +2995,11 @@ impl Runtime {
                 };
                 if !initial.eligible {
                     let mut outcome = idle_inspection_value(&worker, &initial, threshold, false);
-                    let passivated = self.passivate_idle_children(&worker, threshold);
+                    let passivated = if capacity {
+                        Vec::new()
+                    } else {
+                        self.passivate_idle_children(&worker, threshold)
+                    };
                     if let Some(object) = outcome.as_object_mut() {
                         object.insert("child_passivations".into(), Value::Array(passivated));
                     }
@@ -2825,6 +3089,9 @@ impl Runtime {
                     })
                 );
                 outcomes.push(outcome);
+                if capacity {
+                    break;
+                }
             }
             Ok(outcomes)
         })();
@@ -2832,67 +3099,350 @@ impl Runtime {
         result
     }
 
-    fn stop_agent(&self, agent_id: &str) -> Result<Value> {
-        let inactive_root = self
+    fn recover_session_archives(&self) {
+        let jobs = (|| -> Result<Vec<(String, String)>> {
+            let connection = self.database.connection()?;
+            let mut query = connection.prepare(
+                "SELECT source_path,archive_path FROM session_archives WHERE status='pending'",
+            )?;
+            Ok(query
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?)
+        })();
+        if let Ok(jobs) = jobs {
+            for (source, target) in jobs {
+                if let Err(error) =
+                    self.archive_session(Path::new(&source), Path::new(&target), None)
+                {
+                    eprintln!("session archive recovery deferred: {error:#}");
+                }
+            }
+        }
+    }
+
+    fn archive_session(
+        &self,
+        source: &Path,
+        target: &Path,
+        client_id: Option<&str>,
+    ) -> Result<Value> {
+        reject_archive_symlink(source)?;
+        reject_archive_symlink(target)?;
+        let source = normalize_session_path(source)?;
+        let target = normalize_session_path(target)?;
+        if source == target
+            || source.extension().and_then(|value| value.to_str()) != Some("jsonl")
+            || target.extension().and_then(|value| value.to_str()) != Some("jsonl")
+        {
+            bail!("archive requires distinct JSONL source and destination paths")
+        }
+        let _residency = self
+            .residency
+            .lock()
+            .expect("runtime residency mutex poisoned");
+        let source_file = match OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&source)
+        {
+            Ok(file) => Some(file),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => {
+                return Err(error)
+                    .context("could not open original session without following links");
+            }
+        };
+        let connection = self.database.connection()?;
+        let previous: Option<(String, Option<String>, String)> = connection
+            .query_row(
+                "SELECT archive_path,agent_id,status FROM session_archives WHERE source_path=?1",
+                params![source.to_string_lossy()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        if let Some((destination, agent_id, status)) = &previous {
+            if destination != target.to_string_lossy().as_ref() {
+                bail!("session already has a different archive destination")
+            }
+            if status == "completed" && target.is_file() {
+                return Ok(json!({"archived":true,"session_path":target,"agent_id":agent_id}));
+            }
+        } else if !source.is_file() || target.exists() {
+            bail!("session source is missing or archive destination already exists")
+        }
+        let mut agent = self
             .agents
             .lock()
             .expect("agents mutex poisoned")
-            .get(agent_id)
-            .is_some_and(|agent| agent.status == "inactive");
-        if inactive_root {
-            if let Some(agent) = self
-                .agents
+            .values()
+            .find(|agent| {
+                agent.session_path == source
+                    || previous.as_ref().and_then(|(_, id, _)| id.as_deref())
+                        == Some(agent.agent_id.as_str())
+            })
+            .cloned();
+        if let Some(client_id) = client_id
+            && agent
+                .as_ref()
+                .and_then(|agent| agent.controller_client_id.as_deref())
+                .is_some_and(|controller| controller != client_id)
+        {
+            bail!("client is an observer; take control before archiving this session")
+        }
+        let reserved = connection.execute(
+            "INSERT OR IGNORE INTO session_archives(source_path,archive_path,agent_id,status)
+             VALUES (?1,?2,?3,'pending')",
+            params![
+                source.to_string_lossy(),
+                target.to_string_lossy(),
+                agent.as_ref().map(|a| &a.agent_id)
+            ],
+        )?;
+        if reserved == 0 && previous.is_none() {
+            bail!("archive destination is already reserved for another session")
+        }
+        if let Some(current) = agent.as_mut() {
+            // Fence new calls before stopping the writer. If moving fails, the
+            // transcript remains at its original path and the operation is retryable.
+            current.status = "stopped".into();
+            current.lifecycle = "archived".into();
+            current.controller_client_id = None;
+            current.inactive_reason = Some("explicit-archive".into());
+            self.database.upsert_agent(current)?;
+            self.agents
                 .lock()
                 .expect("agents mutex poisoned")
-                .get_mut(agent_id)
-            {
-                agent.status = "stopped".into();
-                agent.lifecycle = "archived".into();
-                agent.inactive_reason = Some("explicit-stop".into());
-                self.database.upsert_agent(agent)?;
-                let _ = self.database.set_worker_status(&agent.worker_id, "stopped");
+                .insert(current.agent_id.clone(), current.clone());
+            let descriptor_path = self.paths.worker_descriptor(&current.worker_id);
+            if let Ok(descriptor) = read_descriptor(&descriptor_path) {
+                let worker = self
+                    .workers
+                    .lock()
+                    .expect("workers mutex poisoned")
+                    .get(&current.worker_id)
+                    .cloned()
+                    .filter(|worker| worker.alive.load(Ordering::SeqCst))
+                    .or_else(|| {
+                        if descriptor.status == "running" && process_alive(descriptor.pid) {
+                            connect_worker(descriptor.clone(), self.database.clone()).ok()
+                        } else {
+                            None
+                        }
+                    });
+                if let Some(worker) = worker {
+                    // Archiving must also interrupt a long-running RPC. New
+                    // commands are already fenced by the stopped agent record.
+                    let _fence = worker.lifecycle.try_lock().ok();
+                    let _ = worker.call_inner(
+                        "shutdown",
+                        json!({"reason":"archive"}),
+                        Duration::from_secs(3),
+                    );
+                    worker.alive.store(false, Ordering::SeqCst);
+                }
+                if !wait_for_worker_stop(&descriptor_path, descriptor.pid, Duration::from_secs(5)) {
+                    terminate_worker_process_group(descriptor.pid);
+                }
+                retire_orphaned_worker(&descriptor)?;
+                self.database
+                    .release_workspace_lease(&descriptor.workspace_id, &descriptor.root_agent_id)?;
             }
-            return Ok(json!({"stopped": true, "resident": false}));
+            self.workers
+                .lock()
+                .expect("workers mutex poisoned")
+                .remove(&current.worker_id);
+            self.database
+                .mark_interrupted_agent_work_uncertain(&current.agent_id)?;
+            connection.execute("UPDATE schedules SET status='cancelled',claim=NULL,next_at_ms=NULL,revision=revision+1 WHERE agent_id=?1",
+                params![current.agent_id])?;
+            connection.execute("UPDATE goals SET status='cancelled',updated_at_ms=?2 WHERE agent_id=?1 AND status IN ('active','uncertain','blocked')",
+                params![current.agent_id, now_ms_i64()])?;
         }
-        let worker = self.worker_for_agent(agent_id)?;
-        let root_agent_id = self.root_agent_id_for(agent_id)?;
-        if root_agent_id != agent_id {
+        let lease_path = PathBuf::from(format!("{}.writer.lock", source.display()));
+        let lease = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&lease_path)?;
+        lease
+            .try_lock_exclusive()
+            .context("session writer is still active; archive deferred")?;
+        let parent = target
+            .parent()
+            .context("archive destination has no parent")?;
+        fs::create_dir_all(parent)?;
+        set_owner_only_dir(parent)?;
+        if source.exists() {
+            reject_archive_symlink(&source)?;
+            if target.exists() {
+                reject_archive_symlink(&target)?;
+                use std::os::unix::fs::MetadataExt;
+                let original = fs::metadata(&source)?;
+                let archived = fs::metadata(&target)?;
+                if (original.dev(), original.ino()) != (archived.dev(), archived.ino()) {
+                    bail!("archive destination contains a different file")
+                }
+            } else {
+                // Linking fails if target exists, so concurrent writers cannot
+                // cause an overwrite. The original survives all pre-commit errors.
+                fs::hard_link(&source, &target)
+                    .context("could not preserve transcript in archive")?;
+            }
+        } else if !target.is_file() {
+            bail!("both session and archive files are missing")
+        }
+        if let Some(file) = &source_file {
+            use std::os::unix::fs::MetadataExt;
+            let opened = file.metadata()?;
+            let archived = fs::symlink_metadata(&target)?;
+            if !archived.is_file()
+                || (opened.dev(), opened.ino()) != (archived.dev(), archived.ino())
+            {
+                bail!("session changed during archive; original history was not removed")
+            }
+        }
+        if let Some(current) = agent.as_mut() {
+            let descriptor_path = self.paths.worker_descriptor(&current.worker_id);
+            if let Ok(mut descriptor) = read_descriptor(&descriptor_path) {
+                descriptor.session_path = target.clone();
+                descriptor.status = "stopped".into();
+                descriptor.pid = None;
+                descriptor.child_pid = None;
+                write_descriptor(&descriptor_path, &descriptor)?;
+                self.database.upsert_worker(&descriptor, &descriptor_path)?;
+            }
+            current.session_path = target.clone();
+            self.database.upsert_agent(current)?;
+            self.agents
+                .lock()
+                .expect("agents mutex poisoned")
+                .insert(current.agent_id.clone(), current.clone());
+        }
+        if source.exists() {
+            use std::os::unix::fs::MetadataExt;
+            let original = fs::symlink_metadata(&source)?;
+            let archived = fs::symlink_metadata(&target)?;
+            if !original.is_file()
+                || (original.dev(), original.ino()) != (archived.dev(), archived.ino())
+            {
+                bail!("session path changed during archive; original path was not removed")
+            }
+            fs::remove_file(&source)?;
+        }
+        connection.execute(
+            "UPDATE session_archives SET status='completed' WHERE source_path=?1",
+            params![source.to_string_lossy()],
+        )?;
+        Ok(json!({"archived":true,"session_path":target,"agent_id":agent.map(|a| a.agent_id)}))
+    }
+
+    fn stop_agent(&self, agent_id: &str) -> Result<Value> {
+        let root = self
+            .agents
+            .lock()
+            .expect("agents mutex poisoned")
+            .contains_key(agent_id);
+        if !root {
+            let worker = self.worker_for_agent(agent_id)?;
             return worker.call(
                 "subagent.stop",
                 json!({"agent_id": agent_id}),
                 Duration::from_secs(3),
             );
         }
+        let (agent, worker) = {
+            let _residency = self
+                .residency
+                .lock()
+                .expect("runtime residency mutex poisoned");
+            // Publish the stop while holding the hydration/adoption gate. A
+            // missing or disconnected worker must never be started to stop it.
+            let agent = {
+                let mut agents = self.agents.lock().expect("agents mutex poisoned");
+                let agent = agents.get_mut(agent_id).context("agent was not found")?;
+                agent.status = "stopped".into();
+                agent.lifecycle = "archived".into();
+                agent.inactive_reason = Some("explicit-stop".into());
+                self.database.upsert_agent(agent)?;
+                agent.clone()
+            };
+            let worker = self
+                .workers
+                .lock()
+                .expect("workers mutex poisoned")
+                .get(&agent.worker_id)
+                .cloned();
+            (agent, worker)
+        };
+        // No residency/registry lock is held while waiting for an admitted RPC
+        // or retiring its process tree. Hydration now observes the stopped root.
+        let _fence = worker.as_ref().map(|worker| {
+            worker
+                .lifecycle
+                .lock()
+                .expect("worker lifecycle mutex poisoned")
+        });
+        let descriptor_path = self.paths.worker_descriptor(&agent.worker_id);
+        let descriptor = match read_descriptor(&descriptor_path)
+            .or_else(|error| worker.as_ref().map(|w| w.descriptor.clone()).ok_or(error))
+        {
+            Ok(descriptor) => Some(descriptor),
+            Err(error) => {
+                // A passivated/already stopped worker can have its descriptor
+                // removed. Only durable proof of inactivity and no lease makes
+                // that harmless; an unknown writer must retain its lease.
+                let safely_inactive = worker.is_none()
+                    && error.downcast_ref::<std::io::Error>().is_some_and(|error| {
+                        error.kind() == std::io::ErrorKind::NotFound
+                    })
+                    && self.database.connection()?.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM workers WHERE worker_id=?1 AND status IN ('inactive','stopped')) AND NOT EXISTS(SELECT 1 FROM leases WHERE owner=?2)",
+                        params![agent.worker_id, agent.root_agent_id],
+                        |row| row.get::<_, bool>(0),
+                    )?;
+                if !safely_inactive {
+                    return Err(error).context("cannot verify stopped worker process identity");
+                }
+                None
+            }
+        };
         let result = worker
-            .call("shutdown", json!({}), Duration::from_secs(3))
-            .unwrap_or_else(|_| json!({"shutting-down": true}));
-        let descriptor_path = self.paths.worker_descriptor(&worker.descriptor.worker_id);
-        if !wait_for_worker_stop(
-            &descriptor_path,
-            worker.descriptor.pid,
-            Duration::from_secs(5),
-        ) {
-            terminate_failed_worker_start(&descriptor_path, false, worker.descriptor.pid);
+            .as_ref()
+            .filter(|worker| worker.alive.load(Ordering::SeqCst))
+            .map(|worker| {
+                worker
+                    .call_inner("shutdown", json!({}), Duration::from_secs(3))
+                    .unwrap_or_else(|_| json!({"shutting-down": true}))
+            })
+            .unwrap_or_else(|| json!({"stopped": true, "resident": false}));
+        if let Some(worker) = &worker {
+            worker.alive.store(false, Ordering::SeqCst);
         }
+        if let Some(descriptor) = descriptor {
+            if !wait_for_worker_stop(&descriptor_path, descriptor.pid, Duration::from_secs(5)) {
+                terminate_failed_worker_start(&descriptor_path, false, descriptor.pid);
+            }
+            retire_orphaned_worker(&descriptor)?;
+        }
+        self.database
+            .release_workspace_lease(&agent.workspace_id, &agent.root_agent_id)?;
         self.workers
             .lock()
             .expect("workers mutex poisoned")
-            .remove(&worker.descriptor.worker_id);
+            .remove(&agent.worker_id);
         if let Some(agent) = self
             .agents
             .lock()
             .expect("agents mutex poisoned")
             .get_mut(agent_id)
         {
-            agent.status = "stopped".into();
-            agent.lifecycle = "archived".into();
-            agent.inactive_reason = Some("explicit-stop".into());
             agent.controller_client_id = None;
             self.database.upsert_agent(agent)?;
         }
-        let _ = self
-            .database
-            .set_worker_status(&worker.descriptor.worker_id, "stopped");
+        let _ = self.database.set_worker_status(&agent.worker_id, "stopped");
         Ok(result)
     }
 
@@ -2910,6 +3460,77 @@ impl Runtime {
     }
 }
 
+fn finish_client_command(
+    runtime: &Arc<Runtime>,
+    command: &PublicCommand,
+    writer: &Arc<Mutex<BufWriter<UnixStream>>>,
+    result: Result<Value>,
+) -> Result<()> {
+    match result {
+        Ok(result) => {
+            if let Some(command_id) = command.command_id.as_deref()
+                && wire::mutation(&command.method)
+            {
+                runtime.database.finish_command(
+                    command.journal_client_id(),
+                    command_id,
+                    "completed",
+                    &result,
+                )?;
+            }
+            write_command_response(writer, &command.request_id, result)?;
+        }
+        Err(error) => {
+            let uncertain =
+                wire::mutation(&command.method) && uncertain_worker_failure(&error.to_string());
+            let public_error = error.downcast_ref::<PublicApiError>();
+            let error_data = if uncertain {
+                json!({"status": "uncertain"})
+            } else if let Some(public) = public_error {
+                json!({"type": public.code})
+            } else {
+                Value::Null
+            };
+            let failure = json!({"message": error.to_string(), "data": error_data});
+            if let Some(command_id) = command.command_id.as_deref()
+                && wire::mutation(&command.method)
+                && !uncertain
+            {
+                runtime.database.finish_command(
+                    command.journal_client_id(),
+                    command_id,
+                    "failed",
+                    &failure,
+                )?;
+            }
+            write_value(
+                writer,
+                &wire::error_response(&command.request_id, error.to_string(), error_data),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+// These operations must remain reachable while the ordered command lane waits
+// for a long RPC. They never modify the connection's attachment map.
+fn control_command(method: &str) -> bool {
+    matches!(
+        method,
+        "command.status"
+            | "interaction.resolve"
+            | "planning.cancel"
+            | "planning.exit"
+            | "planning.pause"
+            | "repl.interrupt"
+            | "turn.abort"
+            | "run.abort"
+            | "agent.stop"
+            | "subagent.stop"
+            | "daemon.shutdown"
+    )
+}
+
 fn handle_client(runtime: Arc<Runtime>, stream: UnixStream) -> Result<()> {
     let attachment_id = format!("attachment-{}", Uuid::new_v4());
     let writer = Arc::new(Mutex::new(BufWriter::new(stream.try_clone()?)));
@@ -2922,7 +3543,34 @@ fn handle_client(runtime: Arc<Runtime>, stream: UnixStream) -> Result<()> {
             }
         }
     });
-    let mut attached_workers: HashMap<String, Arc<WorkerConnection>> = HashMap::new();
+    let (command_tx, command_rx) = mpsc::sync_channel::<PublicCommand>(32);
+    let command_runtime = Arc::clone(&runtime);
+    let command_writer = Arc::clone(&writer);
+    let command_events = event_tx.clone();
+    let command_attachment = attachment_id.clone();
+    let command_pump = thread::spawn(move || {
+        let mut attached_workers = HashMap::new();
+        let mut client_id = None;
+        for command in command_rx {
+            client_id = Some(command.client_id.clone());
+            let result = dispatch(
+                &command_runtime,
+                &command,
+                &command_attachment,
+                command_events.clone(),
+                &mut attached_workers,
+            );
+            if finish_client_command(&command_runtime, &command, &command_writer, result).is_err() {
+                break;
+            }
+        }
+        for (agent_id, worker) in &attached_workers {
+            worker.detach(&command_attachment);
+            if let Some(client_id) = client_id.as_deref() {
+                let _ = command_runtime.release_control(agent_id, client_id);
+            }
+        }
+    });
     let mut stable_client_id: Option<String> = None;
     for line in BufReader::new(stream).lines() {
         let line = line?;
@@ -3024,67 +3672,37 @@ fn handle_client(runtime: Arc<Runtime>, stream: UnixStream) -> Result<()> {
             Some(JournalEntry::New) | None => {}
         }
 
-        let result = dispatch(
-            &runtime,
-            &command,
-            &attachment_id,
-            event_tx.clone(),
-            &mut attached_workers,
-        );
-        match result {
-            Ok(result) => {
-                if let Some(command_id) = command.command_id.as_deref()
-                    && wire::mutation(&command.method)
-                {
-                    runtime.database.finish_command(
-                        &command.client_id,
-                        command_id,
-                        "completed",
-                        &result,
-                    )?;
-                }
-                write_command_response(&writer, &command.request_id, result)?;
-                if command.method == "daemon.shutdown" {
-                    schedule_shutdown(&runtime);
-                    break;
-                }
+        if control_command(&command.method) {
+            let result = dispatch(
+                &runtime,
+                &command,
+                &attachment_id,
+                event_tx.clone(),
+                &mut HashMap::new(),
+            );
+            finish_client_command(&runtime, &command, &writer, result)?;
+            if command.method == "daemon.shutdown" {
+                schedule_shutdown(&runtime);
+                break;
             }
-            Err(error) => {
-                let uncertain =
-                    wire::mutation(&command.method) && uncertain_worker_failure(&error.to_string());
-                let public_error = error.downcast_ref::<PublicApiError>();
-                let error_data = if uncertain {
-                    json!({"status": "uncertain"})
-                } else if let Some(public) = public_error {
-                    json!({"type": public.code})
-                } else {
-                    Value::Null
-                };
-                let failure = json!({"message": error.to_string(), "data": error_data});
-                if let Some(command_id) = command.command_id.as_deref()
-                    && wire::mutation(&command.method)
-                    && !uncertain
-                {
-                    runtime.database.finish_command(
-                        &command.client_id,
-                        command_id,
-                        "failed",
-                        &failure,
-                    )?;
-                }
-                write_value(
-                    &writer,
-                    &wire::error_response(&command.request_id, error.to_string(), error_data),
-                )?;
-            }
+        } else if let Err(error) = command_tx.try_send(command) {
+            let command = match error {
+                TrySendError::Full(command) | TrySendError::Disconnected(command) => command,
+            };
+            finish_client_command(
+                &runtime,
+                &command,
+                &writer,
+                Err(api_error(
+                    "client_busy",
+                    "client command queue is full or closed; retry after pending commands finish",
+                )),
+            )?;
         }
     }
-    for (agent_id, worker) in &attached_workers {
-        worker.detach(&attachment_id);
-        if let Some(client_id) = stable_client_id.as_deref() {
-            let _ = runtime.release_control(agent_id, client_id);
-        }
-    }
+    drop(command_tx);
+    let _ = command_pump.join();
+
     drop(event_tx);
     let _ = event_pump.join();
     Ok(())
@@ -3105,6 +3723,14 @@ fn dispatch(
     attached_workers: &mut HashMap<String, Arc<WorkerConnection>>,
 ) -> Result<Value> {
     match command.method.as_str() {
+        "command.status" => runtime.database.command_status(
+            command.journal_client_id(),
+            command
+                .params
+                .get("command_id")
+                .and_then(Value::as_str)
+                .context("command.status requires command_id")?,
+        ),
         "daemon.hello" => Ok(json!({
             "protocol_version": PROTOCOL_VERSION,
             "daemon_version": env!("CARGO_PKG_VERSION"),
@@ -3115,7 +3741,7 @@ fn dispatch(
                 "repl.backend-selection.v1", "schedule.v1", "goal.v1",
                 "durable.messaging.v1", "session.lifecycle.v1",
                 "worker.idle-eviction.v1", "database.backup.v1",
-                "agent.preset-selection.v1", "preset.discovery.v1"
+                "agent.preset-selection.v1", "preset.discovery.v1", "command.status.v1"
             ]
         })),
         "daemon.status" => Ok(json!({
@@ -3197,6 +3823,23 @@ fn dispatch(
             runtime.assert_controller(agent_id, &command.client_id)?;
             runtime.stop_agent(agent_id)
         }
+        "session.archive" => {
+            let source = command
+                .params
+                .get("session_path")
+                .and_then(Value::as_str)
+                .context("session.archive requires session_path")?;
+            let target = command
+                .params
+                .get("archive_path")
+                .and_then(Value::as_str)
+                .context("session.archive requires archive_path")?;
+            runtime.archive_session(
+                Path::new(source),
+                Path::new(target),
+                Some(&command.client_id),
+            )
+        }
         "agent.message.send" => {
             let agent_id = require_agent_id(command)?;
             runtime.assert_controller(agent_id, &command.client_id)?;
@@ -3205,195 +3848,110 @@ fn dispatch(
         "agent.message.receive"
         | "agent.message.record_sent"
         | "subagent.invoke"
-        | "subagent.passivate" => {
+        | "subagent.passivate"
+        | "automation.resolve" => {
             bail!("method is private to the daemon-worker protocol")
         }
-        "schedule.add" => {
+        "schedule.add" | "schedule.update" | "schedule.pause" | "schedule.resume"
+        | "schedule.cancel" | "goal.set" | "goal.update" | "goal.pause" | "goal.cancel"
+        | "goal.complete" | "goal.resume" => {
             let agent_id = require_agent_id(command)?;
             runtime.assert_controller(agent_id, &command.client_id)?;
-            let (expression, next_at_ms) = schedule_spec(&command.params)?;
-            let prompt = command
-                .params
-                .get("prompt")
-                .and_then(Value::as_str)
-                .context("schedule.add requires prompt")?;
-            if prompt.is_empty() || prompt.len() > 256 * 1024 {
-                bail!("schedule prompt must be between 1 byte and 256 KiB")
-            }
-            let max_attempts = command
-                .params
-                .get("max_attempts")
-                .and_then(Value::as_u64)
-                .unwrap_or(3)
-                .clamp(1, 10);
-            let retry_delay_ms = command
-                .params
-                .get("retry_delay_ms")
-                .and_then(Value::as_u64)
-                .unwrap_or(1_000)
-                .clamp(100, 60_000);
-            runtime.database.add_schedule(
-                agent_id,
-                &expression,
-                next_at_ms,
-                &json!({
-                    "prompt": prompt,
-                    "attempts": 0,
-                    "max_attempts": max_attempts,
-                    "retry_delay_ms": retry_delay_ms,
-                }),
-            )
-        }
-        "schedule.list" => {
-            let agent_id = command
-                .params
-                .get("agent_id")
-                .and_then(Value::as_str)
-                .or(command.agent_id.as_deref());
-            Ok(Value::Array(runtime.database.list_schedules(agent_id)?))
-        }
-        "schedule.cancel" => {
-            let agent_id = require_agent_id(command)?;
-            runtime.assert_controller(agent_id, &command.client_id)?;
-            let schedule_id = command
-                .params
-                .get("schedule_id")
-                .and_then(Value::as_str)
-                .context("schedule.cancel requires schedule_id")?;
-            let owned = runtime
-                .database
-                .list_schedules(Some(agent_id))?
-                .iter()
-                .any(|schedule| {
-                    schedule.get("schedule_id").and_then(Value::as_str) == Some(schedule_id)
-                });
-            if !owned {
-                bail!("schedule does not belong to agent")
-            }
-            Ok(json!({"cancelled": runtime.database.cancel_schedule(schedule_id)?}))
-        }
-        "goal.set" => {
-            let agent_id = require_agent_id(command)?;
-            runtime.assert_controller(agent_id, &command.client_id)?;
-            let objective = command
-                .params
-                .get("objective")
-                .and_then(Value::as_str)
-                .context("goal.set requires objective")?;
-            if objective.is_empty() || objective.len() > 256 * 1024 {
-                bail!("goal objective must be between 1 byte and 256 KiB")
-            }
-            let max = command
-                .params
-                .get("max_continuations")
-                .and_then(Value::as_u64)
-                .unwrap_or(3)
-                .min(20);
-            let goal = runtime.database.create_goal(agent_id, objective, max)?;
-            let goal_id = goal
-                .get("goal_id")
-                .and_then(Value::as_str)
-                .context("created goal has no id")?;
-            match runtime.submit_turn(agent_id, json!({"message": objective}), Some(goal_id)) {
-                Ok(run) => Ok(json!({"goal": goal, "run": run})),
-                Err(error) => {
-                    let _ = runtime
-                        .database
-                        .mark_goal_error(goal_id, &error.to_string());
-                    Err(error)
-                }
-            }
-        }
-        "goal.list" => {
-            let agent_id = command
-                .params
-                .get("agent_id")
-                .and_then(Value::as_str)
-                .or(command.agent_id.as_deref());
-            Ok(Value::Array(runtime.database.list_goals(agent_id)?))
-        }
-        "goal.status" => {
-            let goal_id = command
-                .params
-                .get("goal_id")
-                .and_then(Value::as_str)
-                .context("goal.status requires goal_id")?;
-            runtime
-                .database
-                .list_goals(command.agent_id.as_deref())?
-                .into_iter()
-                .find(|goal| goal.get("goal_id").and_then(Value::as_str) == Some(goal_id))
-                .context("goal was not found")
-        }
-        "goal.cancel" | "goal.complete" => {
-            let agent_id = require_agent_id(command)?;
-            runtime.assert_controller(agent_id, &command.client_id)?;
-            let goal_id = command
-                .params
-                .get("goal_id")
-                .and_then(Value::as_str)
-                .context("goal mutation requires goal_id")?;
-            let owned = runtime
-                .database
-                .list_goals(Some(agent_id))?
-                .iter()
-                .any(|goal| goal.get("goal_id").and_then(Value::as_str) == Some(goal_id));
-            if !owned {
-                bail!("goal does not belong to agent")
-            }
-            let status = if command.method == "goal.complete" {
-                "completed"
-            } else {
-                "cancelled"
-            };
-            Ok(json!({
-                "goal_id": goal_id,
-                "status": status,
-                "updated": runtime.database.set_goal_status(goal_id, status)?,
-            }))
-        }
-        "goal.resume" => {
-            let agent_id = require_agent_id(command)?;
-            runtime.assert_controller(agent_id, &command.client_id)?;
-            let goal_id = command
-                .params
-                .get("goal_id")
-                .and_then(Value::as_str)
-                .context("goal.resume requires goal_id")?;
-            let goal = runtime
-                .database
-                .list_goals(Some(agent_id))?
-                .into_iter()
-                .find(|goal| goal.get("goal_id").and_then(Value::as_str) == Some(goal_id))
-                .context("goal does not belong to agent")?;
-            let status = goal
-                .get("status")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            if !matches!(status, "uncertain" | "blocked") {
-                bail!("only uncertain or blocked goals can be resumed")
-            }
-            let objective = goal
-                .get("objective")
-                .and_then(Value::as_str)
-                .context("goal has no objective")?;
-            runtime.database.set_goal_status(goal_id, "active")?;
-            match runtime.submit_turn(
-                agent_id,
-                json!({
-                    "message": format!(
-                        "Resume this durable goal after explicit reconciliation. Inspect current state before making further changes.\n\nGoal: {objective}"
-                    )
-                }),
-                Some(goal_id),
+            // Serialize stopping a goal with continuation admission. A turn
+            // admitted before this fence may finish, but no later one starts.
+            let goal_fence = if matches!(
+                command.method.as_str(),
+                "goal.pause" | "goal.cancel" | "goal.complete"
             ) {
-                Ok(run) => Ok(json!({"goal_id": goal_id, "status": "active", "run": run})),
-                Err(error) => {
-                    let _ = runtime.database.mark_goal_error(goal_id, &error.to_string());
-                    Err(error)
+                let root_id = runtime.root_agent_id_for(agent_id)?;
+                runtime
+                    .workers
+                    .lock()
+                    .expect("workers mutex poisoned")
+                    .values()
+                    .find(|worker| worker.descriptor.root_agent_id == root_id)
+                    .cloned()
+            } else {
+                None
+            };
+            let _goal_guard = goal_fence.as_ref().map(|worker| {
+                worker
+                    .lifecycle
+                    .lock()
+                    .expect("worker lifecycle mutex poisoned")
+            });
+            let result = automation_operation(
+                &runtime.database,
+                agent_id,
+                &command.method,
+                &command.params,
+            )?;
+            if command.method == "goal.resume" {
+                let goal_id = result["goal_id"].as_str().context("goal has no id")?;
+                let continuation = GoalContinuation {
+                    previous_request_id: result["last_request_id"].as_str().map(str::to_owned),
+                    goal_id: goal_id.to_owned(),
+                    agent_id: agent_id.to_owned(),
+                    objective: result["objective"].as_str().unwrap_or_default().to_owned(),
+                    continuation_count: result["continuation_count"].as_u64().unwrap_or(0),
+                    max_continuations: result["max_continuations"].as_u64().unwrap_or(0),
+                };
+                let worker = match runtime.worker_for_agent(agent_id) {
+                    Ok(worker) => worker,
+                    Err(error) => {
+                        runtime
+                            .database
+                            .mark_goal_error(goal_id, &error.to_string())?;
+                        return Err(error);
+                    }
+                };
+                spawn_goal_continuation(worker, runtime.database.clone(), continuation);
+                return Ok(json!({"goal":result,"run":{"queued":true}}));
+            }
+            if command.method == "goal.set" {
+                let goal_id = result["goal_id"].as_str().context("goal has no id")?;
+                let objective = result["objective"]
+                    .as_str()
+                    .context("goal has no objective")?;
+                let pending_run: Option<String> = runtime.database.connection()?.query_row(
+                    "SELECT r.request_id FROM goal_runs r JOIN tasks t ON t.run_id=r.request_id WHERE r.goal_id=?1 AND r.status='running' AND t.status='running' LIMIT 1",
+                    params![goal_id], |row| row.get(0)).optional()?;
+                if let Some(request_id) = pending_run {
+                    return Ok(
+                        json!({"goal": result, "run": {"request_id": request_id, "existing": true}}),
+                    );
                 }
+                match runtime.submit_turn(agent_id, json!({"message": objective}), Some(goal_id)) {
+                    Ok(run) => Ok(json!({"goal": result, "run": run})),
+                    Err(error) => {
+                        let _ = runtime
+                            .database
+                            .mark_goal_error(goal_id, &error.to_string());
+                        Err(error)
+                    }
+                }
+            } else {
+                Ok(result)
             }
         }
+        "schedule.list" | "goal.list" => {
+            let agent_id = command
+                .params
+                .get("agent_id")
+                .and_then(Value::as_str)
+                .or(command.agent_id.as_deref());
+            if command.method == "schedule.list" {
+                Ok(json!(runtime.database.list_schedules(agent_id)?))
+            } else {
+                Ok(json!(runtime.database.list_goals(agent_id)?))
+            }
+        }
+        "goal.status" => automation_operation(
+            &runtime.database,
+            require_agent_id(command)?,
+            &command.method,
+            &command.params,
+        ),
         "frontend.exit" => Ok(json!({"exiting": true, "detached": true})),
         method => {
             let agent_id = require_agent_id(command)?;
@@ -3593,8 +4151,330 @@ fn enforce_model_quotas(parameters: &Value) -> Result<()> {
     Ok(())
 }
 
+fn validate_turn_message(message: &Value) -> Result<()> {
+    if let Some(text) = message.as_str() {
+        if text.is_empty() {
+            bail!("turn message cannot be empty")
+        }
+        if text.len() > 256 * 1024 {
+            bail!("turn message exceeds the 256 KiB limit")
+        }
+        return Ok(());
+    }
+    let blocks = message
+        .as_array()
+        .context("turn message must be text or typed content blocks")?;
+    if blocks.is_empty() || blocks.len() > 9 {
+        bail!("turn message requires 1 through 9 content blocks")
+    }
+    if serde_json::to_vec(message)?.len() > 256 * 1024 {
+        bail!("turn message references exceed the 256 KiB limit")
+    }
+    let mut content = false;
+    for block in blocks {
+        let object = block
+            .as_object()
+            .context("turn content block must be an object")?;
+        match object.get("type").and_then(Value::as_str) {
+            Some("text") => {
+                if object.len() != 2 {
+                    bail!("text blocks require only type and text")
+                }
+                let text = object
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .context("text block requires text")?;
+                content |= !text.is_empty();
+            }
+            Some("attachment") => {
+                if object.len() != 6 {
+                    bail!("attachment blocks require type,id,name,mime,size,workspaceId")
+                }
+                let id = object
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .context("attachment requires id")?;
+                if !(8..=128).contains(&id.len())
+                    || !id
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+                {
+                    bail!("invalid attachment id")
+                }
+                let workspace = object
+                    .get("workspaceId")
+                    .and_then(Value::as_str)
+                    .context("attachment requires workspaceId")?;
+                if workspace.len() != 16
+                    || !workspace
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                {
+                    bail!("invalid attachment workspaceId")
+                }
+                for (field, max) in [("name", 180), ("mime", 100)] {
+                    let value = object
+                        .get(field)
+                        .and_then(Value::as_str)
+                        .with_context(|| format!("attachment requires {field}"))?;
+                    if value.is_empty() || value.chars().count() > max {
+                        bail!("invalid attachment {field}")
+                    }
+                }
+                if !object
+                    .get("size")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|size| (1..=8_388_608).contains(&size))
+                {
+                    bail!("invalid attachment size")
+                }
+                content = true;
+            }
+            _ => bail!("unsupported turn content block"),
+        }
+    }
+    if !content {
+        bail!("turn message cannot be empty")
+    }
+    Ok(())
+}
+
+fn automation_operation(
+    database: &Database,
+    agent_id: &str,
+    method: &str,
+    p: &Value,
+) -> Result<Value> {
+    let required_text = |key: &str| -> Result<&str> {
+        let value = p
+            .get(key)
+            .and_then(Value::as_str)
+            .with_context(|| format!("{method} requires {key}"))?;
+        if value.trim().is_empty() || value.len() > 256 * 1024 {
+            bail!("{key} must be between 1 byte and 256 KiB")
+        }
+        Ok(value)
+    };
+    let revision = |row: &Value, required: bool| -> Result<i64> {
+        let current = row["revision"].as_i64().context("missing revision")?;
+        match p.get("expected_revision") {
+            Some(v) if v.as_i64() == Some(current) => Ok(current),
+            Some(_) => Err(api_error(
+                "revision_conflict",
+                "state changed; refresh before retrying",
+            )),
+            None if required => bail!("expected_revision is required"),
+            None => Ok(current),
+        }
+    };
+    match method {
+        "schedule.list" => return Ok(json!(database.list_schedules(Some(agent_id))?)),
+        "goal.list" => return Ok(json!(database.list_goals(Some(agent_id))?)),
+        "schedule.add" => {
+            let (expression, next) = schedule_spec(p)?;
+            return database.add_schedule(agent_id, &expression, next, &json!({
+                "prompt": required_text("prompt")?, "attempts": 0,
+                "timezone": p.get("timezone").and_then(Value::as_str).unwrap_or("UTC"),
+                "max_attempts": p.get("max_attempts").and_then(Value::as_u64).unwrap_or(3).clamp(1,10),
+                "retry_delay_ms": p.get("retry_delay_ms").and_then(Value::as_u64).unwrap_or(1000).clamp(100,60000),
+            }));
+        }
+        "goal.set" => {
+            return database.create_goal(
+                agent_id,
+                required_text("objective")?,
+                p.get("max_continuations")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(3)
+                    .min(20),
+            );
+        }
+        _ => {}
+    }
+    if method.starts_with("schedule.") {
+        let id = required_text("schedule_id")?;
+        let row = database
+            .list_schedules(Some(agent_id))?
+            .into_iter()
+            .find(|row| row["schedule_id"] == id)
+            .context("schedule does not belong to agent")?;
+        let rev = revision(&row, method != "schedule.cancel")?;
+        let old_status = row["status"].as_str().unwrap_or_default();
+        let mut status = old_status;
+        let mut expression = row["expression"].as_str().unwrap_or_default().to_owned();
+        let mut policy = row["policy"].clone();
+        let mut next = row["next_at_ms"].as_i64();
+        match method {
+            "schedule.cancel" => {
+                status = "cancelled";
+                next = None;
+            }
+            "schedule.pause" if old_status == "active" => {
+                status = "paused";
+                next = None;
+            }
+            "schedule.resume" if matches!(old_status, "paused" | "failed") => {
+                if old_status == "failed" {
+                    policy["attempts"] = json!(0);
+                }
+                let zone = policy
+                    .get("timezone")
+                    .and_then(Value::as_str)
+                    .unwrap_or("UTC");
+                next = if let Some(at) = expression
+                    .strip_prefix("at:")
+                    .and_then(|s| s.parse::<i64>().ok())
+                {
+                    (at > now_ms_i64()).then_some(at)
+                } else {
+                    next_schedule_time_in_zone(&expression, now_ms_i64(), zone)
+                };
+                if next.is_none() {
+                    bail!("schedule has no future occurrence; update its time before resuming")
+                }
+                status = "active";
+            }
+            "schedule.update" if matches!(old_status, "active" | "paused" | "failed") => {
+                if p.get("prompt").is_some() {
+                    policy["prompt"] = json!(required_text("prompt")?);
+                }
+                if let Some(zone) = p.get("timezone") {
+                    zone.as_str()
+                        .context("timezone must be a string")?
+                        .parse::<Tz>()
+                        .context("invalid IANA timezone")?;
+                    policy["timezone"] = zone.clone();
+                }
+                let mut spec = p.clone();
+                let has_spec = [
+                    "at_ms",
+                    "delay_ms",
+                    "every_ms",
+                    "expression",
+                    "daily",
+                    "weekly",
+                ]
+                .iter()
+                .any(|key| p.get(*key).is_some());
+                if has_spec || p.get("timezone").is_some() {
+                    if !has_spec {
+                        if let Some(at) = expression
+                            .strip_prefix("at:")
+                            .and_then(|s| s.parse::<i64>().ok())
+                        {
+                            spec["at_ms"] = json!(at);
+                        } else {
+                            spec["expression"] = json!(expression);
+                        }
+                    }
+                    spec["timezone"] = policy.get("timezone").cloned().unwrap_or(json!("UTC"));
+                    let (updated, at) = schedule_spec(&spec)?;
+                    expression = updated;
+                    next = if status == "active" { Some(at) } else { None };
+                }
+            }
+            _ => bail!(
+                "{method} is not permitted for a {old_status} schedule; uncertain delivery requires reconciliation"
+            ),
+        }
+        database.revise_schedule(id, rev, &expression, next, &policy, status)?;
+        return database
+            .list_schedules(Some(agent_id))?
+            .into_iter()
+            .find(|row| row["schedule_id"] == id)
+            .context("schedule disappeared");
+    }
+    if method.starts_with("goal.") {
+        let id = required_text("goal_id")?;
+        let row = database
+            .list_goals(Some(agent_id))?
+            .into_iter()
+            .find(|row| row["goal_id"] == id)
+            .context("goal does not belong to agent")?;
+        if method == "goal.status" {
+            return Ok(row);
+        }
+        let rev = revision(&row, matches!(method, "goal.update" | "goal.pause"))?;
+        let old_status = row["status"].as_str().unwrap_or_default();
+        if matches!(old_status, "completed" | "cancelled" | "superseded") {
+            bail!("goal is terminal")
+        }
+        let mut status = old_status;
+        let mut objective = row["objective"].as_str().unwrap_or_default();
+        let mut max = row["max_continuations"].as_u64().unwrap_or(3);
+        match method {
+            "goal.cancel" => status = "cancelled",
+            "goal.complete" => status = "completed",
+            "goal.pause" if old_status == "active" => status = "paused",
+            "goal.resume"
+                if matches!(
+                    old_status,
+                    "paused" | "blocked" | "uncertain" | "budget_exhausted"
+                ) =>
+            {
+                if old_status == "uncertain"
+                    && p.get("reconciled").and_then(Value::as_bool) != Some(true)
+                {
+                    bail!("uncertain goal requires reconciled=true after checking prior effects")
+                }
+                if row["continuation_count"].as_u64().unwrap_or(0) >= max {
+                    bail!(
+                        "goal budget exhausted; explicitly update max_continuations before resuming"
+                    )
+                }
+                status = "active";
+            }
+            "goal.update" => {
+                if p.get("objective").is_some() {
+                    objective = required_text("objective")?;
+                }
+                if let Some(limit) = p.get("max_continuations") {
+                    max = limit
+                        .as_u64()
+                        .filter(|n| *n <= 20)
+                        .context("max_continuations must be 0 through 20")?;
+                    if max < row["continuation_count"].as_u64().unwrap_or(0) {
+                        bail!("new budget is below already used continuations")
+                    }
+                }
+            }
+            _ => bail!("{method} is not permitted for a {old_status} goal"),
+        }
+        database.revise_goal(id, rev, objective, max, status)?;
+        return database
+            .list_goals(Some(agent_id))?
+            .into_iter()
+            .find(|row| row["goal_id"] == id)
+            .context("goal disappeared");
+    }
+    bail!("unsupported automation method")
+}
+
 fn schedule_spec(parameters: &Value) -> Result<(String, i64)> {
     let now = now_ms_i64();
+    let selectors = [
+        "at_ms",
+        "delay_ms",
+        "every_ms",
+        "expression",
+        "daily",
+        "weekly",
+    ];
+    if selectors
+        .iter()
+        .filter(|key| parameters.get(**key).is_some())
+        .count()
+        != 1
+    {
+        bail!("provide exactly one of at_ms, delay_ms, every_ms, expression, daily, or weekly")
+    }
+    let timezone = parameters
+        .get("timezone")
+        .and_then(Value::as_str)
+        .unwrap_or("UTC");
+    timezone
+        .parse::<Tz>()
+        .context("timezone must be an IANA timezone name")?;
     if let Some(at_ms) = parameters.get("at_ms").and_then(Value::as_i64) {
         if at_ms <= now {
             bail!("schedule at_ms must be in the future")
@@ -3606,7 +4486,9 @@ fn schedule_spec(parameters: &Value) -> Result<(String, i64)> {
         if delay_ms <= 0 {
             bail!("schedule delay_ms must be positive")
         }
-        let at_ms = now.saturating_add(delay_ms);
+        let at_ms = now
+            .checked_add(delay_ms)
+            .context("schedule delay overflows timestamp")?;
         return Ok((format!("at:{at_ms}"), at_ms));
     }
     if let Some(every_ms) = parameters.get("every_ms").and_then(Value::as_u64) {
@@ -3614,54 +4496,163 @@ fn schedule_spec(parameters: &Value) -> Result<(String, i64)> {
         if every_ms < 100 {
             bail!("schedule every_ms must be at least 100")
         }
-        return Ok((format!("@every {every_ms}ms"), now.saturating_add(every_ms)));
+        return Ok((
+            format!("@every {every_ms}ms"),
+            now.checked_add(every_ms)
+                .context("schedule interval overflows timestamp")?,
+        ));
     }
-    let expression = parameters
-        .get("expression")
-        .and_then(Value::as_str)
-        .context("schedule.add requires at_ms, delay_ms, every_ms, or expression")?;
-    let next = next_schedule_time(expression, now)
-        .with_context(|| format!("unsupported schedule expression: {expression}"))?;
-    Ok((expression.to_owned(), next))
+    let clock = |value: &str| -> Result<(u32, u32)> {
+        let (hour, minute) = value.split_once(':').context("time must be HH:MM")?;
+        let hour: u32 = hour.parse().context("invalid hour")?;
+        let minute: u32 = minute.parse().context("invalid minute")?;
+        if hour > 23 || minute > 59 {
+            bail!("time must be HH:MM (00:00 through 23:59)")
+        }
+        Ok((hour, minute))
+    };
+    let expression = if let Some(daily) = parameters.get("daily").and_then(Value::as_str) {
+        let (hour, minute) = clock(daily)?;
+        format!("{minute} {hour} * * *")
+    } else if let Some(weekly) = parameters.get("weekly").and_then(Value::as_str) {
+        let (days, time) = weekly
+            .split_once(' ')
+            .context("weekly must be MON,WED HH:MM")?;
+        let (hour, minute) = clock(time.trim())?;
+        format!("{minute} {hour} * * {days}")
+    } else {
+        parameters
+            .get("expression")
+            .and_then(Value::as_str)
+            .context("schedule expression must be a string")?
+            .to_owned()
+    };
+    let next = next_schedule_time_in_zone(&expression, now, timezone).with_context(|| {
+        format!("invalid expression or no occurrence within eight years: {expression}")
+    })?;
+    Ok((expression, next))
 }
 
+#[derive(Debug)]
+struct CronField {
+    values: Vec<u32>,
+    wildcard: bool,
+}
+
+fn cron_field(input: &str, min: u32, max: u32, names: &[&str]) -> Option<CronField> {
+    let input = input.to_ascii_uppercase();
+    let number = |s: &str| -> Option<u32> {
+        s.parse().ok().or_else(|| {
+            names
+                .iter()
+                .position(|name| *name == s)
+                .map(|i| i as u32 + min)
+        })
+    };
+    let mut values = Vec::new();
+    for part in input.split(',') {
+        let (range, step) = if let Some((range, step)) = part.split_once('/') {
+            (range, step.parse::<u32>().ok()?)
+        } else {
+            (part, 1)
+        };
+        if step == 0 || step > max + 1 {
+            return None;
+        }
+        let (start, end) = if range == "*" {
+            (min, max)
+        } else if let Some((start, end)) = range.split_once('-') {
+            (number(start)?, number(end)?)
+        } else {
+            let value = number(range)?;
+            (value, if part.contains('/') { max } else { value })
+        };
+        if start < min || end > max || start > end {
+            return None;
+        }
+        values.extend((start..=end).step_by(step as usize));
+    }
+    values.sort_unstable();
+    values.dedup();
+    (!values.is_empty()).then_some(CronField {
+        values,
+        wildcard: input.starts_with('*'),
+    })
+}
+
+#[cfg(test)]
 fn next_schedule_time(expression: &str, after_ms: i64) -> Option<i64> {
+    next_schedule_time_in_zone(expression, after_ms, "UTC")
+}
+
+fn next_schedule_time_in_zone(expression: &str, after_ms: i64, timezone: &str) -> Option<i64> {
+    let zone: Tz = timezone.parse().ok()?;
     if expression.starts_with("at:") {
         return None;
     }
     if let Some(duration) = expression.strip_prefix("@every ") {
         let milliseconds = duration.strip_suffix("ms")?.parse::<i64>().ok()?;
-        return (milliseconds >= 100).then(|| after_ms.saturating_add(milliseconds));
+        return if milliseconds >= 100 {
+            after_ms.checked_add(milliseconds)
+        } else {
+            None
+        };
     }
     let fields: Vec<_> = expression.split_whitespace().collect();
-    if fields.len() != 5 || fields[1..] != ["*", "*", "*", "*"] {
+    if fields.len() != 5 {
         return None;
     }
-    let minute_ms = 60_000i64;
-    let next_minute = after_ms
-        .div_euclid(minute_ms)
-        .saturating_add(1)
-        .saturating_mul(minute_ms);
-    if fields[0] == "*" {
-        return Some(next_minute);
-    }
-    if let Some(step) = fields[0].strip_prefix("*/") {
-        let step = step.parse::<i64>().ok()?;
-        if !(1..=59).contains(&step) {
-            return None;
+    let minutes = cron_field(fields[0], 0, 59, &[])?;
+    let hours = cron_field(fields[1], 0, 23, &[])?;
+    let dates = cron_field(fields[2], 1, 31, &[])?;
+    let months = cron_field(
+        fields[3],
+        1,
+        12,
+        &[
+            "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
+        ],
+    )?;
+    let weekdays = cron_field(
+        fields[4],
+        0,
+        7,
+        &["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"],
+    )?;
+    let after = Utc
+        .timestamp_millis_opt(after_ms)
+        .single()?
+        .with_timezone(&zone);
+    let mut date: NaiveDate = after.date_naive();
+    // Search calendar days, then selected hours and minutes. A missing DST wall
+    // time is skipped; an ambiguous wall time runs only at its first occurrence.
+    for _ in 0..(366 * 8) {
+        let dom = dates.values.contains(&date.day());
+        let dow = weekdays
+            .values
+            .iter()
+            .any(|day| day % 7 == date.weekday().num_days_from_sunday());
+        let day_matches = if !dates.wildcard && !weekdays.wildcard {
+            dom || dow
+        } else {
+            dom && dow
+        };
+        if months.values.contains(&date.month()) && day_matches {
+            for hour in &hours.values {
+                for minute in &minutes.values {
+                    let wall = date.and_hms_opt(*hour, *minute, 0)?;
+                    if let Some(next) = zone.from_local_datetime(&wall).earliest() {
+                        let timestamp = next.timestamp_millis();
+                        if timestamp > after_ms {
+                            return Some(timestamp);
+                        }
+                    }
+                }
+            }
         }
-        let current_minute = next_minute.div_euclid(minute_ms);
-        let remainder = current_minute.rem_euclid(step);
-        let delta = if remainder == 0 { 0 } else { step - remainder };
-        return Some(next_minute.saturating_add(delta.saturating_mul(minute_ms)));
+        date = date.succ_opt()?;
     }
-    let target = fields[0].parse::<i64>().ok()?;
-    if !(0..=59).contains(&target) {
-        return None;
-    }
-    let current = next_minute.div_euclid(minute_ms).rem_euclid(60);
-    let delta = (target - current).rem_euclid(60);
-    Some(next_minute.saturating_add(delta.saturating_mul(minute_ms)))
+    None
 }
 
 fn spawn_scheduler(runtime: Arc<Runtime>) {
@@ -3715,21 +4706,44 @@ fn run_schedule_claim(runtime: &Runtime, claim: ScheduleClaim) {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_owned();
-    let result = runtime.submit_turn(&claim.agent_id, json!({"message": prompt}), None);
+    let result = runtime.submit_turn_with_id(
+        &claim.agent_id,
+        json!({"message": prompt}),
+        None,
+        Some(&claim.delivery_id),
+    );
+    finish_schedule_dispatch(&runtime.database, &claim, result);
+}
+
+fn finish_schedule_dispatch(database: &Database, claim: &ScheduleClaim, result: Result<Value>) {
     let mut policy = claim.policy.clone();
     if result.is_ok() {
         if let Some(object) = policy.as_object_mut() {
             object.insert("attempts".into(), json!(0));
+            object.insert("last_delivery_id".into(), json!(claim.delivery_id));
+            object.remove("delivery_id");
+            object.remove("last_error");
         }
-        let next = next_schedule_time(&claim.expression, now_ms_i64());
+        let timezone = claim
+            .policy
+            .get("timezone")
+            .and_then(Value::as_str)
+            .unwrap_or("UTC");
+        let next = next_schedule_time_in_zone(&claim.expression, now_ms_i64(), timezone);
         let status = if next.is_some() {
             "active"
         } else {
             "completed"
         };
-        let _ = runtime
-            .database
-            .finish_schedule_claim(&claim, status, next, &policy);
+        let _ = database.finish_schedule_claim(claim, status, next, &policy);
+        return;
+    }
+    let error = result.unwrap_err().to_string();
+    if uncertain_worker_failure(&error) {
+        if let Some(object) = policy.as_object_mut() {
+            object.insert("last_error".into(), json!(error));
+        }
+        let _ = database.finish_schedule_claim(claim, "uncertain", None, &policy);
         return;
     }
     let attempts = policy
@@ -3744,10 +4758,7 @@ fn run_schedule_claim(runtime: &Runtime, claim: ScheduleClaim) {
         .clamp(1, 10);
     if let Some(object) = policy.as_object_mut() {
         object.insert("attempts".into(), json!(attempts));
-        object.insert(
-            "last_error".into(),
-            json!(result.err().map(|error| error.to_string())),
-        );
+        object.insert("last_error".into(), json!(error));
     }
     let (status, next) = if attempts >= max_attempts {
         ("failed", None)
@@ -3766,9 +4777,22 @@ fn run_schedule_claim(runtime: &Runtime, claim: ScheduleClaim) {
             Some(now_ms_i64().saturating_add(i64::try_from(delay).unwrap_or(60_000))),
         )
     };
-    let _ = runtime
-        .database
-        .finish_schedule_claim(&claim, status, next, &policy);
+    let _ = database.finish_schedule_claim(claim, status, next, &policy);
+}
+
+fn current_goal_continuation(
+    database: &Database,
+    continuation: &GoalContinuation,
+) -> Result<Option<Value>> {
+    Ok(database
+        .list_goals(Some(&continuation.agent_id))?
+        .into_iter()
+        .find(|goal| {
+            goal["goal_id"] == continuation.goal_id
+                && goal["status"] == "active"
+                && goal["continuation_count"].as_u64() == Some(continuation.continuation_count)
+                && goal["last_request_id"].as_str() == continuation.previous_request_id.as_deref()
+        }))
 }
 
 fn spawn_goal_continuation(
@@ -3778,6 +4802,31 @@ fn spawn_goal_continuation(
 ) {
     thread::spawn(move || {
         let owner = &connection.descriptor.root_agent_id;
+        let _lifecycle = connection
+            .lifecycle
+            .lock()
+            .expect("worker lifecycle mutex poisoned");
+        let current_goal = match current_goal_continuation(&database, &continuation) {
+            Ok(Some(goal)) => goal,
+            Ok(None) => return,
+            Err(error) => {
+                let _ = database.mark_goal_error(&continuation.goal_id, &error.to_string());
+                return;
+            }
+        };
+        // Resuming a paused-but-still-running turn arms its ordinary completion;
+        // it must not submit an additional turn alongside the existing one.
+        let running = database.connection().and_then(|db| db.query_row(
+            "SELECT 1 FROM goal_runs r JOIN tasks t ON t.run_id=r.request_id WHERE r.goal_id=?1 AND r.status='running' AND t.status='running' LIMIT 1",
+            params![continuation.goal_id], |_| Ok(())).optional().map_err(Into::into));
+        match running {
+            Ok(Some(_)) => return,
+            Ok(None) => {}
+            Err(error) => {
+                let _ = database.mark_goal_error(&continuation.goal_id, &error.to_string());
+                return;
+            }
+        }
         if let Err(error) =
             database.acquire_workspace_lease(&connection.descriptor.workspace_id, owner)
         {
@@ -3786,44 +4835,71 @@ fn spawn_goal_continuation(
         }
         let prompt = format!(
             "Continue the durable goal below. Inspect the current session and workspace, make the next safe unit of progress, and report blockers explicitly.\n\nGoal: {}\n\nContinuation {}/{}.",
-            continuation.objective, continuation.continuation_count, continuation.max_continuations,
+            current_goal["objective"]
+                .as_str()
+                .unwrap_or(&continuation.objective),
+            continuation.continuation_count,
+            current_goal["max_continuations"]
+                .as_u64()
+                .unwrap_or(continuation.max_continuations),
         );
+        let request_id = Uuid::new_v4().to_string();
+        if let Err(error) = database
+            .record_task(&continuation.agent_id, &request_id)
+            .and_then(|_| database.record_goal_run(&continuation.goal_id, &request_id))
+        {
+            let _ = database.finish_task(&request_id, false);
+            let _ = database.mark_goal_error(&continuation.goal_id, &error.to_string());
+            let _ = database.release_workspace_lease(&connection.descriptor.workspace_id, owner);
+            return;
+        }
         let result = if continuation.agent_id == connection.descriptor.root_agent_id {
-            connection.call(
+            connection.call_inner(
                 "turn.submit",
-                json!({"message": prompt}),
+                json!({"message": prompt,"request_id":request_id}),
                 WORKER_RPC_TIMEOUT,
             )
         } else {
-            connection.call(
+            connection.call_inner(
                 "subagent.invoke",
                 json!({
                     "agent_id": continuation.agent_id,
                     "method": "turn.submit",
-                    "params": {"message": prompt},
+                    "params": {"message": prompt,"request_id":request_id},
                 }),
                 WORKER_RPC_TIMEOUT,
             )
         };
         match result {
             Ok(result) => {
-                if let Some(request_id) = result.get("request_id").and_then(Value::as_str)
-                    && database
-                        .record_task(&continuation.agent_id, request_id)
-                        .and_then(|_| database.record_goal_run(&continuation.goal_id, request_id))
-                        .is_ok()
-                {
+                if result.get("request_id").and_then(Value::as_str) == Some(request_id.as_str()) {
                     return;
                 }
                 let _ = database.mark_goal_error(
                     &continuation.goal_id,
                     "continued goal was accepted without a durable request id",
                 );
+                let _ = database.retain_uncertain_workspace_lease(
+                    &connection.descriptor.workspace_id,
+                    owner,
+                    Some(&request_id),
+                );
+                return;
             }
             Err(error) => {
                 let _ = database.mark_goal_error(&continuation.goal_id, &error.to_string());
+                if uncertain_worker_failure(&error.to_string()) {
+                    let _ = database.retain_uncertain_workspace_lease(
+                        &connection.descriptor.workspace_id,
+                        owner,
+                        Some(&request_id),
+                    );
+                    return;
+                }
             }
         }
+        let _ = database.finish_task(&request_id, false);
+        let _ = database.finish_goal_run_failed(&request_id);
         let _ = database.release_workspace_lease(&connection.descriptor.workspace_id, owner);
     });
 }
@@ -3846,6 +4922,8 @@ fn connect_worker(
             descriptor.socket_path.display()
         )
     })?;
+    stream.set_read_timeout(Some(Duration::from_secs(3)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(3)))?;
     serde_json::to_writer(
         &mut stream,
         &json!({"version": 1, "type": "worker.auth", "token": descriptor.token}),
@@ -3862,6 +4940,7 @@ fn connect_worker(
     {
         bail!("worker registration did not match descriptor")
     }
+    stream.set_read_timeout(None)?;
     let connection = Arc::new(WorkerConnection {
         sequence: AtomicU64::new(0),
         generation: AtomicU64::new(descriptor.generation),
@@ -3877,6 +4956,108 @@ fn connect_worker(
     let reader_connection = Arc::clone(&connection);
     thread::spawn(move || worker_reader(reader_connection, reader, database));
     Ok(connection)
+}
+
+fn handle_automation_request(connection: Arc<WorkerConnection>, database: Database, event: Value) {
+    thread::spawn(move || {
+        let data = event.get("data").cloned().unwrap_or(Value::Null);
+        let Some(id) = data.get("id").and_then(Value::as_str) else {
+            return;
+        };
+        let agent_id = &connection.descriptor.root_agent_id;
+        let method = data
+            .get("method")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let p = data.get("params").cloned().unwrap_or(json!({}));
+        let result = (|| -> Result<Value> {
+            if event
+                .get("agent_id")
+                .and_then(Value::as_str)
+                .is_some_and(|sender| sender != agent_id)
+            {
+                bail!("automation is only available to the root agent")
+            }
+            if !matches!(
+                method,
+                "schedule.add"
+                    | "schedule.list"
+                    | "schedule.update"
+                    | "schedule.pause"
+                    | "schedule.resume"
+                    | "schedule.cancel"
+                    | "goal.set"
+                    | "goal.list"
+                    | "goal.status"
+                    | "goal.update"
+                    | "goal.pause"
+                    | "goal.resume"
+                    | "goal.cancel"
+                    | "goal.complete"
+            ) {
+                bail!("unsupported automation method")
+            }
+            let client_id = format!("automation:{agent_id}");
+            let command = PublicCommand {
+                client_id: client_id.clone(),
+                command_id: Some(id.into()),
+                agent_id: Some(agent_id.clone()),
+                method: method.into(),
+                params: p.clone(),
+                ..Default::default()
+            };
+            match database.begin_command(&command)? {
+                JournalEntry::Completed(value) => return Ok(value),
+                JournalEntry::Failed(error) => bail!("{}", error),
+                JournalEntry::Pending => {
+                    bail!("automation outcome is uncertain; inspect state before any retry")
+                }
+                JournalEntry::New => {}
+            }
+            let outcome = (|| -> Result<Value> {
+                // The model already occupies a turn. Bind the goal to that run;
+                // never submit a nested turn and wait on the same worker.
+                let current_run = if matches!(method, "goal.set" | "goal.resume") {
+                    Some(database.connection()?.query_row(
+                        "SELECT run_id FROM tasks WHERE agent_id=?1 AND status='running' ORDER BY created_at_ms DESC LIMIT 1",
+                        params![agent_id], |row| row.get::<_, String>(0)).context("goal tool requires a daemon-managed active turn")?)
+                } else {
+                    None
+                };
+                if method == "goal.set"
+                    && let Some(run_id) = &current_run
+                    && database.goal_id_for_run(run_id)?.is_some()
+                {
+                    bail!(
+                        "this turn is already bound to a goal; finish it before creating another goal"
+                    )
+                }
+                let result = automation_operation(&database, agent_id, method, &p)?;
+                if let Some(run_id) = current_run {
+                    let goal_id = result["goal_id"].as_str().context("goal id is missing")?;
+                    database.record_goal_run(goal_id, &run_id)?;
+                }
+                Ok(result)
+            })();
+            match &outcome {
+                Ok(value) => database.finish_command(&client_id, id, "completed", value)?,
+                Err(error) => database.finish_command(
+                    &client_id,
+                    id,
+                    "failed",
+                    &json!({"message": error.to_string()}),
+                )?,
+            }
+            outcome
+        })();
+        let response = match result {
+            Ok(value) => json!({"id": id, "ok": true, "result": value}),
+            Err(error) => json!({"id": id, "ok": false, "error": error.to_string()}),
+        };
+        // This private method is explicitly rejected by the public dispatcher.
+        // Keep the reader available to receive its acknowledgment.
+        let _ = connection.call_inner("automation.resolve", response, Duration::from_secs(10));
+    });
 }
 
 fn worker_reader(
@@ -3914,6 +5095,12 @@ fn worker_reader(
             {
                 let _ = sender.send(value);
             }
+            continue;
+        }
+        if kind == "event"
+            && value.get("event").and_then(Value::as_str) == Some("automation/request")
+        {
+            handle_automation_request(Arc::clone(&connection), database.clone(), value);
             continue;
         }
         if matches!(kind, "event" | "run-result") {
@@ -3975,9 +5162,10 @@ fn worker_reader(
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
                 let _ = database.finish_task(&request_id, ok);
-                let _ = database.release_workspace_lease(
+                let _ = database.release_workspace_lease_after_run(
                     &connection.descriptor.workspace_id,
                     &connection.descriptor.root_agent_id,
+                    &request_id,
                 );
                 if ok {
                     if let Ok(Some(continuation)) = database.finish_goal_run(&request_id) {
@@ -4025,15 +5213,28 @@ fn worker_reader(
             connection.broadcast(value);
         }
     }
-    connection.alive.store(false, Ordering::SeqCst);
-    let _ = database.release_workspace_lease(
+    // A transport failure does not prove the writer or its tools stopped.
+    // Retain its workspace lease until recovery has retired the old process tree.
+    let _ = database.retain_uncertain_workspace_lease(
         &connection.descriptor.workspace_id,
         &connection.descriptor.root_agent_id,
+        None,
     );
+    let pending = std::mem::take(
+        &mut *connection
+            .pending
+            .lock()
+            .expect("worker pending mutex poisoned"),
+    );
+    for (id, sender) in pending {
+        let _ = sender.send(json!({"type":"response", "id":id, "ok":false,
+            "error":{"message":"worker disconnected before the RPC outcome was durable; outcome is uncertain"}}));
+    }
     *connection
         .status
         .lock()
         .expect("worker status mutex poisoned") = "unavailable".into();
+    connection.alive.store(false, Ordering::SeqCst);
     for (agent_id, sender) in connection
         .attachments
         .lock()
@@ -4087,10 +5288,50 @@ fn spawn_worker_proxy(descriptor_path: &Path) -> Result<u32> {
             Ok(())
         });
     }
-    let child = command
+    let mut child = command
         .spawn()
         .context("could not launch resident worker proxy")?;
-    Ok(child.id())
+    let pid = child.id();
+    // Keep a reaper: dropping Child without wait leaves dead proxies as zombies,
+    // which kill(pid, 0) would continue to report as live.
+    thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(pid)
+}
+
+fn retire_orphaned_worker(descriptor: &WorkerDescriptor) -> Result<()> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while process_alive(descriptor.pid) && std::time::Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(20));
+    }
+    if process_alive(descriptor.pid) {
+        bail!("existing worker proxy is still alive; refusing a second session writer")
+    }
+    if let Some(group) = descriptor.pid {
+        if let Some(child_pid) = descriptor.child_pid.filter(|pid| process_alive(Some(*pid)))
+            && unsafe { libc::getpgid(child_pid as i32) } != group as i32
+        {
+            bail!("orphan worker process ownership could not be verified")
+        }
+        // Tools can survive both the proxy and its BB child. A group without
+        // its original leader still belongs to that worker session.
+        if unsafe { libc::kill(-(group as i32), 0) } == 0 {
+            terminate_worker_process_group(Some(group));
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while unsafe { libc::kill(-(group as i32), 0) } == 0
+                && std::time::Instant::now() < deadline
+            {
+                thread::sleep(Duration::from_millis(20));
+            }
+            if unsafe { libc::kill(-(group as i32), 0) } == 0 {
+                bail!("orphan worker tools have not exited; refusing a second session writer")
+            }
+        }
+    } else if process_alive(descriptor.child_pid) {
+        bail!("orphan worker has no recorded process group")
+    }
+    Ok(())
 }
 
 fn terminate_worker_process_group(pid: Option<u32>) {
@@ -4103,7 +5344,7 @@ fn terminate_worker_process_group(pid: Option<u32>) {
         libc::kill(-pid, libc::SIGTERM);
     }
     thread::sleep(Duration::from_millis(200));
-    if process_alive(Some(pid as u32)) {
+    if unsafe { libc::kill(-pid, 0) } == 0 {
         unsafe {
             libc::kill(-pid, libc::SIGKILL);
         }
@@ -4517,6 +5758,46 @@ fn now_ms_i64() -> i64 {
     i64::try_from(now_ms()).unwrap_or(i64::MAX)
 }
 
+fn normalize_session_path(path: &Path) -> Result<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    if absolute.exists() {
+        return canonical(absolute);
+    }
+    let mut ancestor = absolute.as_path();
+    let mut missing = Vec::new();
+    while !ancestor.exists() {
+        missing.push(
+            ancestor
+                .file_name()
+                .context("session path has no filename")?
+                .to_owned(),
+        );
+        ancestor = ancestor
+            .parent()
+            .context("session path has no existing parent")?;
+    }
+    let mut resolved = canonical(ancestor)?;
+    for component in missing.into_iter().rev() {
+        resolved.push(component);
+    }
+    Ok(resolved)
+}
+
+fn reject_archive_symlink(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            bail!("session archive does not follow symbolic links")
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4591,6 +5872,7 @@ mod tests {
             kind: "command".into(),
             request_id: "request-1".into(),
             client_id: "client-1".into(),
+            journal_id: None,
             command_id: Some("command-1".into()),
             agent_id: Some("agent-1".into()),
             method: "turn.submit".into(),
@@ -4612,6 +5894,26 @@ mod tests {
             JournalEntry::Completed(value) => assert_eq!(value, json!({"accepted": true})),
             _ => panic!("expected completed journal outcome"),
         }
+        assert_eq!(
+            database.command_status("client-1", "command-1").unwrap()["status"],
+            "completed"
+        );
+        assert_eq!(
+            database
+                .command_status("another-client", "command-1")
+                .unwrap()["status"],
+            "not_found"
+        );
+        let mut reconnected = command.clone();
+        reconnected.client_id = "new-socket-client".into();
+        reconnected.journal_id = Some("client-1".into());
+        assert!(matches!(
+            database.begin_command(&reconnected).unwrap(),
+            JournalEntry::Completed(_)
+        ));
+        let mut another_agent = command.clone();
+        another_agent.agent_id = Some("different-agent".into());
+        assert!(database.begin_command(&another_agent).is_err());
         let mut conflict = command;
         conflict.params = json!({"message": "different"});
         assert!(database.begin_command(&conflict).is_err());
@@ -4650,6 +5952,253 @@ mod tests {
         );
         assert_eq!(snapshot.pointer("/cursor/generation"), Some(&json!(4)));
         assert_eq!(snapshot.pointer("/cursor/sequence"), Some(&json!(19)));
+    }
+
+    #[test]
+    fn stale_goal_continuation_cannot_duplicate_a_newly_resumed_run() {
+        let root = std::env::temp_dir().join(format!("qi-goal-admission-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let database = Database::new(root.join("supervisor.sqlite")).unwrap();
+        let goal = database
+            .create_goal("agent-1", "first objective", 3)
+            .unwrap();
+        let id = goal["goal_id"].as_str().unwrap();
+        database.record_goal_run(id, "first-run").unwrap();
+        let queued = database.finish_goal_run("first-run").unwrap().unwrap();
+        assert!(
+            current_goal_continuation(&database, &queued)
+                .unwrap()
+                .is_some()
+        );
+        let current = database.list_goals(Some("agent-1")).unwrap().remove(0);
+        database
+            .revise_goal(
+                id,
+                current["revision"].as_i64().unwrap(),
+                "updated objective",
+                3,
+                "active",
+            )
+            .unwrap();
+        assert_eq!(
+            current_goal_continuation(&database, &queued)
+                .unwrap()
+                .unwrap()["objective"],
+            "updated objective"
+        );
+        database.record_goal_run(id, "resumed-run").unwrap();
+        assert!(
+            current_goal_continuation(&database, &queued)
+                .unwrap()
+                .is_none()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn typed_turn_validation_bounds_refs_without_accepting_inline_data_or_paths() {
+        let attachment = json!({"type":"attachment","id":"asset_01234567","name":"示例.png","mime":"image/png","size":68,"workspaceId":"1234567890abcdef"});
+        assert!(
+            validate_turn_message(&json!([{"type":"text","text":"inspect"}, attachment])).is_ok()
+        );
+        assert!(validate_turn_message(&json!([attachment])).is_ok());
+        assert!(validate_turn_message(&json!([])).is_err());
+        assert!(validate_turn_message(&json!([{"type":"text","text":""}])).is_err());
+        assert!(validate_turn_message(&json!([{"type":"image","data":"base64"}])).is_err());
+        let mut traversal = attachment.clone();
+        traversal["id"] = json!("../../secret");
+        assert!(validate_turn_message(&json!([traversal])).is_err());
+        let mut oversized = attachment;
+        oversized["size"] = json!(8_388_609);
+        assert!(validate_turn_message(&json!([oversized])).is_err());
+        assert!(
+            validate_turn_message(&json!([{"type":"text","text":"x".repeat(256*1024)}])).is_err()
+        );
+    }
+
+    #[test]
+    fn calendar_cron_supports_timezones_calendar_fields_and_dst() {
+        let stamp = |s: &str| {
+            chrono::DateTime::parse_from_rfc3339(s)
+                .unwrap()
+                .timestamp_millis()
+        };
+        assert_eq!(
+            next_schedule_time_in_zone(
+                "0 9 * * MON-FRI",
+                stamp("2026-10-02T02:00:00Z"),
+                "Asia/Hong_Kong"
+            ),
+            Some(stamp("2026-10-05T01:00:00Z"))
+        );
+        assert_eq!(
+            next_schedule_time("*/7 * * * *", stamp("2026-10-02T10:58:00Z")),
+            Some(stamp("2026-10-02T11:00:00Z"))
+        );
+        assert_eq!(
+            next_schedule_time("0 9 29 FEB *", stamp("2026-01-01T00:00:00Z")),
+            Some(stamp("2028-02-29T09:00:00Z"))
+        );
+        assert_eq!(
+            next_schedule_time("0 9 31 FEB *", stamp("2026-01-01T00:00:00Z")),
+            None
+        );
+        // Standard cron uses OR when day-of-month and day-of-week are restricted.
+        assert_eq!(
+            next_schedule_time("0 9 1 * MON", stamp("2026-10-02T00:00:00Z")),
+            Some(stamp("2026-10-05T09:00:00Z"))
+        );
+        // 02:30 is missing at spring-forward; 01:30 occurs twice at fall-back.
+        assert_eq!(
+            next_schedule_time_in_zone(
+                "30 2 * * *",
+                stamp("2026-03-08T06:59:00Z"),
+                "America/New_York"
+            ),
+            Some(stamp("2026-03-09T06:30:00Z"))
+        );
+        assert_eq!(
+            next_schedule_time_in_zone(
+                "30 1 * * *",
+                stamp("2026-11-01T05:29:00Z"),
+                "America/New_York"
+            ),
+            Some(stamp("2026-11-01T05:30:00Z"))
+        );
+        assert_eq!(
+            next_schedule_time_in_zone(
+                "30 1 * * *",
+                stamp("2026-11-01T05:30:00Z"),
+                "America/New_York"
+            ),
+            Some(stamp("2026-11-02T06:30:00Z"))
+        );
+        assert_eq!(
+            next_schedule_time_in_zone("0 9 * * *", 0, "Mars/Unknown"),
+            None
+        );
+        assert!(schedule_spec(&json!({"daily":"09:00","timezone":"Asia/Hong_Kong"})).is_ok());
+        assert!(schedule_spec(&json!({"weekly":"MON,WED 09:00"})).is_ok());
+        assert!(schedule_spec(&json!({"daily":"09:00","every_ms":1000})).is_err());
+        assert!(schedule_spec(&json!({"daily":"24:00"})).is_err());
+    }
+
+    #[test]
+    fn schedule_revision_pause_recovery_and_unknown_delivery_are_fenced() {
+        let root = std::env::temp_dir().join(format!("qi-automation-cas-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let database = Database::new(root.join("supervisor.sqlite")).unwrap();
+        let call = |method: &str, p: Value| automation_operation(&database, "agent-1", method, &p);
+        let added = call(
+            "schedule.add",
+            json!({"daily":"09:00","timezone":"Asia/Hong_Kong","prompt":"check"}),
+        )
+        .unwrap();
+        let id = added["schedule_id"].as_str().unwrap();
+        let paused = call(
+            "schedule.pause",
+            json!({"schedule_id":id,"expected_revision":1}),
+        )
+        .unwrap();
+        assert_eq!(paused["status"], "paused");
+        assert_eq!(paused["revision"], 2);
+        assert!(
+            call(
+                "schedule.update",
+                json!({"schedule_id":id,"expected_revision":1,"prompt":"stale"})
+            )
+            .is_err()
+        );
+        let reopened = Database::new(root.join("supervisor.sqlite")).unwrap();
+        assert_eq!(
+            reopened.list_schedules(Some("agent-1")).unwrap()[0]["status"],
+            "paused"
+        );
+        let resumed = call(
+            "schedule.resume",
+            json!({"schedule_id":id,"expected_revision":2}),
+        )
+        .unwrap();
+        assert_eq!(resumed["status"], "active");
+        assert_eq!(resumed["policy"]["timezone"], "Asia/Hong_Kong");
+        let due = database
+            .add_schedule("agent-1", "@every 1000ms", 0, &json!({"prompt":"due"}))
+            .unwrap();
+        let claim = database.claim_due_schedule().unwrap().unwrap();
+        let claimed = call(
+            "schedule.cancel",
+            json!({"schedule_id":due["schedule_id"],"expected_revision":2}),
+        )
+        .unwrap();
+        assert_eq!(claimed["status"], "cancelled");
+        finish_schedule_dispatch(&database, &claim, Ok(json!({})));
+        assert_eq!(
+            database
+                .list_schedules(Some("agent-1"))
+                .unwrap()
+                .iter()
+                .find(|row| row["schedule_id"] == due["schedule_id"])
+                .unwrap()["status"],
+            "cancelled"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn goals_require_explicit_revisions_budget_and_reconciliation() {
+        let root = std::env::temp_dir().join(format!("qi-goal-cas-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let database = Database::new(root.join("supervisor.sqlite")).unwrap();
+        let call = |method: &str, p: Value| automation_operation(&database, "agent-1", method, &p);
+        let goal = call(
+            "goal.set",
+            json!({"objective":"finish", "max_continuations":1}),
+        )
+        .unwrap();
+        let id = goal["goal_id"].as_str().unwrap();
+        assert!(call("goal.set", json!({"objective":"replace"})).is_err());
+        let paused = call("goal.pause", json!({"goal_id":id,"expected_revision":1})).unwrap();
+        assert_eq!(paused["status"], "paused");
+        database.mark_goal_error(id, "late failure").unwrap();
+        assert_eq!(
+            call("goal.status", json!({"goal_id":id})).unwrap()["status"],
+            "paused"
+        );
+        assert!(
+            call(
+                "goal.update",
+                json!({"goal_id":id,"expected_revision":1,"objective":"stale"})
+            )
+            .is_err()
+        );
+        database
+            .mark_interrupted_agent_work_uncertain("agent-1")
+            .unwrap();
+        let uncertain = call("goal.status", json!({"goal_id":id})).unwrap();
+        assert_eq!(uncertain["status"], "uncertain");
+        assert!(
+            call(
+                "goal.resume",
+                json!({"goal_id":id,"expected_revision":uncertain["revision"]})
+            )
+            .is_err()
+        );
+        let active = call(
+            "goal.resume",
+            json!({"goal_id":id,"expected_revision":uncertain["revision"],"reconciled":true}),
+        )
+        .unwrap();
+        assert_eq!(active["status"], "active");
+        assert!(
+            automation_operation(
+                &database,
+                "observer-agent",
+                "goal.cancel",
+                &json!({"goal_id":id})
+            )
+            .is_err()
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -4731,6 +6280,184 @@ mod tests {
         let schedules = database.list_schedules(Some("agent-1")).unwrap();
         assert_eq!(schedules[0].get("status"), Some(&json!("uncertain")));
         assert!(schedules[0].get("claim").unwrap().is_null());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn uncertain_schedule_delivery_keeps_its_identity_and_never_retries() {
+        let root = std::env::temp_dir().join(format!("qi-schedule-uncertain-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let database = Database::new(root.join("supervisor.sqlite")).unwrap();
+        let (stream, _peer) = UnixStream::pair().unwrap();
+        let paths = RuntimePaths {
+            runtime_dir: root.clone(),
+            state_dir: root.clone(),
+            public_socket: root.join("public.sock"),
+            daemon_lock: root.join("daemon.lock"),
+            database: root.join("supervisor.sqlite"),
+            workers_dir: root.clone(),
+            logs_dir: root.clone(),
+            client_id: root.join("client-id"),
+        };
+        let worker = WorkerConnection {
+            descriptor: WorkerDescriptor::new(
+                &paths,
+                "worker-test".into(),
+                "agent-1".into(),
+                "workspace-1".into(),
+                root.clone(),
+                root.join("session.jsonl"),
+                root.clone(),
+                root.join("agent.edn"),
+                "test".into(),
+            ),
+            writer: Mutex::new(BufWriter::new(stream)),
+            pending: Mutex::new(HashMap::new()),
+            events: Mutex::new(VecDeque::new()),
+            attachments: Mutex::new(HashMap::new()),
+            sequence: AtomicU64::new(0),
+            generation: AtomicU64::new(1),
+            status: Mutex::new("idle".into()),
+            alive: AtomicBool::new(true),
+            lifecycle: Mutex::new(()),
+        };
+        let timeout = worker
+            .call(
+                "turn.submit",
+                json!({"message":"accepted but acknowledgement lost"}),
+                Duration::from_millis(10),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(worker.pending.lock().unwrap().is_empty());
+        for message in [
+            timeout.as_str(),
+            "worker exited before the RPC outcome was durable; outcome is uncertain",
+            "worker RPC turn.submit write failed; outcome is uncertain",
+        ] {
+            database
+                .add_schedule(
+                    "agent-1",
+                    "@every 100ms",
+                    now_ms_i64() - 1,
+                    &json!({"prompt":"once","max_attempts":3}),
+                )
+                .unwrap();
+            let claim = database.claim_due_schedule().unwrap().unwrap();
+            finish_schedule_dispatch(&database, &claim, Err(anyhow!("{message}")));
+            assert!(database.claim_due_schedule().unwrap().is_none());
+            let schedule = database
+                .list_schedules(None)
+                .unwrap()
+                .into_iter()
+                .find(|row| row["schedule_id"] == claim.schedule_id)
+                .unwrap();
+            assert_eq!(schedule["status"], "uncertain");
+            assert_eq!(schedule["policy"]["delivery_id"], claim.delivery_id);
+            assert!(schedule["next_at_ms"].is_null());
+        }
+        // A restart in the claim/dispatch gap must pause a periodic tick too.
+        database
+            .add_schedule(
+                "agent-1",
+                "@every 100ms",
+                now_ms_i64() - 1,
+                &json!({"prompt":"periodic"}),
+            )
+            .unwrap();
+        let claim = database.claim_due_schedule().unwrap().unwrap();
+        assert_eq!(database.recover_claimed_schedules().unwrap(), 1);
+        assert!(database.claim_due_schedule().unwrap().is_none());
+        let schedule = database
+            .list_schedules(None)
+            .unwrap()
+            .into_iter()
+            .find(|row| row["schedule_id"] == claim.schedule_id)
+            .unwrap();
+        assert_eq!(schedule["policy"]["delivery_id"], claim.delivery_id);
+        assert_eq!(schedule["status"], "uncertain");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn safe_schedule_retry_reuses_delivery_id_and_next_tick_gets_a_new_one() {
+        let root = std::env::temp_dir().join(format!("qi-schedule-retry-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let database = Database::new(root.join("supervisor.sqlite")).unwrap();
+        database
+            .add_schedule(
+                "agent-1",
+                "@every 100ms",
+                now_ms_i64() - 1,
+                &json!({"prompt":"tick"}),
+            )
+            .unwrap();
+        let first = database.claim_due_schedule().unwrap().unwrap();
+        finish_schedule_dispatch(
+            &database,
+            &first,
+            Err(anyhow!("workspace write lease is held by another root")),
+        );
+        database
+            .connection()
+            .unwrap()
+            .execute("UPDATE schedules SET next_at_ms=0", [])
+            .unwrap();
+        let retry = database.claim_due_schedule().unwrap().unwrap();
+        assert_eq!(retry.delivery_id, first.delivery_id);
+        assert_ne!(retry.claim, first.claim);
+        finish_schedule_dispatch(
+            &database,
+            &retry,
+            Ok(json!({"accepted":true,"request_id":retry.delivery_id})),
+        );
+        database
+            .connection()
+            .unwrap()
+            .execute("UPDATE schedules SET next_at_ms=0", [])
+            .unwrap();
+        let next = database.claim_due_schedule().unwrap().unwrap();
+        assert_ne!(next.delivery_id, first.delivery_id);
+        assert_eq!(next.policy["last_delivery_id"], first.delivery_id);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn uncertain_lease_cannot_be_replaced_or_released_by_an_unrelated_run() {
+        let root = std::env::temp_dir().join(format!("qi-uncertain-lease-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let database = Database::new(root.join("supervisor.sqlite")).unwrap();
+        database
+            .acquire_workspace_lease("workspace", "root")
+            .unwrap();
+        database
+            .retain_uncertain_workspace_lease("workspace", "root", Some("request-A"))
+            .unwrap();
+        assert!(
+            database
+                .acquire_workspace_lease("workspace", "root")
+                .is_err()
+        );
+        assert!(
+            database
+                .acquire_workspace_lease("workspace", "other-root")
+                .is_err()
+        );
+        assert_eq!(database.purge_expired_leases().unwrap(), 0);
+        database
+            .release_workspace_lease_after_run("workspace", "root", "request-B")
+            .unwrap();
+        assert!(
+            database
+                .acquire_workspace_lease("workspace", "other-root")
+                .is_err()
+        );
+        database
+            .release_workspace_lease_after_run("workspace", "root", "request-A")
+            .unwrap();
+        database
+            .acquire_workspace_lease("workspace", "other-root")
+            .unwrap();
         fs::remove_dir_all(root).unwrap();
     }
 

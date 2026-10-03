@@ -58,6 +58,7 @@
                    :context/compaction-fallback
                    :interaction/request :interaction/resolved
                    :remote/run-result :llm/model-selected
+                   :automation/request
                    :repl/restarted
                    :subagent/provider-added :subagent/provider-removed
                    :subagent/start :subagent/end :subagent/event]]
@@ -91,6 +92,11 @@
   (write-json! {:type "response" :id id :ok false
                 :error {:message (ex-message error) :data (ex-data error)}}))
 
+(defn- blocking-rpc? [method params]
+  (or (contains? #{"repl.eval" "repl.reset" "session.compact" "command.execute"} method)
+      (and (= "subagent.invoke" method)
+           (blocking-rpc? (:method params) (:params params)))))
+
 (defn rpc! [ctx]
   (let [session (kernel/require-service ctx :agent/session)
         store (kernel/require-service ctx :session/store)
@@ -123,7 +129,8 @@
                           ((:abort! session)))
 
                         (and registry ((:method registry) method))
-                        (if (= "repl.eval" method)
+                        (if (or (blocking-rpc? method params)
+                                (true? (:blocking ((:method registry) method))))
                           (let [task
                                 (future
                                   (try

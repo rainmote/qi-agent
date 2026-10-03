@@ -11,14 +11,17 @@
   容器或受限远程执行环境，不能仅设置 `:sandbox :none` 后称为隔离。
 - `qi.plugins.openai-responses` 是默认生产 adapter；`qi.plugins.chatgpt` 依赖内部订阅
   协议并标记为 experimental，不应作为无人值守生产默认值。
-- Web Host 默认拒绝非回环地址。`--unsafe-allow-network` 只用于已有认证和 TLS 的反向代理，
-  不提供租户隔离、RBAC 或审计身份。
+- Web Host 默认拒绝非回环地址。`--unsafe-allow-network` 只用于已有认证和 TLS 的反向代理；
+  此模式接受与 `Host` 或代理 `X-Forwarded-Host` 严格匹配的 HTTPS Origin，并把鉴权 cookie
+  标记为 `Secure`，但不提供租户隔离、RBAC 或审计身份。
 - 插件与 agent 进程同权限。生产 profile 只应加载经过代码审计并固定版本的插件。
 
 ## 上线前检查
 
-运行时最低版本由 README 声明；CI 固定 Node 22.12 和 Babashka 1.13.219，并在 Linux、macOS
-运行 Rust、Clojure 和 Web 测试。主分支应要求 `CI / Test` 与 `CI / Dependency audit` 通过。
+运行时最低版本由 README 声明；Rust 最低版本为 1.88，与 `Cargo.toml` 的 `rust-version`
+一致。CI 固定 Node 22.12 和 Babashka 1.13.219，在 Linux、macOS 运行 Rust、Clojure 和 Web
+测试，并单独使用 Rust 1.88 与锁定依赖构建全部 Rust targets。主分支应要求 `CI / Test`、
+`CI / MSRV 1.88` 的所有平台检查与 `CI / Dependency audit` 通过。
 
 ```bash
 export OPENAI_API_KEY="..."
@@ -30,6 +33,7 @@ npm run test:web-ui
 cargo fmt --manifest-path apps/tui-rs/Cargo.toml --all -- --check
 cargo clippy --manifest-path apps/tui-rs/Cargo.toml --all-targets -- -D warnings
 cargo test --locked --manifest-path apps/tui-rs/Cargo.toml
+cargo +1.88.0 build --locked --all-targets --manifest-path apps/tui-rs/Cargo.toml
 cargo build --release --locked --manifest-path apps/tui-rs/Cargo.toml
 expect apps/tui-rs/tests/pty-smoke.exp
 ```
@@ -93,17 +97,23 @@ qi-agent doctor
 
 ## 发布与校验
 
-推送与 `package.json`、Cargo package 版本一致的 `v*` tag 会在 Linux/macOS 的 x86_64 与
-arm64 runner 上重新测试、用 lockfile 构建并生成最小运行包。Release 同时发布单包 SHA256、
-汇总 `SHA256SUMS` 和 GitHub artifact attestation。
+推送与 `package.json`、Cargo package 版本一致的 `v*` tag 后，会先在干净环境完成 Rust
+格式与 lint、Clojure runtime、daemon/Web Host、Web UI 和 Rust TUI 测试；通过后才会在
+Linux/macOS 的 x86_64 与 arm64 runner 上用 lockfile 构建运行包。发布包包含预编译 CLI、
+runtime 源码、WebUI、示例与文档。Release 同时发布可在下载目录直接使用的单包 SHA256、
+汇总 `SHA256SUMS` 和 GitHub artifact attestation。已存在的 tag 资产不会被静默覆盖。
+发布步骤通过 `GH_REPO` 显式指定触发工作流的仓库，不依赖本地 Git checkout 推断发布目标。
 
 ```bash
 shasum -a 256 -c qi-agent-vX.Y.Z-PLATFORM.tar.gz.sha256
 gh attestation verify qi-agent-vX.Y.Z-PLATFORM.tar.gz --repo OWNER/REPOSITORY
 ```
 
-发布包不包含本地 `target/` 缓存、Node 依赖、session、凭据或用户状态。`bb install` 同样只
-stage 运行所需源码，使用 `cargo build --release --locked`，并在激活前删除中间构建产物。
+发布包不包含本地 `target/` 缓存、Node 依赖、session、凭据或用户状态。`bb install` 创建
+`~/.qi-agent/app` Git checkout，使用 `cargo build --release --locked --bins` 构建，并在激活前
+删除中间构建产物。`qi-agent upgrade` 在独立 checkout 中 fetch、构建和验证后替换该
+应用子目录；`~/.qi-agent/agent.edn`、`state/`、`web/`、用户资源以及各工作区
+`.qi-agent/sessions/` 均位于 Git 管理范围外。
 
 ## 告警与故障处理
 

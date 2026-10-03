@@ -97,6 +97,8 @@
 
   {:ns qi.plugins.lsp-tools}
 
+  {:ns qi.plugins.jobs}
+
   {:ns qi.plugins.tools
    :config {:max-read-chars 50000}}
 
@@ -209,6 +211,30 @@
             :trusted-tools ["write" "edit" "hash_edit" "bash" "bb_repl"
                             "lsp_query"]
             :approval-tools ["write" "edit" "hash_edit" "bash" "bb_repl"]}}
+
+  ;; Computer use is opt-in. See docs/computer-use.md for the installed driver,
+  ;; trusted local :sandbox :none profile and image-capable model requirements.
+  {:ns qi.plugins.computer-use}
+  {:ns qi.plugins.cua-driver-mcp
+   :config {:enabled false :command ["cua-driver" "mcp"]}}
+
+  ;; Harness capabilities stay in the parent session. MCP servers are opt-in,
+  ;; and the paid search provider remains disabled until explicitly configured.
+  {:ns qi.plugins.mcp-client
+   :config {:servers []}}
+
+  {:ns qi.plugins.web-tools
+   :config {:search {:provider :tavily :enabled false}}}
+
+  {:ns qi.plugins.planning}
+
+  {:ns qi.plugins.workflow}
+
+  {:ns qi.plugins.team}
+
+  {:ns qi.plugins.automation}
+
+  {:ns qi.plugins.plugin-manager}
 
   {:ns qi.plugins.trace
    :config {:enabled true

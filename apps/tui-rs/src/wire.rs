@@ -14,6 +14,8 @@ pub struct PublicCommand {
     #[serde(default)]
     pub client_id: String,
     #[serde(default)]
+    pub journal_id: Option<String>,
+    #[serde(default)]
     pub command_id: Option<String>,
     #[serde(default)]
     pub agent_id: Option<String>,
@@ -21,6 +23,15 @@ pub struct PublicCommand {
     pub method: String,
     #[serde(default)]
     pub params: Value,
+}
+
+impl PublicCommand {
+    pub fn journal_client_id(&self) -> &str {
+        self.journal_id
+            .as_deref()
+            .filter(|id| !id.is_empty())
+            .unwrap_or(&self.client_id)
+    }
 }
 
 fn protocol_version() -> u32 {
@@ -68,47 +79,27 @@ pub fn command(
 }
 
 pub fn mutation(method: &str) -> bool {
-    matches!(
-        method,
-        "agent.create"
-            | "agent.rename"
-            | "agent.stop"
-            | "agent.take_control"
-            | "prompt.submit"
-            | "prompt.steer"
-            | "prompt.follow_up"
-            | "turn.submit"
-            | "turn.steer"
-            | "turn.follow-up"
-            | "turn.abort"
-            | "run.abort"
-            | "session.rename"
-            | "session.clear"
-            | "session.fork"
-            | "session.compact"
-            | "interaction.resolve"
-            | "ui.prompt.resolve"
-            | "ui.shortcut.invoke"
-            | "model.select"
-            | "command.execute"
-            | "repl.eval"
-            | "repl.interrupt"
-            | "repl.reset"
-            | "state.put"
-            | "state.delete"
-            | "agent.message.send"
-            | "subagent.stop"
-            | "subagent.delete"
-            | "schedule.add"
-            | "schedule.cancel"
-            | "goal.set"
-            | "goal.cancel"
-            | "goal.complete"
-            | "goal.resume"
-            | "daemon.update"
-            | "daemon.backup"
-            | "daemon.shutdown"
-    )
+    // Only explicitly reviewed reads and connection lifecycle operations are
+    // exempt. New/plugin methods require controller authority and a journal id.
+    static METHODS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    !METHODS
+        .get_or_init(|| {
+            let catalog: serde_json::Value =
+                serde_json::from_str(include_str!("../../../protocol/methods.json"))
+                    .expect("valid shared method catalog");
+            ["readOnly", "connection"]
+                .iter()
+                .flat_map(|key| {
+                    catalog[*key]
+                        .as_array()
+                        .expect("method list")
+                        .iter()
+                        .map(|value| value.as_str().expect("method name").to_owned())
+                })
+                .collect()
+        })
+        .iter()
+        .any(|entry| entry == method)
 }
 
 pub fn worker_method(method: &str) -> &str {
@@ -119,5 +110,30 @@ pub fn worker_method(method: &str) -> &str {
         "run.abort" => "turn.abort",
         "run.status" => "turn.state",
         other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn unknown_and_settings_methods_require_mutation_authority() {
+        for method in [
+            "policy.select",
+            "model.thinking.select",
+            "provider.settings.reload",
+            "plugin.new-method",
+        ] {
+            assert!(mutation(method), "{method}");
+        }
+        for method in [
+            "model.list",
+            "policy.status",
+            "session.snapshot",
+            "command.status",
+            "agent.attach",
+        ] {
+            assert!(!mutation(method), "{method}");
+        }
     }
 }

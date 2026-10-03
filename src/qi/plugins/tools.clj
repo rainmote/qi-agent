@@ -197,14 +197,17 @@
                                  items))
                   (when truncated "\n[truncated]")))})
 
-(defn- bash-tool [world default-timeout]
+(defn- bash-tool [ctx world default-timeout]
   {:name "bash"
-   :description "Run a shell command in the execution world."
+   :description (str "Run a shell command in the execution world. "
+                     "Set run_in_background to return a job ID immediately; "
+                     "use job_output, job_list and job_kill to manage it.")
    :execution-mode :sequential
    :parameters {:type "object"
                 :required ["command"]
                 :properties {"command" {:type "string"}
                              "cwd" {:type "string"}
+                             "run_in_background" {:type "boolean"}
                              "timeout_ms" {:type "integer" :minimum 1}}
                 :additionalProperties false}
    :approval-target
@@ -213,28 +216,36 @@
       :cwd ((:resolve! world) (or cwd "."))
       :command command})
    :execute
-   (fn [{:keys [command cwd timeout_ms]} execution]
-     ((:spawn! world)
-      {:command command
-       :cwd (or cwd ".")
-       :timeout-ms (or timeout_ms default-timeout)
-      :cancel-token (:cancel-token execution)
-      :on-update #(when-let [callback (:on-update execution)]
-                     (callback execution %))}))
+   (fn [{:keys [command cwd timeout_ms run_in_background]} execution]
+     (if run_in_background
+       (let [jobs (or (kernel/service ctx :execution/jobs)
+                      (throw (ex-info "Background jobs require the jobs plugin" {})))]
+         ((:start! jobs) {:command command :cwd (or cwd ".")
+                         :timeout-ms timeout_ms} execution))
+       ((:spawn! world)
+        {:command command
+         :cwd (or cwd ".")
+         :timeout-ms (or timeout_ms default-timeout)
+         :cancel-token (:cancel-token execution)
+         :on-update #(when-let [callback (:on-update execution)]
+                       (callback execution %))})))
    :result-details
    (fn [_ value]
      (assoc (select-keys value [:exit-code :cwd :duration-ms :truncated
-                                :full-output-path])
+                                :full-output-path :job-id :status :background])
             :stdout-chars (count (:stdout value))
             :stderr-chars (count (:stderr value))))
    :render
-   (fn [_ {:keys [exit-code stdout stderr truncated full-output-path]}]
-     (str "exit " exit-code
+   (fn [_ {:keys [exit-code stdout stderr truncated full-output-path job-id status]}]
+     (if job-id
+       (str "Background job " job-id " (" (name status) "). "
+            "Use job_output with job_id=" job-id " to read progress.")
+       (str "exit " exit-code
           (when-not (str/blank? stdout) (str "\nstdout:\n" stdout))
           (when-not (str/blank? stderr) (str "\nstderr:\n" stderr))
           (when truncated "\n[truncated]")
           (when full-output-path
-            (str "\n[full output: " full-output-path "]"))))})
+            (str "\n[full output: " full-output-path "]")))))})
 
 (def plugin
   {:id :tools/coding
@@ -262,7 +273,7 @@
                              (list-tool world)
                              (find-tool world)
                              (grep-tool world)]
-                      process? (conj (bash-tool world timeout-ms))
+                      process? (conj (bash-tool ctx world timeout-ms))
                       compatibility-read-file
                       (conj (read-file-alias ctx world default-read-lines
                                              max-read-chars)))]

@@ -14,6 +14,8 @@
 
 > **器以载道。** 核心保持小而空，能力由插件装入；它不是一种固定用途的工具，而是一个可以持续重组的 Agent 容器。
 
+默认 profile 已接入 MCP、联网工具、后台作业、审阅计划与工作流、团队任务/邮箱、调度/目标和受限插件包；Web 提供文件与附件入口，编辑器可经 ACP v1 接入。功能范围、配置入口、验证记录及尚未验证的外部兼容性见 [Harness 功能验收记录](docs/harness-parity-implementation.md)，编辑器启动方式见 [ACP 接入](docs/acp.md)。
+
 ## 名字：器以载道
 
 项目最初叫 `dao`，强调方法与原则；现在改名为 **器（qì agent）**，强调把这些原则变成一个
@@ -45,6 +47,8 @@
 | CLI | `qi-agent` | `dao` 仅作为迁移期兼容别名 |
 | Babashka task | `bb qi-agent` | `bb agent` 继续兼容 |
 | 用户数据目录 | `~/.qi-agent/` | 可用 `QI_AGENT_HOME` 覆盖 |
+| Git 应用目录 | `~/.qi-agent/app/` | 只保存受 Git 管理的程序代码与构建后的 TUI |
+| 用户 Profile | `~/.qi-agent/agent.edn` | 与 Git checkout 分离，升级默认不改写 |
 | 项目状态目录 | `.qi-agent/` | 会话默认位于 `.qi-agent/sessions/` |
 | 环境变量 | `QI_AGENT_*` | 旧 `DAO_*`、`BB_AGENT_*` 仅作回退 |
 | Clojure 命名空间 | `qi.*` | 内置插件位于 `qi.plugins.*` |
@@ -74,7 +78,9 @@ flowchart LR
 
 ## 快速运行
 
-要求 Babashka 1.13、Rust 1.85 或更新版本。默认交互界面使用 Rust/Ratatui；首次运行先构建
+要求 Git 2.30、Babashka 1.13、Rust 1.88 或更新版本。最低 Rust 版本与 `Cargo.toml` 的
+`rust-version` 保持一致，CI 会在 Linux 和 macOS 上使用 Rust 1.88 与锁定依赖构建全部
+Rust targets。默认交互界面使用 Rust/Ratatui；首次运行先构建
 release TUI：
 
 ```bash
@@ -88,9 +94,11 @@ bb tui-build
 bb install
 ```
 
-该命令会在临时目录安装依赖并构建 TUI，把应用安装到
-`~/.qi-agent/app`，并创建 `~/.local/bin/qi-agent`；同时保留
-`~/.local/bin/dao` 兼容入口。只要
+该命令会把官方仓库克隆为 `~/.qi-agent/app` 下受管理的 Git checkout，在其中构建 TUI，
+并创建 `~/.local/bin/qi-agent`；同时保留 `~/.local/bin/dao` 兼容入口。程序与数据明确分离：
+用户 Profile 位于 `~/.qi-agent/agent.edn`，supervisor/Web 状态位于
+`~/.qi-agent/state`、`~/.qi-agent/web`，历史对话仍位于各项目的
+`.qi-agent/sessions/`。只要
 `~/.local/bin` 已在 `PATH` 中，之后可从任意仓库启动：
 
 ```bash
@@ -100,11 +108,24 @@ qi-agent
 
 启动器不会切换工作目录，因此文件工具、信任状态和 `.qi-agent/sessions` 都属于调用
 `qi-agent` 时所在的仓库。可用 `QI_AGENT_HOME`、`QI_AGENT_INSTALL_DIR`、
-`QI_AGENT_BIN_DIR`，或
-`bb install --install-dir PATH --bin-dir PATH` 覆盖默认安装位置。重复执行 `bb install`
-会构建并原子替换之前由该命令管理的安装，但保留已安装的 `agent.edn` 用户配置；只有显式
-传入 `bb install --reset-config` 才恢复仓库默认 profile。若目标 `qi-agent` 或兼容别名
-`dao` 是其他程序，安装器会拒绝覆盖。
+`QI_AGENT_BIN_DIR`、`QI_AGENT_REPOSITORY` 和 `QI_AGENT_UPDATE_BRANCH` 覆盖默认布局与 Git 来源。
+
+后续更新直接执行：
+
+```bash
+qi-agent upgrade --check
+qi-agent upgrade
+```
+
+更新器会 fetch 指定分支，在独立 checkout 中构建并验证后切换应用目录；若切换过程报告失败会
+恢复旧目录。普通更新不会覆盖已有用户数据或项目 `.qi-agent/`；若外置 Profile 缺失则会用
+仓库默认值创建。若安装 checkout 存在本地源码改动，更新会拒绝执行，而不是 reset 或静默
+丢弃。第一次使用新版安装器时，旧 `~/.qi-agent/app/agent.edn` 会迁移到
+`~/.qi-agent/agent.edn`；后续升级默认保留它。只有显式传入
+`qi-agent upgrade --reset-config` 才恢复仓库默认 Profile。原有 `qi-agent update` 仍表示 daemon
+修复，不是程序升级。若目标 `qi-agent` 或兼容别名 `dao` 是其他程序，安装器会拒绝覆盖。
+Hermes 的官方实现依据、两者的数据布局对照和当前未实现边界见
+[Hermes Agent 安装与更新调研](docs/hermes-install-update-research.md)。
 
 先运行完全离线的两轮工具调用示例：
 
@@ -118,6 +139,13 @@ bb qi-agent --config examples/mock.edn --once "六乘七是多少？"
 bb tui-test
 bb test
 ```
+
+完整仓库测试入口为 `npm test`。真实浏览器回归使用模拟接口，不读取真实会话或凭据。
+项目已固定 Playwright 版本；CI 会构建 Web 生产产物并使用配套 Chromium 验证。
+本机依次运行 `npm ci`、`npx playwright install chromium`、`npm run web:build` 和
+`npm run test:web-browser:ci`，最后一项会自动启动并清理生产预览。
+已有预览可直接运行 `npm run test:web-browser`，使用 `QI_AGENT_WEB_TEST_URL` 指定地址。
+`QI_AGENT_BROWSER_CHANNEL`、`QI_AGENT_PLAYWRIGHT_MODULE` 仅作为本机可选覆盖项，CI 不依赖它们。
 
 启动 DeepSeek Harness 风格的本地 WebUI（尚未安装 Node 依赖时先运行 `npm install`）：
 
@@ -161,6 +189,10 @@ bb qi-agent --once "读取 README.md 并总结这个项目"
 definition、references、hover、symbols、implementation 与 type definition。没有安装的
 server 只在 `/lsp status` 显示 unavailable，不影响启动，也不会自动下载。配置、协议行为和
 安全范围见 [LSP 插件文档](docs/lsp-plugin.md)。
+
+Computer use 通过可选 Cua Driver MCP provider 接入：动态发现桌面工具，沿用信任与审批链，
+将截图传给支持图像的模型并在 WebUI 展示。默认关闭；启用示例、驱动要求及操作结果不确定时的
+恢复方法见 [Computer use 文档](docs/computer-use.md) 和 `examples/computer-use.edn`。
 
 切换到 DeepSeek：
 
