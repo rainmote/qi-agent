@@ -15,7 +15,7 @@ async function fixture(initialCount=2){
  const page=await browser.newPage({viewport:{width:1440,height:1000}});
  page.on('pageerror',e=>errors.push(e.message));
  await page.addInitScript(()=>{window.sources=[];window.EventSource=class extends EventTarget{constructor(url){super();this.url=url;window.sources.push(this);queueMicrotask(()=>this.dispatchEvent(new Event('ready')));}close(){this.closed=true;}}});
- const controls={holdSnapshot:null,holdOpen:null,holdPolicy:null,holdModels:null,providerSaves:0,providerRetries:0,dropSubmit:false,rejectSubmit:false,uploads:[],submissions:[],operationStatus:"completed"};
+ const controls={holdSnapshot:null,holdOpen:null,holdPolicy:null,holdModels:null,modelCatalog:models,providerSaves:0,providerRetries:0,dropSubmit:false,rejectSubmit:false,uploads:[],submissions:[],operationStatus:"completed"};
  const provider={id:"mock-provider",name:"Mock Provider",protocol:"openai-completions",baseUrl:"https://example.invalid/v1",apiKeyConfigured:true,authType:"api-key",authStatus:"configured",models:[{id:"mock-model",name:"Mock Model"}]};
  await page.route('**/api/**', async route=>{
   const path=new URL(route.request().url()).pathname; let result; let held;
@@ -36,7 +36,8 @@ async function fixture(initialCount=2){
   else if(path.endsWith('/open')) {const id=path.split('/')[3]; result={session:sessions.find(s=>s.id===id),snapshot:snapshot(id,initialCount),eventCursor:"fixture:0"};if(id===controls.holdOpen?.id)held=controls.holdOpen;}
   else if(path.endsWith('/rpc')){
    const {method}=route.request().postDataJSON(); const id=path.split('/')[3];
-   if(method==='runtime.status') result={plugins:[],tools:[],commands:[]};
+   if(method==='trust.status') result={configured:false};
+   else if(method==='runtime.status') result={plugins:[],tools:[],commands:[]};
    else if(method==='plugins.ui-slots') result={slots:[]};
    else if(method==='subagent.status') result={providers:[],jobs:[]};
    else if(method==='policy.status') {result=policy;if(id===controls.holdPolicy?.id){held=controls.holdPolicy;result={...policy,mode:'allow'};}}
@@ -44,7 +45,7 @@ async function fixture(initialCount=2){
    else if(method==='command.execute') result={output:'test-only'};
    else if(method==='session.snapshot') {result=snapshot(id);if(id===controls.holdSnapshot?.id){held=controls.holdSnapshot;result.events[1].data.message.content='STALE-SNAPSHOT';}}
    else if(method==='context.status') result=null;
-   else if(method==='model.list') {result=models;if(id===controls.holdModels?.id)held=controls.holdModels;}
+   else if(method==='model.list') {result=controls.modelCatalog;if(id===controls.holdModels?.id)held=controls.holdModels;}
    else throw new Error(`Unmocked ${method}`);
   }else throw new Error(`Unmocked ${path}`);
   if(held){held.seen.resolve();await held.release.promise;}
@@ -182,7 +183,8 @@ try{
  }
  {
   const {page,controls}=await fixture();await page.goto(base);await page.locator('.session-header-title button').waitFor();
-  await page.getByRole('button',{name:'文件与变更',exact:true}).click();
+  await page.getByRole('button',{name:'添加附件与工具',exact:true}).click();
+  await page.getByRole('menuitem',{name:'文件与变更',exact:true}).click();
   await page.locator('.workspace-file-list').getByRole('button',{name:'example.html',exact:true}).click();
   await page.frameLocator('iframe[title="example.html 静态预览"]').getByRole('heading',{name:'Static fixture'}).waitFor();
   assert.equal(await page.evaluate(()=>window.fixtureScriptRan),undefined);
@@ -204,6 +206,81 @@ try{
   await page.getByRole('button',{name:'核对结果',exact:true}).waitFor();await page.reload();await page.getByRole('button',{name:'核对结果',exact:true}).click();
   await page.getByRole('list',{name:'待发送附件'}).getByText('note.txt',{exact:true}).waitFor();assert.match(await page.locator('textarea').inputValue(),/bounded file fixture/);
   await page.close();console.log(JSON.stringify({workspaceTools:'passed',cases:['sandbox HTML','text diff','1440/768/414/375/320px','attachment IDs only','actual selected reference payload','definitive failure restores draft','unknown then failed restores after reload']}));
+ }
+ {
+  const {page}=await fixture();await page.emulateMedia({reducedMotion:'reduce'});
+  await page.goto(base);await page.locator('.session-header-title button').waitFor();
+  await page.getByRole('button',{name:'收起侧边栏',exact:true}).click();
+  await page.setViewportSize({width:375,height:840});await page.reload();
+  await page.getByRole('button',{name:'打开导航',exact:true}).click();
+  const navigation=page.getByRole('navigation',{name:'会话列表',exact:true});await navigation.waitFor();
+  const rows=await navigation.locator('.session-row').evaluateAll(rows=>rows.map(row=>row.getBoundingClientRect().toJSON()));
+  assert.equal(rows.length,2);assert.equal(rows[0].x,rows[1].x);assert.ok(rows[1].y>=rows[0].bottom);
+  await navigation.locator('.session-link').filter({hasText:'会话B'}).click();
+  await page.locator('.session-header-title button').filter({hasText:'会话B'}).waitFor();
+  await page.getByRole('button',{name:'打开导航',exact:true}).click();
+  await page.locator('.sidebar .new-session').click();
+  await page.getByRole('heading',{name:'今天想完成什么？',exact:true}).waitFor();
+  assert.equal(await page.getByRole('combobox',{name:'Agent 模式',exact:true}).inputValue(),'standard');
+  await page.getByRole('button',{name:'分析项目',exact:true}).click();
+  assert.match(await page.getByRole('textbox',{name:'给代理发送消息',exact:true}).inputValue(),/分析当前项目结构/);
+  await page.close();console.log(JSON.stringify({compactNavigation:'passed',cases:['desktop collapse persists','phone drawer restores sessions','vertical session list','session switch','new session','quick start draft']}));
+ }
+ {
+  const {page,controls}=await fixture();
+  controls.modelCatalog={current:models.current,providers:[...models.providers,...['C','D','E','F'].map(letter=>({id:`mock-${letter.toLowerCase()}`,model:`Model ${letter}`}))]};
+  await page.goto(base);await page.locator('.session-header-title button').waitFor();
+  await page.locator('.new-session').click();await page.getByRole('button',{name:'模型：Model A',exact:true}).waitFor();
+  const trigger=page.locator('.model-trigger');
+  await trigger.click();
+  const search=page.getByRole('searchbox',{name:'搜索模型',exact:true});await search.waitFor();
+  assert.equal(await search.evaluate(node=>node===document.activeElement),true);
+  await search.fill('not-a-model');await page.getByText('没有匹配的模型',{exact:true}).waitFor();
+  await search.fill('MODEL f');assert.equal(await page.getByRole('menuitemradio').count(),1);
+  await search.dispatchEvent('keydown',{key:'Enter',isComposing:true});
+  assert.equal(await trigger.getAttribute('aria-expanded'),'true');
+  await search.press('ArrowDown');await page.keyboard.press('Enter');
+  assert.equal(await trigger.getAttribute('aria-label'),'模型：Model F');
+  assert.equal(await trigger.evaluate(node=>node===document.activeElement),true);
+  for(const width of [1440,768,414,375,320]){
+   await page.setViewportSize({width,height:840});
+   for(const selector of ['.model-trigger','.permission-trigger','.composer-tools > button']){
+    const button=page.locator(selector);await button.click();await settle(page);
+    const box=await page.locator('.composer-popover').boundingBox();
+    assert.ok(box.x>=11&&box.x+box.width<=width-11&&box.y>=11&&box.y+box.height<=840-11,`${width}: ${JSON.stringify(box)}`);
+    if(selector==='.model-trigger')assert.equal(await search.inputValue(),'');
+    await page.keyboard.press('Escape');assert.equal(await button.evaluate(node=>node===document.activeElement),true);
+   }
+  }
+  await page.locator('.permission-trigger').click();await page.keyboard.press('Home');await page.keyboard.press('Enter');
+  assert.equal(await page.locator('.permission-trigger').getAttribute('aria-label'),'访问权限：Read Only');
+  await trigger.click();await page.locator('textarea').click();assert.equal(await page.locator('.model-menu').count(),0);
+  await page.close();console.log(JSON.stringify({composerSelection:'passed',cases:['search and empty state','IME guard','keyboard selection and focus return','1440/768/414/375/320 bounds','outside focus closes']}));
+ }
+ {
+  const {page}=await fixture();await page.goto(base);await page.locator('.session-header-title button').waitFor();
+  await page.evaluate(()=>{
+   const events=[['step/start',{step:1}],
+    ['tool/call',{'call-id':'a',name:'read',arguments:{path:'sample-a.ts'}}],
+    ['tool/result',{'call-id':'a',ok:true,content:'FIRST-DETAIL'}],
+    ['tool/call',{'call-id':'b',name:'grep',arguments:{query:'needle'}}],
+    ['tool/result',{'call-id':'b',ok:false,error:'Search permission denied'}],['step/end',{}],
+    ['step/start',{step:2}],['tool/call',{'call-id':'c',name:'bash',arguments:{command:'offline-command'}}],['step/end',{}]];
+   const source=window.sources.findLast(source=>!source.closed);
+   events.forEach(([event,data],i)=>source.dispatchEvent(new MessageEvent('worker',{data:JSON.stringify({type:'event',event,data,event_id:`compact-${i}`,seq:3+i,durable:true})})));
+  });
+  await page.getByText('Search permission denied',{exact:false}).waitFor();
+  const groups=page.locator('.tool-batch');assert.equal(await groups.count(),2);
+  assert.equal(await page.locator('.tool-batch-row').count(),0);
+  assert.match(await groups.last().innerText(),/结果未确认/);assert.doesNotMatch(await groups.last().getAttribute('class'),/is-running|is-success/);
+  await groups.first().locator('.tool-summary').click();assert.equal(await page.locator('.tool-batch-row').count(),2);
+  await page.getByRole('button',{name:/read sample-a.ts/}).click();await page.getByText('FIRST-DETAIL',{exact:true}).waitFor();
+  assert.equal(await page.locator('.tool-details').count(),1);
+  await groups.first().locator('.tool-summary').click();await groups.first().locator('.tool-summary').click();
+  assert.equal(await page.getByText('FIRST-DETAIL',{exact:true}).count(),1,'Expansion survives hiding the group');
+  await page.setViewportSize({width:320,height:840});await settle(page);
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  await page.close();console.log(JSON.stringify({compactToolGroups:'passed',cases:['collapsed summary','failure stays visible','stopped call is unconfirmed','independent details','expansion retained','320px viewport']}));
  }
  assert.deepEqual(errors,[]);console.log(JSON.stringify({pageErrors:errors}));
 }finally{await browser.close();}

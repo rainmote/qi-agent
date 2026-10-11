@@ -20,6 +20,7 @@ auth.json
 *.local
 
 # Generated, cache, and test output
+.finesse/
 target/
 out/
 coverage/

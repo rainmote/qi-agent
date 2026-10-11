@@ -134,7 +134,8 @@ async function fixture() {
   });
   await page.goto(base);
   await page.locator('.session-header-title button').waitFor();
-  await page.getByRole('button', { name: '计划与协作', exact: true }).click();
+  await page.getByRole('button', { name: '添加附件与工具', exact: true }).click();
+  await page.getByRole('menuitem', { name: '计划与协作', exact: true }).click();
   await page.getByRole('region', { name: '计划与协作', exact: true }).waitFor();
   return { page, state };
 }
@@ -157,8 +158,20 @@ try {
   await panel.getByRole('button', { name: '创建计划', exact: true }).click();
   await panel.getByRole('button', { name: '提交批准', exact: true }).waitFor();
   await panel.getByRole('button', { name: '提交批准', exact: true }).click();
-  const approval = page.getByRole('dialog', { name: '批准计划：离线核验', exact: true });
+  const approval = page.getByRole('region', { name: '待确认操作', exact: true }).filter({ hasText: '批准计划：离线核验' });
   await approval.waitFor();
+  for (const width of [1440, 375, 320]) {
+    await page.setViewportSize({ width, height: 840 }); await settle(page);
+    const box = await approval.boundingBox();
+    assert.ok(box.x >= 0 && box.x + box.width <= width && box.y >= 0 && box.y + box.height <= 840, JSON.stringify(box));
+  }
+  // Moving between the task context and composer must not dismiss or resolve approval.
+  await page.getByRole('button', { name: '关闭工作台', exact: true }).click();
+  assert.equal(await page.locator('.composer .approval-panel').count(), 1);
+  await page.getByRole('button', { name: '添加附件与工具', exact: true }).click();
+  await page.getByRole('menuitem', { name: '计划与协作', exact: true }).click();
+  assert.equal(await page.locator('.workbench-approval .approval-panel').count(), 1);
+  await page.setViewportSize({ width: 1440, height: 1000 });
   assert.equal(state.plan.status, 'awaiting_approval');
   assert.equal(await approval.getByRole('button', { name: '本会话允许', exact: true }).count(), 0);
   assert.equal(await panel.getByRole('button', { name: '开始执行', exact: true }).count(), 0);

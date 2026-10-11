@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 import test from "node:test";
-import { PresetCards, PresetSelector, WorkspaceSelector, commandOutputNotice, creatorDraftPresetId, defaultPresetId, matchingCommands,
+import { PresetSelector, WorkspaceSelector, commandOutputNotice, creatorDraftPresetId, defaultPresetId, matchingCommands,
   selectablePresets } from "./App";
-import { ContextMeter, ModelControl, PermissionControl, formatTokenCount, permissionIcon } from "./ComposerControls";
-import { FullAccessDialog } from "./Dialogs";
+import { ContextMeter, ModelControl, PermissionControl, formatTokenCount, matchingModels, permissionIcon } from "./ComposerControls";
+import { ApprovalPanel, FullAccessDialog } from "./Dialogs";
 
 const commands = [
   { name: "commands", description: "List commands" },
@@ -26,20 +26,20 @@ test("new-session preset selector exposes standard and creator modes", () => {
   );
   assert.match(html, /aria-label="Agent 模式"/);
   assert.match(html, /value="standard"/);
-  assert.match(html, /value="creator" selected=""/);
+  assert.match(html, /value="creator"[^>]*selected=""/);
   assert.match(html, /标准模式/);
   assert.match(html, /创造模式/);
 });
 
-test("new-session preset cards explain modes and expose radio state", () => {
-  const html = renderToStaticMarkup(<PresetCards presets={[
+test("compact preset selector preserves mode descriptions and selected value", () => {
+  const html = renderToStaticMarkup(<PresetSelector presets={[
     { id: "standard", name: "标准模式", trust: "system" },
     { id: "creator", name: "创造模式", trust: "system" },
   ]} value="creator" onChange={() => undefined} />);
-  assert.match(html, /role="radiogroup"/);
+  assert.match(html, /aria-description="创建、检查并迭代 Agent preset 与运行时能力。会话创建后保持不变。"/);
   assert.match(html, /适合编码、分析与日常项目协作/);
   assert.match(html, /创建、检查并迭代 Agent preset/);
-  assert.match(html, /aria-checked="true"/);
+  assert.match(html, /value="creator"[^>]*selected=""/);
 });
 
 test("creator draft entry is hidden when the creator preset is unavailable", () => {
@@ -111,6 +111,25 @@ test("context meter exposes usage and compact token formatting", () => {
   }} />);
   assert.match(html, /上下文已用 2%/);
   assert.match(html, /stroke-dasharray="2 100"/);
+});
+
+test("model search matches configured names and identifiers without reordering the catalog", () => {
+  const models = [{ id: "local-a", model: "example-code", "display-name": "本地代码" }, { id: "cloud-b", model: "example-chat" }];
+  assert.deepEqual(matchingModels(models, " 本地 CODE "), [models[0]]);
+  assert.deepEqual(matchingModels(models, "cloud"), [models[1]]);
+  assert.deepEqual(matchingModels(models, "   "), models);
+  assert.deepEqual(matchingModels(models, "unknown"), []);
+});
+
+test("inline approval retains explicit choices and exposes failures without a modal barrier", () => {
+  const html = renderToStaticMarkup(<ApprovalPanel interaction={{ id: "i", title: "确认写入", message: "write result.txt", default: "deny",
+    items: [{ label: "允许", value: "allow" }, { label: "拒绝", value: "deny" }] }} resolving={false}
+    error="提交失败" onResolve={() => undefined} onStop={() => undefined} />);
+  assert.match(html, /aria-label="待确认操作"/);
+  assert.match(html, /write result.txt/);
+  assert.match(html, /role="alert">提交失败/);
+  assert.match(html, /停止运行/);
+  assert.doesNotMatch(html, /aria-modal|role="dialog"|本会话允许/);
 });
 
 test("full access confirmation requires explicit risk acknowledgement", () => {

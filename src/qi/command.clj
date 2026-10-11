@@ -60,13 +60,15 @@
 (defn- output [value]
   {:handled true :output value})
 
-(defn- trust-info [trust]
-  {:root (:root trust)
-   :decision ((:decision trust))
-   :source (:source trust)
-   :trust-file (:trust-file trust)
-   :mutable (boolean (:set-decision! trust))
-   :usage "/trust allow | /trust deny"})
+(defn trust-info [trust]
+  (merge (when-let [info (:decision-info trust)] (info))
+         {:configured true
+          :root (:root trust)
+          :decision ((:decision trust))
+          :source (:source trust)
+          :trust-file (:trust-file trust)
+          :mutable (boolean (:set-decision! trust))
+          :usage "/trust allow | /trust deny"}))
 
 (defn- change-trust! [ctx trust decision]
   (if-let [setter (:set-decision! trust)]

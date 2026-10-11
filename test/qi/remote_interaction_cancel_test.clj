@@ -51,3 +51,21 @@
         (is (= :deny (:decision (deref resolved 1000 nil))))
         (is (:cancelled (deref resolved 1000 nil))))
       (finally (kernel/dispose-all! ctx)))))
+
+(deftest stopping-cancels-direct-command-prompts-without-a-turn-token
+  (let [ctx (fixture)
+        service (kernel/require-service ctx :interaction/remote)
+        prompt (kernel/require-service ctx :ui/prompt)
+        started (promise)]
+    (try
+      (kernel/on! (kernel/plugin-context ctx :test/cancel) :interaction/request
+                  (fn [_ event] (deliver started event)))
+      (let [task (future (try ((:select! prompt) {:title "Direct command approval" :default :deny})
+                             (catch Throwable error (ex-data error))))]
+        (is (some? (deref started 1000 nil)))
+        (is (= 1 ((:cancel-all! service))))
+        (is (:cancelled (deref task 1000 {})))
+        (is (await-empty! service))
+        (is (= 0 ((:cancel-all! service))))
+        (is (thrown? clojure.lang.ExceptionInfo ((:resolve! service) (:id @started) :allow))))
+      (finally (kernel/dispose-all! ctx)))))

@@ -61,6 +61,9 @@ jobs:
       - name: Test production Web in Chromium with isolated API fixtures
         if: runner.os == 'Linux'
         run: npm run test:web-browser:ci
+      - name: Test production Web through an isolated daemon and offline worker
+        if: runner.os == 'Linux'
+        run: npm run test:web-e2e
       - name: Test Clojure runtime
         run: bb test
       - name: Test evaluation fixtures and graders without model calls

@@ -1,0 +1,25 @@
+{:plugins
+ [{:ns qi.plugins.session}
+  {:ns qi.plugins.model-registry :config {:default-provider :mock}}
+  {:ns qi.plugins.mock
+   :config {:model "Offline E2E" :context-window 32000
+            :responses
+            [{:message {:role "assistant" :content nil
+                        :tool_calls [{:id "e2e-write" :type "function"
+                                      :function {:name "write"
+                                                 :arguments "{\"path\":\"approval.txt\",\"content\":\"approved by browser\"}"}}]}
+              :finish-reason "tool_calls"}
+             {:message {:role "assistant" :content "Offline continuation complete."}
+              :finish-reason "stop"}
+             {:message {:role "assistant" :content "Offline follow-up complete."}
+              :finish-reason "stop"}]}}
+  {:ns qi.plugins.execution-world :config {:root "."}}
+  {:ns qi.plugins.trust :config {:root "."}}
+  {:ns qi.plugins.tools}
+  {:ns qi.plugins.remote-registry}
+  {:ns qi.plugins.approval :config {:mode :ask}}
+  {:ns qi.plugins.policy :config {:trusted-tools ["write"] :approval-tools ["write"]}}
+  {:ns qi.plugins.durable-state :config {:root "."}}
+  {:ns qi.plugins.planning}
+  {:ns qi.plugins.runtime :config {:max-steps 3}}
+  {:ns qi.plugins.remote-api}]}

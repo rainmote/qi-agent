@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import type { AttachmentRef } from "../../web-host/workspace-files.js";
 
 export type { AttachmentRef } from "../../web-host/workspace-files.js";
@@ -41,6 +41,8 @@ export interface ComposerAttachmentsProps {
   upload: (workspaceId: string, input: AttachmentUpload, signal: AbortSignal) => Promise<AttachmentRef>;
   disabled?: boolean;
   onBusyChange?: (busy: boolean) => void;
+  inputRef?: RefObject<HTMLInputElement | null>;
+  children?: ReactNode;
 }
 
 export function encodeAttachment(file: File, signal: AbortSignal): Promise<AttachmentUpload> {
@@ -61,8 +63,9 @@ export function encodeAttachment(file: File, signal: AbortSignal): Promise<Attac
 }
 
 /** Uploads stay separate from the prompt; only durable references enter its controlled value. */
-export function ComposerAttachments({ workspaceId, items, onChange, upload, disabled = false, onBusyChange }: ComposerAttachmentsProps) {
-  const input = useRef<HTMLInputElement>(null), active = useRef<AbortController | null>(null);
+export function ComposerAttachments({ workspaceId, items, onChange, upload, disabled = false, onBusyChange, inputRef, children }: ComposerAttachmentsProps) {
+  const localInput = useRef<HTMLInputElement>(null), active = useRef<AbortController | null>(null);
+  const input = inputRef || localInput;
   const current = useRef({ workspaceId, items, onChange, onBusyChange });
   current.current = { workspaceId, items, onChange, onBusyChange };
   const [pending, setPending] = useState<string | null>(null), [error, setError] = useState("");
@@ -94,10 +97,10 @@ export function ComposerAttachments({ workspaceId, items, onChange, upload, disa
     onDrop={event => { event.preventDefault(); void add(Array.from(event.dataTransfer.files)); }}>
     <input ref={input} type="file" multiple hidden aria-label="选择附件" disabled={disabled || !!pending}
       onChange={event => void add(Array.from(event.target.files || []))} />
-    <div className="attachment-actions">
+    {!children && <div className="attachment-actions">
       <button type="button" className="button ghost" onClick={() => input.current?.click()} disabled={disabled || !!pending || items.length >= 8}>添加附件</button>
       <span className="workspace-muted">可拖入图片或文件 · 每个 ≤8 MiB</span>
-    </div>
+    </div>}
     {items.length > 0 && <ul className="attachment-list" aria-label="待发送附件">{items.map(item => <li key={item.id}>
       <span title={item.name}>{item.name}</span><small>{Math.ceil(item.size / 1024)} KiB</small>
       <button type="button" aria-label={`移除 ${item.name}`} disabled={disabled || !!pending}
@@ -106,5 +109,6 @@ export function ComposerAttachments({ workspaceId, items, onChange, upload, disa
     {pending && <div className="workspace-feedback" role="status"><span>正在上传 {pending}</span>
       <button type="button" onClick={() => active.current?.abort()}>取消上传</button></div>}
     {error && <p className="workspace-error" role="alert">{error}</p>}
+    {children}
   </div>;
 }

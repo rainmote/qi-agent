@@ -83,6 +83,11 @@
                          :pending (->> state :entries vals (mapv :request))}))
            service {:pending #(:pending (snapshot))
                     :snapshot snapshot
+                    :cancel-all! (fn []
+                                   (let [entries (vals (:entries @pending))]
+                                     (doseq [{:keys [completion]} entries]
+                                       (deliver completion ::cancelled))
+                                     (count entries)))
                     :resolve! resolve!}
            registry (kernel/require-service ctx :remote/registry)
            dispose-list

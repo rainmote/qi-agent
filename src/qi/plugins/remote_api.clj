@@ -127,6 +127,8 @@
      :interactions (or (:pending interaction-snapshot) [])
      :interactions_revision (:revision interaction-snapshot)
      :policy (when approval-policy ((:status approval-policy)))
+     :trust (when-let [trust (kernel/service ctx :project/trust)]
+              (command/trust-info trust))
      :children (if subagents ((:jobs subagents)) [])
      :repl (when repl
              (if-let [status (:status repl)]
@@ -249,12 +251,25 @@
                                "message")
                 {:type "object"}
                 (fn [{:keys [message]}] ((:follow-up! session) (attachments/validate-user-content! ctx message))))
-       (method! "turn.abort" "Abort the active turn."
+       (method! "turn.abort" "Abort the active turn and cancel pending interactions."
                 empty-params {:type "object"}
-                (fn [_] {:aborted (boolean ((:abort! session)))}))
+                (fn [_]
+                  (let [aborted (boolean ((:abort! session)))
+                        interaction (kernel/service ctx :interaction/remote)]
+                    ;; Direct commands can wait on approval without an active
+                    ;; model turn. Stopping must also release that RPC lane.
+                    {:aborted aborted
+                     :interactions_cancelled (if-let [cancel (:cancel-all! interaction)]
+                                               (cancel) 0)})))
        (method! "turn.state" "Return the live agent state."
                 empty-params {:type "object"}
                 (fn [_] ((:state session))))
+       (method! "trust.status" "Read effective project trust before starting work."
+                empty-params {:type "object"}
+                (fn [_]
+                  (if-let [trust (kernel/service ctx :project/trust)]
+                    (command/trust-info trust)
+                    {:configured false})))
        (method! "model.list" "List available providers and current selection."
                 empty-params {:type "object"}
                 (fn [_]

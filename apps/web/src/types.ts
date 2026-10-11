@@ -115,6 +115,17 @@ export interface SessionSnapshot {
   interactions: Interaction[];
   interactions_revision?: number;
   policy?: PolicyStatus | null;
+  trust?: ProjectTrust | null;
+}
+
+export interface ProjectTrust {
+  configured: boolean;
+  root?: string;
+  decision?: "allow" | "deny";
+  "explicit?"?: boolean;
+  "matched-root"?: string | null;
+  source?: string;
+  mutable?: boolean;
 }
 
 export interface PolicyStatus {

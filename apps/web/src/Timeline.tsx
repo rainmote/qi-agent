@@ -82,57 +82,91 @@ export function pluginResultData(result: DurableEvent): unknown {
   try { return JSON.parse(content) as unknown; } catch { return null; }
 }
 
-function ToolBatchCard({ batch, results, open, onToggle, pluginSlots }: {
+export function toolBatchStatus(batch: ToolBatch, results: ReadonlyMap<string, DurableEvent>, active: boolean) {
+  const completed = batch.calls.filter(call => results.has(callId(call))).length;
+  const failed = batch.calls.filter(call => results.get(callId(call))?.data.ok === false).length;
+  const missing = batch.calls.length - completed;
+  return { completed, failed, missing, running: active && missing > 0 };
+}
+
+const toolCategories: Record<string, string> = {
+  read: "读取", read_file: "读取", write: "写入", write_file: "写入", edit: "编辑", edit_file: "编辑",
+  grep: "搜索", find: "搜索", lsp_query: "代码查询", bash: "命令", bb_repl: "代码执行",
+  delegate_task: "子任务", fork_agent: "子任务", web_search: "网页搜索", web_fetch: "网页读取",
+};
+
+export function toolBatchLabel(batch: ToolBatch): string {
+  if (batch.calls.length === 1) return String(batch.calls[0].data.name || "tool");
+  const counts = new Map<string, number>();
+  for (const call of batch.calls) {
+    const name = String(call.data.name || "tool"), label = toolCategories[name] || name;
+    counts.set(label, (counts.get(label) || 0) + 1);
+  }
+  const categories = [...counts].slice(0, 3).map(([name, count]) => `${name} ×${count}`);
+  return `${categories.join(" · ")}${counts.size > 3 ? ` · 等 ${batch.calls.length} 项` : ""}`;
+}
+
+function ToolDetails({ call, result, pluginSlots }: {
+  call: DurableEvent; result?: DurableEvent; pluginSlots: PluginSlot[];
+}) {
+  return <div className="tool-details">
+    <div><span>参数</span><pre>{text(call.data.arguments) || "{}"}</pre></div>
+    {result && <div><span>结果</span>
+      <pre>{text(result.data.content || result.data.error)}</pre>
+      <ToolResultImages images={result.data.images} />
+      {result.data.ok !== false && <PluginSlots slots={pluginSlots} slot="tool-result"
+        toolName={String(call.data.name || "tool")} data={pluginResultData(result)} />}</div>}
+  </div>;
+}
+
+function ToolBatchCard({ batch, results, active, open, onToggle, expanded, onToolToggle, pluginSlots }: {
   batch: ToolBatch;
   results: ReadonlyMap<string, DurableEvent>;
+  active: boolean;
   open: boolean;
   onToggle: () => void;
+  expanded: ReadonlySet<string>;
+  onToolToggle: (id: string, open: boolean) => void;
   pluginSlots: PluginSlot[];
 }) {
-  const completed = batch.calls.filter((call) => results.has(callId(call))).length;
-  const failed = batch.calls.filter((call) => results.get(callId(call))?.data.ok === false).length;
-  const running = completed < batch.calls.length;
-  const label = batch.calls.length === 1
-    ? String(batch.calls[0].data.name || "tool")
-    : `${batch.calls.length} 个工具调用`;
-  return <article className={`tool-card tool-batch ${failed ? "is-error" : running ? "is-running" : "is-success"}`}>
+  const { completed, failed, missing, running } = toolBatchStatus(batch, results, active);
+  const current = running ? batch.calls.find(call => !results.has(callId(call))) : undefined;
+  const failedCall = batch.calls.find(call => results.get(callId(call))?.data.ok === false);
+  const failure = failedCall && results.get(callId(failedCall));
+  const label = toolBatchLabel(batch);
+  const single = batch.calls.length === 1;
+  return <article className={`tool-card tool-batch ${failed ? "is-error" : running ? "is-running" : missing ? "is-unconfirmed" : "is-success"}`}>
     <button className="tool-summary" type="button" onClick={onToggle}
       aria-expanded={open}>
       <span className="tool-icon"><Icon name="terminal" /></span>
-      <span className="tool-name">{label}</span>
-      <span className="tool-status">{failed
-        ? `${failed} 失败`
-        : running ? `${completed}/${batch.calls.length} 完成` : "全部完成"}</span>
+      <span className="tool-summary-copy"><span className="tool-name">{label}</span>
+        {single && <span className="tool-summary-target" title={operationTarget(batch.calls[0], 10_000)}>{operationTarget(batch.calls[0])}</span>}</span>
+      <span className="tool-status">{failed ? `${failed} 失败${missing ? ` · ${missing} ${running ? "等待" : "未确认"}` : ""}`
+        : running ? `${completed}/${batch.calls.length} 完成`
+        : missing ? `${missing} 项结果未确认` : `${completed} 项完成`}</span>
       <Icon name="chevron" className={open ? "rotate" : ""} />
     </button>
-    <div className="tool-batch-items">
+    {!open && current && !single && <p className="tool-activity">正在调用 {String(current.data.name || "tool")} · {operationTarget(current)}</p>}
+    {!open && failure && <p className="tool-failure">{String(failedCall!.data.name || "tool")} · {truncated(oneLine(failure.data.error || failure.data.content) || "调用失败，展开查看参数", 140)}</p>}
+    {open && single && <ToolDetails call={batch.calls[0]} result={results.get(callId(batch.calls[0]))} pluginSlots={pluginSlots} />}
+    {open && !single && <div className="tool-batch-items">
       {batch.calls.map((call) => {
         const result = results.get(callId(call));
-        const target = operationTarget(call);
-        const fullTarget = operationTarget(call, 10_000);
-        return <div className="tool-batch-row" key={call.id}>
+        const detailId = `call:${call.id}`, detailOpen = expanded.has(detailId);
+        return <section key={call.id}>
+          <button type="button" className="tool-batch-row" aria-expanded={detailOpen}
+            onClick={() => onToolToggle(detailId, !detailOpen)}>
           <span className="tool-batch-name">{String(call.data.name || "tool")}</span>
-          <span className="tool-target" title={fullTarget}>{target}</span>
-          <span className={`tool-item-status ${result?.data.ok === false ? "failed" : ""}`}>
-            {result ? (result.data.ok === false ? "失败" : "完成") : "等待"}
+          <span className="tool-target" title={operationTarget(call, 10_000)}>{operationTarget(call)}</span>
+          <span className={`tool-item-status ${result?.data.ok === false ? "failed" : result ? "completed" : ""}`}>
+            {result ? (result.data.ok === false ? "失败" : "完成") : active ? "等待" : "未确认"}
           </span>
           {result?.data["duration-ms"] != null
             ? <span className="tool-duration">{String(result.data["duration-ms"])} ms</span>
             : <span className="tool-duration" />}
-        </div>;
-      })}
-    </div>
-    {open && <div className="tool-details tool-batch-details">
-      {batch.calls.map((call) => {
-        const result = results.get(callId(call));
-        return <section key={call.id}>
-          <strong>{String(call.data.name || "tool")}</strong>
-          <div><span>参数</span><pre>{text(call.data.arguments) || "{}"}</pre></div>
-          {result && <div><span>结果</span>
-            <pre>{text(result.data.content || result.data.error)}</pre>
-            <ToolResultImages images={result.data.images} />
-            {result.data.ok !== false && <PluginSlots slots={pluginSlots} slot="tool-result"
-              toolName={String(call.data.name || "tool")} data={pluginResultData(result)} />}</div>}
+          <Icon name="chevron" className={detailOpen ? "rotate" : ""} />
+          </button>
+          {detailOpen && <ToolDetails call={call} result={result} pluginSlots={pluginSlots} />}
         </section>;
       })}
     </div>}
@@ -205,7 +239,7 @@ function Message({ event, reasoningOpen, onReasoningToggle }: {
 type DisplayRow = TimelineRow | { id: string; kind: "stream" | "run-error" };
 
 function estimateRow(row: DisplayRow, width: number): number {
-  if (row.kind === "tools") return 52 + row.batch.calls.length * 34;
+  if (row.kind === "tools") return 52;
   if (row.kind === "decision" || row.kind === "error" || row.kind === "run-error") return 56;
   if (!("event" in row)) return 100;
   const message = row.event.data.message as Record<string, unknown>;
@@ -348,7 +382,10 @@ export function Timeline({ projection, scrollRef, pluginSlots = [] }: {
         {row.kind === "message" && <Message event={row.event} reasoningOpen={expanded.has(row.id)}
           onReasoningToggle={(open) => setExpandedRow(row.id, open)} />}
         {row.kind === "tools" && <ToolBatchCard batch={row.batch} results={projection.timeline.results}
-          pluginSlots={pluginSlots} open={expanded.has(row.id)} onToggle={() => setExpandedRow(row.id, !expanded.has(row.id))} />}
+          active={projection.timeline.activeToolRow !== null && projection.timeline.rows[projection.timeline.activeToolRow]?.id === row.id
+            && (projection.state.phase !== "idle" || projection.interactions.length > 0)}
+          expanded={expanded} onToolToggle={setExpandedRow} pluginSlots={pluginSlots}
+          open={expanded.has(row.id)} onToggle={() => setExpandedRow(row.id, !expanded.has(row.id))} />}
         {row.kind === "decision" && <div className={`decision-row ${row.event.data.decision === "allow" ? "allowed" : "denied"}`}>
           <Icon name="shield" /><span>{String(row.event.data.tool || "工具")} {row.event.data.decision === "allow" ? "已获批准" : "被拒绝"}</span>
         </div>}

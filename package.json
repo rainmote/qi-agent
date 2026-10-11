@@ -20,6 +20,7 @@
     "test:tui": "cargo test --manifest-path apps/tui-rs/Cargo.toml",
     "test:web-browser": "node apps/web/tests/browser-regressions.mjs",
     "test:web-browser:ci": "node apps/web/tests/production-browser.mjs",
+    "test:web-e2e": "npm run web:build && cargo build --locked --manifest-path apps/tui-rs/Cargo.toml && tsx --test apps/web/tests/interaction-e2e.test.ts",
     "test:eval": "node --test evals/tests/*.test.mjs",
     "eval:doctor": "node evals/run.mjs doctor",
     "eval:validate": "node evals/run.mjs validate",

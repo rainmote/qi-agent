@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 
 import { api } from "./api";
 import { Icon } from "./icons";
 import { ProviderSettingsPanel } from "./ProviderSettingsPanel";
-import type { Interaction, RuntimeStatus, Workspace } from "./types";
+import type { Interaction, ProjectTrust, RuntimeStatus, Workspace } from "./types";
 
 function DialogFrame({ title, children, onClose, className = "", dangerous = false }: {
   title: string; children: ReactNode; onClose?: () => void; className?: string; dangerous?: boolean;
@@ -30,19 +30,43 @@ function DialogFrame({ title, children, onClose, className = "", dangerous = fal
   </div>;
 }
 
-export function ApprovalDialog({ interaction, resolving, onResolve }: {
+export function ApprovalPanel({ interaction, resolving, onResolve, onStop, stopping, stopError, error, count = 1 }: {
   interaction: Interaction; resolving: boolean;
   onResolve: (decision: "allow" | "allow-session" | "deny") => void;
+  onStop?: () => void; stopping?: boolean; stopError?: string | null;
+  error?: string | null; count?: number;
 }) {
-  return <DialogFrame title={interaction.title || "允许执行此操作？"} dangerous>
-    <div className="approval-symbol"><Icon name="shield" /></div>
-    <p className="dialog-copy">代理需要你的确认才能继续。请核对目标和参数。</p>
-    <pre className="approval-detail">{interaction.message}</pre>
-    <div className="dialog-actions approval-actions">
-      <button type="button" className="button ghost" disabled={resolving} onClick={() => onResolve("deny")}>拒绝</button>
-      {interaction.items?.some(item => item.value === "allow-session") && <button type="button" className="button secondary" disabled={resolving}
+  return <section className="approval-panel" aria-label="待确认操作" aria-busy={resolving || stopping || false}>
+    <header className="approval-heading" role="status"><Icon name="shield" />
+      <strong>{interaction.title || "允许执行此操作？"}</strong><span>{resolving ? "正在提交…" : count > 1 ? `${count} 项待确认` : "等待确认"}</span></header>
+    <pre className="approval-detail" tabIndex={0} aria-label="操作详情">{interaction.message}</pre>
+    {(stopError || error) && <p className="approval-error" role="alert">{stopError || error}</p>}
+    <div className="approval-actions">
+      {onStop && <button type="button" className="button ghost" disabled={stopping} onClick={onStop}>
+        {stopping ? "正在停止…" : "停止运行"}</button>}
+      <button type="button" className="button ghost" disabled={resolving || stopping} onClick={() => onResolve("deny")}>拒绝</button>
+      {interaction.items?.some(item => item.value === "allow-session") && <button type="button" className="button secondary" disabled={resolving || stopping}
         onClick={() => onResolve("allow-session")}>本会话允许</button>}
-      <button type="button" className="button primary" disabled={resolving} onClick={() => onResolve("allow")}>仅允许一次</button>
+      <button type="button" className="button primary" disabled={resolving || stopping} onClick={() => onResolve("allow")}>仅允许一次</button>
+    </div>
+  </section>;
+}
+
+export function ProjectTrustDialog({ trust, busy, error, onChoose }: {
+  trust: ProjectTrust; busy: boolean; error: string | null;
+  onChoose: (decision: "allow" | "deny" | null) => void;
+}) {
+  return <DialogFrame title="是否信任这个项目？" onClose={busy ? undefined : () => onChoose(null)}>
+    <p className="dialog-copy">开始前，请确认你了解这个目录中的文件和指令来源。</p>
+    <pre className="approval-detail trust-path">{trust.root}</pre>
+    <p className="dialog-copy">信任后可加载项目资源并执行需要信任的命令；操作仍遵循当前访问权限。选择保持受限将继续禁用这些能力。</p>
+    {trust.mutable === false && <p className="dialog-copy">当前配置固定了信任状态，无法在这里修改。</p>}
+    {error && <p className="dialog-copy form-error" role="alert">{error}</p>}
+    <div className="dialog-actions trust-actions">
+      <button type="button" className="button ghost" disabled={busy} onClick={() => onChoose(null)}>取消</button>
+      <button type="button" className="button secondary" disabled={busy} onClick={() => onChoose("deny")}>保持受限</button>
+      <button type="button" className="button primary" disabled={busy || trust.mutable === false} onClick={() => onChoose("allow")}>
+        {busy ? "正在确认…" : "信任并继续"}</button>
     </div>
   </DialogFrame>;
 }
@@ -77,7 +101,7 @@ export function WorkspaceDialog({ initialPath, onClose, onSelect }: {
 }) {
   const [path, setPath] = useState(initialPath || "");
   const [listing, setListing] = useState<{ path: string; parent: string | null; directories: Array<{ name: string; path: string }> } | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const browse = async (target?: string) => {
     setBusy(true); setError(null);
@@ -94,7 +118,7 @@ export function WorkspaceDialog({ initialPath, onClose, onSelect }: {
   };
   return <DialogFrame title="添加工作区" onClose={onClose} className="workspace-dialog">
     <div className="workspace-picker">
-      <label>文件夹路径<input aria-label="文件夹路径" value={path} onChange={(event) => setPath(event.target.value)}
+      <label>文件夹路径<input aria-label="文件夹路径" value={path} disabled={busy} onChange={(event) => setPath(event.target.value)}
         onKeyDown={(event) => { if (event.key === "Enter") void browse(path); }} /></label>
       <div className="directory-toolbar">
         <button type="button" className="button ghost compact-button" disabled={!listing?.parent || busy}
@@ -102,7 +126,7 @@ export function WorkspaceDialog({ initialPath, onClose, onSelect }: {
         <span>{listing?.path || "正在读取…"}</span>
       </div>
       <div className="directory-list" role="listbox" aria-label="文件夹">
-        {listing?.directories.map((directory) => <button type="button" key={directory.path}
+        {listing?.directories.map((directory) => <button type="button" key={directory.path} disabled={busy}
           onDoubleClick={() => void browse(directory.path)} onClick={() => setPath(directory.path)}>
           <Icon name="folder" /><span>{directory.name}</span><Icon name="chevron" />
         </button>)}

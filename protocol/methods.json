@@ -15,6 +15,7 @@
     "model.list",
     "context.status",
     "policy.status",
+    "trust.status",
     "command.list",
     "runtime.status",
     "repl.status",
