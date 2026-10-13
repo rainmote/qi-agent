@@ -734,6 +734,7 @@
     (try
       (let [result (run-agent-body! ctx config active admission-lock prompt
                                     options token queue state listeners)]
+        (publish! ctx listeners :agent.run/end {:run-id run-id :status :completed})
         (set-phase! ctx state listeners :idle
                     {:run-id nil :attempt nil :last-result result})
         result)
@@ -746,6 +747,8 @@
             (publish! ctx listeners :agent/aborted {:run-id run-id}))
           (record! ctx "agent/error"
                    {:run-id run-id :message (ex-message error)}))
+        (publish! ctx listeners :agent.run/end
+                  {:run-id run-id :status (if (:cancelled (ex-data error)) :cancelled :failed)})
         (set-phase! ctx state listeners :idle
                     {:run-id nil :attempt nil :last-error (ex-message error)})
         (throw error))

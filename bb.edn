@@ -23,5 +23,9 @@
         :extra-paths ["test"]
         :requires ([qi.test-runner :as test-runner])
         :task (test-runner/-main)}
+  test-lcu-e2e {:doc "Real macOS desktop E2E with installed LCU (opt-in)"
+                :extra-paths ["test"]
+                :requires ([qi.lcu-e2e :as lcu-e2e])
+                :task (lcu-e2e/-main)}
   web {:doc "Build and start the local WebUI"
        :task (shell "npm run web")}}}

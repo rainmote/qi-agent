@@ -145,9 +145,11 @@
   automatically retried. A timeout/cancellation during tools/call closes this
   transport, preventing later calls from racing an unresolved external action."
   [{:keys [command cwd env startup-timeout-ms request-timeout-ms max-message-chars
-           stderr-tail-chars cancel-token protocol-mode on-notification scrub-env]
+           stderr-tail-chars cancel-token protocol-mode on-notification scrub-env
+           on-request client-capabilities pause-timeout-on-server-request shutdown-timeout-ms]
     :or {cwd "." env {} startup-timeout-ms 10000 request-timeout-ms 30000
-         max-message-chars 16777216 stderr-tail-chars 8192 protocol-mode :legacy}
+         max-message-chars 16777216 stderr-tail-chars 8192 protocol-mode :legacy
+         shutdown-timeout-ms 250}
     :as options}]
   (validate-options! (merge {:env env :startup-timeout-ms startup-timeout-ms
                              :request-timeout-ms request-timeout-ms
@@ -172,6 +174,7 @@
           active? (atom true)
           closed (promise)
           pending (atom {})
+          server-requests (atom {})
           next-id (atom 0)
           modern? (atom (not= protocol-mode :legacy))
           write-lock (Object.)
@@ -184,11 +187,13 @@
                 (let [[entries _] (swap-vals! pending (constantly {}))]
                   (doseq [entry (vals entries)]
                     (finish! entry {:transport-error reason})))
+                (doseq [token (vals @server-requests)]
+                  (cancellation/cancel! token))
                 ;; Destroy before closing streams: a concurrent blocked writer
                 ;; owns its stream monitor and must not block cancellation.
                 (when (.isAlive process)
                   (.destroy process)
-                  (when-not (.waitFor process 250 TimeUnit/MILLISECONDS)
+                  (when-not (.waitFor process shutdown-timeout-ms TimeUnit/MILLISECONDS)
                     (.destroyForcibly process)
                     (.waitFor process 1000 TimeUnit/MILLISECONDS)))
                 (doseq [stream [(.getOutputStream process) (.getInputStream process)
@@ -256,7 +261,17 @@
                                    (fn [state]
                                      (swap! pending dissoc id)
                                      (when (:dispatched? state) (stop! error)))))))
-                    (let [initial (deref (:response entry) timeout ::timeout)
+                    (let [initial (if pause-timeout-on-server-request
+                                    (loop [remaining (* timeout 1000000)]
+                                      (let [start (System/nanoTime)
+                                            paused? (seq @server-requests)
+                                            value (deref (:response entry) 25 ::pending)
+                                            left (- remaining (if (or paused? (seq @server-requests))
+                                                                0 (- (System/nanoTime) start)))]
+                                        (cond (not= ::pending value) value
+                                              (<= left 0) ::timeout
+                                              :else (recur left))))
+                                    (deref (:response entry) timeout ::timeout))
                           _ (when (= initial ::timeout) (abort! {:timed-out true}))
                           envelope (if (= initial ::timeout) @(:response entry) initial)
                           context (cond-> context
@@ -297,13 +312,32 @@
                       ;; The server's ID namespace is independent of ours.
                       (if (:method message)
                         (if (contains? message :id)
-                          (send! (merge {:jsonrpc "2.0" :id (:id message)}
+                          (if (and on-request (not= "ping" (:method message)))
+                            (let [token (cancellation/create-token)
+                                  id (:id message)]
+                              (swap! server-requests assoc id token)
+                              ;; The reader must remain available while UI waits
+                              ;; for a human or a cancellation notification.
+                              (future
+                                (try
+                                  (let [result (on-request message {:cancel-token token})]
+                                    (send! {:jsonrpc "2.0" :id id :result result} nil))
+                                  (catch Throwable _
+                                    (try (send! {:jsonrpc "2.0" :id id
+                                                 :error {:code -32603 :message "Client request failed"}} nil)
+                                         (catch Throwable _)))
+                                  (finally (swap! server-requests dissoc id)))))
+                            (send! (merge {:jsonrpc "2.0" :id (:id message)}
                                         (if (= "ping" (:method message))
                                           {:result {}}
                                           {:error {:code -32601
                                                    :message "Client capability is not supported"}}))
-                                 nil)
-                          (when on-notification (on-notification message)))
+                                 nil))
+                          (do
+                            (when (= "notifications/cancelled" (:method message))
+                              (when-let [token (get @server-requests (get-in message [:params :requestId]))]
+                                (cancellation/cancel! token)))
+                            (when on-notification (on-notification message))))
                         (when-let [entry (get @pending (:id message))]
                           (finish! entry {:message message})
                           (swap! pending dissoc (:id message))))))))
@@ -329,7 +363,7 @@
                                         {:name "MCP server" :version "unknown"})}
                        (request! "initialize"
                                {:protocolVersion protocol-version
-                                :capabilities {}
+                                :capabilities (or client-capabilities {})
                                 :clientInfo {:name "qi-agent" :version "1"}}
                                {:timeout-ms startup-timeout-ms :cancel-token cancel-token}))]
           (when (and discovery (not (some #{modern-protocol-version} (:supportedVersions discovery))))
@@ -348,6 +382,7 @@
            :alive? #(and @active? (.isAlive process))
            :server-info (:serverInfo result)
            :capabilities (:capabilities result)
+           :instructions (:instructions result)
            :protocol-version (:protocolVersion result)
            :cwd (str directory)
            :pid (.pid process)

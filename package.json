@@ -9,6 +9,7 @@
   "scripts": {
     "test": "npm run typecheck && npm run test:web && npm run test:web-ui && npm run test:acp && npm run test:tui && bb test && npm run test:eval",
     "acp": "tsx apps/acp/server.ts",
+    "test:lcu-e2e": "bb test-lcu-e2e",
     "test:acp": "tsx --test apps/acp/*.test.ts",
     "tui:build": "cargo build --release --manifest-path apps/tui-rs/Cargo.toml",
     "web": "npm run tui:build && npm run web:build && npm run web:start",

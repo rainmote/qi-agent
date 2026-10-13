@@ -212,11 +212,11 @@
                             "lsp_query"]
             :approval-tools ["write" "edit" "hash_edit" "bash" "bb_repl"]}}
 
-  ;; Computer use is opt-in. See docs/computer-use.md for the installed driver,
+  ;; Computer use is opt-in. See docs/lcu.md for the installed LCU library,
   ;; trusted local :sandbox :none profile and image-capable model requirements.
   {:ns qi.plugins.computer-use}
-  {:ns qi.plugins.cua-driver-mcp
-   :config {:enabled false :command ["cua-driver" "mcp"]}}
+  {:ns qi.plugins.lcu
+   :config {:enabled false}}
 
   ;; Harness capabilities stay in the parent session. MCP servers are opt-in,
   ;; and the paid search provider remains disabled until explicitly configured.

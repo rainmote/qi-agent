@@ -1,4 +1,7 @@
-# Computer use
+# Computer use — Cua Driver
+
+项目也支持 [LCU 库接入](lcu.md)，包含独立的真实桌面 E2E 测试入口 `bb test-lcu-e2e`。
+本页描述保留的 Cua Driver provider。一个 context 只能启用一个桌面 provider。
 
 qì agent 通过已安装的 Cua Driver 观察和操作本机桌面。实现参考 DeepSeek Harness 的
 computer-use provider 结构：共享层只保留一个 provider 名称，具体工具由驱动通过 MCP

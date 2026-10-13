@@ -190,7 +190,8 @@ definition、references、hover、symbols、implementation 与 type definition�
 server 只在 `/lsp status` 显示 unavailable，不影响启动，也不会自动下载。配置、协议行为和
 安全范围见 [LSP 插件文档](docs/lsp-plugin.md)。
 
-Computer use 通过可选 Cua Driver MCP provider 接入：动态发现桌面工具，沿用信任与审批链，
+Computer use 支持可选 [LCU provider](docs/lcu.md)，包含原生应用授权、截图和回合清理；
+也保留 Cua Driver MCP provider。桌面工具沿用信任与审批链，
 将截图传给支持图像的模型并在 WebUI 展示。默认关闭；启用示例、驱动要求及操作结果不确定时的
 恢复方法见 [Computer use 文档](docs/computer-use.md) 和 `examples/computer-use.edn`。
 

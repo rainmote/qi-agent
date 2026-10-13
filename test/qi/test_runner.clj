@@ -15,6 +15,7 @@
             [qi.remote-snapshot-test]
             [qi.remote-interaction-cancel-test]
             [qi.computer-use-test]
+            [qi.lcu-test]
             [qi.mcp-stdio-test]
             [qi.tool-images-test]
             [qi.attachments-test]
@@ -4245,7 +4246,7 @@
                    'qi.runtime-inspect-test 'qi.runtime-lab-test
                    'qi.session-title-test 'qi.runtime-recovery-test
                    'qi.remote-snapshot-test 'qi.remote-interaction-cancel-test
-                   'qi.computer-use-test
+                   'qi.computer-use-test 'qi.lcu-test
                    'qi.mcp-stdio-test 'qi.tool-images-test
                    'qi.attachments-test 'qi.jobs-test
                    'qi.mcp-http-test 'qi.mcp-client-test 'qi.web-tools-test
