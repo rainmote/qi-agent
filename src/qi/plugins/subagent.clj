@@ -1,6 +1,7 @@
 (ns qi.plugins.subagent
   "Provider-neutral subagent registry and run lifecycle."
   (:require [qi.kernel :as kernel]
+            [qi.run-outcome :as outcome]
             [qi.secure-files :as secure]
             [clojure.edn :as edn]
             [clojure.java.io :as io]
@@ -20,6 +21,13 @@
       (assoc :resident (boolean (:handle job)))
       (dissoc :handle :completion :parent-context)
       (update :provider provider-id)))
+
+(defn- record-run! [ctx store phase result]
+  (when-let [append! (:append! store)]
+    (let [event (append! (str "subagent/run/" (name phase))
+                         (select-keys result [:id :run-id :execution-run-id :provider :depth
+                                              :status :stop-reason :reason :error :usage :steps :verification]))]
+      (kernel/emit! ctx :session/event event))))
 
 (defn- roster-path [ctx]
   (let [store (kernel/service ctx :session/store)
@@ -111,11 +119,22 @@
             (into {}
                   (map (fn [job]
                          (let [completion (promise)
-                               status (if (= :running (:status job))
-                                        :uncertain (:status job))
+                               interrupted? (= :running (:status job))
+                               result (when (or interrupted? (:result job))
+                                        (outcome/normalize
+                                         (if interrupted?
+                                           {:status :uncertain :reason :restored
+                                            :run-id (:run-id job)}
+                                           (:result job))))
+                               status (cond
+                                        interrupted? :uncertain
+                                        (and result (contains? #{:completed :failed :cancelled :uncertain}
+                                                               (:status job))) (:status result)
+                                        :else (:status job))
                                restored (assoc job
                                                :provider (provider-id (:provider job))
                                                :status status
+                                               :result result
                                                :handle nil
                                                :completion completion)]
                            (deliver completion
@@ -124,35 +143,43 @@
                            [(:id restored) restored])))
                   (:children loaded)))
            store (kernel/service ctx :session/store)
-           persist! #(write-roster! path @jobs @tombstones)
+           persist! #(locking jobs (write-roster! path @jobs @tombstones))
            complete!
-           (fn [agent-id provider depth completion result]
+           (fn [agent-id provider depth run-id completion result]
              (let [completed-at (System/currentTimeMillis)
-                   completed (assoc result
+                   completed (cond-> (assoc (outcome/normalize result)
                                     :id agent-id
                                     :agent_id agent-id
+                                    :run-id run-id
                                     :provider provider
                                     :depth depth)
+                               (:run-id result) (assoc :execution-run-id (:run-id result)))
                    [before _]
                    (swap-vals! jobs
                                (fn [current]
-                                 (if (identical? completion
-                                                 (get-in current [agent-id :completion]))
+                                 (if (and (identical? completion
+                                                      (get-in current [agent-id :completion]))
+                                          (= :running (get-in current [agent-id :status])))
                                    (update current agent-id assoc
-                                           :status :completed
+                                           :status (:status completed)
                                            :completed-at completed-at
                                            :result completed)
                                    current)))
-                   current-run? (identical? completion
-                                           (get-in before [agent-id :completion]))]
-               (when current-run? (persist!))
+                   current-run? (and (identical? completion
+                                                (get-in before [agent-id :completion]))
+                                     (= :running (get-in before [agent-id :status])))]
+               (when current-run?
+                 (persist!)
+                 (record-run! ctx store :end completed))
                ;; A retained child's next run may start before this watcher is
                ;; scheduled. Resolve old waiters without overwriting the new run.
-               (deliver completion completed)
+               (when (or current-run?
+                         (not (identical? completion (get-in before [agent-id :completion]))))
+                 (deliver completion completed))
                (when current-run?
                  (kernel/emit! ctx :subagent/end completed))))
            watch!
-           (fn [agent-id provider depth completion result]
+           (fn [agent-id provider depth run-id completion result]
              (future
                (let [value
                      (try
@@ -162,7 +189,7 @@
                           :stop-reason :error
                           :error (ex-message error)
                           :details (ex-data error)}))]
-                 (complete! agent-id provider depth completion value))))
+                 (complete! agent-id provider depth run-id completion value))))
            register!
            (fn [{:keys [id start restore capabilities] :as provider}]
              (let [id (provider-id id)
@@ -223,8 +250,10 @@
                    (throw (ex-info "Subagent provider returned an invalid handle"
                                    {:provider provider-id :agent-id agent-id})))
                  (let [completion (promise)
+                       run-id (str (random-uuid))
                        job {:id agent-id
                             :agent_id agent-id
+                            :run-id run-id
                             :label (or (:label request) (:prompt request))
                             :provider provider-id
                             :depth (:depth request)
@@ -240,8 +269,9 @@
                                      {:agent-id agent-id})))
                    (swap! jobs assoc agent-id job)
                    (persist!)
+                   (record-run! ctx store :start job)
                    (kernel/emit! ctx :subagent/start (public-job job))
-                   (watch! agent-id provider-id (:depth request)
+                   (watch! agent-id provider-id (:depth request) run-id
                            completion (:result handle))
                    (public-job job)))))
            wait!
@@ -278,12 +308,12 @@
                                    (-> (public-job job)
                                        (assoc :status
                                               (or (:passive-status job)
-                                                  :completed))))]
+                                                  (:status job) :uncertain))))]
                        (swap! jobs update agent-id
                               #(-> %
                                    (assoc :handle handle
                                           :status (or (:passive-status %)
-                                                      :completed)
+                                                      (:status %) :uncertain)
                                           :session-id (or (:session-id handle)
                                                           (:session-id %))
                                           :hydrated-at
@@ -319,7 +349,7 @@
                                  {:agent-id agent-id :status (:status job)})))
                (let [{:keys [result queued] :as accepted} (message! message)
                      completion (when-not queued (promise))
-                     run-id (str (random-uuid))]
+                     run-id (if queued (:run-id job) (str (random-uuid)))]
                  (when (and (not queued)
                             (not (instance? clojure.lang.IDeref result)))
                    (throw (ex-info "Subagent message did not return a run result"
@@ -333,7 +363,8 @@
                     {:to agent-id :message message :run_id run-id}))
                  (persist!)
                  (when completion
-                   (watch! agent-id (:provider job) (:depth job)
+                   (record-run! ctx store :start (get @jobs agent-id))
+                   (watch! agent-id (:provider job) (:depth job) run-id
                            completion result))
                  (merge {:id agent-id :agent_id agent-id :run_id run-id
                          :accepted true}
@@ -360,13 +391,27 @@
                    true))))
            stop!
            (fn [agent-id]
-             (when-let [job (get @jobs agent-id)]
-               (try ((get-in job [:handle :dispose!])) (catch Throwable _))
-               (swap! jobs update agent-id
-                      #(assoc % :status :stopped :handle nil
-                                :stopped-at (System/currentTimeMillis)))
-               (persist!)
-               true))
+             (let [[before after]
+                   (swap-vals! jobs
+                               (fn [current]
+                                 (if-let [job (get current agent-id)]
+                                   (assoc current agent-id
+                                          (cond-> (assoc job :status :stopped :handle nil
+                                                         :stopped-at (System/currentTimeMillis))
+                                            (= :running (:status job))
+                                            (assoc :result (outcome/normalize
+                                                            {:id agent-id :run-id (:run-id job)
+                                                             :status :cancelled :reason :stopped}))))
+                                   current)))
+                   job (get before agent-id)
+                   terminal (when (= :running (:status job)) (get-in after [agent-id :result]))]
+               (when job
+                 (when terminal
+                   (record-run! ctx store :end terminal)
+                   (deliver (:completion job) terminal))
+                 (try ((get-in job [:handle :dispose!])) (catch Throwable _))
+                 (persist!)
+                 true)))
            delete!
            (fn [agent-id]
              (when-let [job (get @jobs agent-id)]

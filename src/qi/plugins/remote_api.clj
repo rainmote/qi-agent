@@ -75,32 +75,32 @@
 (defn- context-status [ctx]
   (when-let [manager (kernel/service ctx :context/manager)]
     (let [store (kernel/require-service ctx :session/store)
-          models (kernel/service ctx :llm/registry)
           events ((:events store))
           messages ((:messages store))
-          system-prompt (latest-system-prompt events)
+          system-prompt (if-let [prompt (:system-prompt (kernel/service ctx :agent/session))]
+                          (prompt) (latest-system-prompt events))
           tools (kernel/tool-schemas ctx)
-          estimate! (:estimate! manager)
-          system-tokens (if (seq system-prompt)
-                          (estimate! system-prompt)
-                          0)
-          tool-tokens (if (seq tools) (estimate! tools) 0)
-          message-tokens (if (seq messages) (estimate! messages) 0)
-          used-tokens (+ system-tokens tool-tokens message-tokens)
-          context-window (or (when models
-                               (some-> ((:current models)) :context-window))
-                             (:context-window manager))
+          state (when-let [state! (:state (kernel/service ctx :agent/session))] (state!))
+          dispatched (when (and state (not= :idle (:phase state))) (:request-budget state))
+          budget (or dispatched ((:budget! manager) {:system-prompt system-prompt :tools tools :messages messages}))
+          used-tokens (:used-tokens budget)
+          context-window (:context-window budget)
           percent (if (and (number? context-window) (pos? context-window))
                     (min 100 (long (Math/round
                                     (* 100.0 (/ used-tokens
                                                 (double context-window))))))
                     0)]
       {:used_tokens used-tokens
+       :basis (if dispatched :last-request :next-request)
        :context_window context-window
        :percent percent
-       :system_tokens system-tokens
-       :tool_tokens tool-tokens
-       :message_tokens message-tokens})))
+       :system_tokens (:system-tokens budget)
+       :tool_tokens (:tool-tokens budget)
+       :message_tokens (:message-tokens budget)
+       :option_tokens (:option-tokens budget)
+       :reserve_tokens (:reserve-tokens budget)
+       :input_limit (:input-limit budget)
+       :fits (:fits? budget)})))
 
 (defn- session-snapshot [ctx]
   (let [store (kernel/require-service ctx :session/store)

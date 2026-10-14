@@ -153,6 +153,8 @@
    :display-name (:display-name config)
    :settings-provider-id (:settings-provider-id config)
    :context-window (:context-window config)
+   :max-output-tokens (max (or (:max-output-tokens config) 8192)
+                           (or (get-in config [:extra-body :max_tokens]) 0))
    :input-modalities (images/input-modalities config #{:text :image})
    :generate (partial generate ctx config)})
 

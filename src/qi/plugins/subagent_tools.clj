@@ -1,7 +1,8 @@
 (ns qi.plugins.subagent-tools
   "Model-facing adapters for delegation and subagent task control."
   (:require [qi.cancellation :as cancellation]
-            [qi.kernel :as kernel]))
+            [qi.kernel :as kernel]
+            [qi.run-outcome :as outcome]))
 
 (def ^:private start-parameters
   {:type "object"
@@ -18,7 +19,7 @@
    :additionalProperties false})
 
 (defn- completed! [runtime run-id result]
-  (when-not (= :completed (:stop-reason result))
+  (when-not (outcome/successful? result)
     (throw (ex-info "Subagent did not complete successfully" result)))
   result)
 

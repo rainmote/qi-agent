@@ -2,6 +2,7 @@
   "Isolated in-process spawn/fork providers for the subagent runtime."
   (:require [qi.cancellation :as cancellation]
             [qi.kernel :as kernel]
+            [qi.run-outcome :as outcome]
             [qi.plugin :as plugin]
             [qi.schema :as schema]
             [cheshire.core :as json]
@@ -234,16 +235,14 @@
         (on-finish)
         (deliver completion
                  (if (and ok (not (cancellation/cancelled? token)))
-                   {:output (:content value)
-                    :stop-reason :completed
-                    :usage (:usage value)
-                    :steps (:steps value)}
-                   {:output ""
-                    :stop-reason (if (or (cancellation/cancelled? token)
-                                         (:cancelled (ex-data error)))
-                                   :aborted :error)
-                    :error (ex-message error)
-                    :details (ex-data error)}))))
+                   (assoc (dissoc (outcome/normalize value) :messages :content)
+                          :output (:content value))
+                   (outcome/normalize
+                    (assoc (outcome/from-error error)
+                           :output ""
+                           :cancelled (or (cancellation/cancelled? token)
+                                          (:cancelled (ex-data error)))
+                           :details (ex-data error)))))))
     completion))
 
 (defn- received-message [store message-id]
@@ -411,10 +410,8 @@
                     (compare-and-set! active-token child-token nil))
                   (cancellation/throw-if-cancelled! child-token)
                   (deliver result
-                           (cond-> {:output output
-                                    :stop-reason :completed
-                                    :usage (:usage value)
-                                    :steps (:steps value)}
+                           (cond-> (assoc (dissoc (outcome/normalize value) :messages :content)
+                                          :output output)
                              (:output-schema request)
                              (assoc :structured
                                     (structured-output
@@ -424,12 +421,14 @@
               (let [aborted? (or (:cancelled (ex-data error))
                                  (cancellation/cancelled? child-token))]
                 (deliver result
-                         {:output (if-let [child @child-holder]
-                                    (final-output child)
-                                    "")
-                          :stop-reason (if aborted? :aborted :error)
-                          :error (ex-message error)
-                          :details (ex-data error)})))
+                         (outcome/normalize
+                          (merge (outcome/from-error error)
+                                 {:output (if-let [child @child-holder]
+                                            (final-output child) "")
+                                  :cancelled aborted?
+                                  :stop-reason (if aborted? :aborted :error)
+                                  :error (ex-message error)
+                                  :details (ex-data error)})))))
             (finally
               (compare-and-set! active-token child-token nil)
               (detach-parent)

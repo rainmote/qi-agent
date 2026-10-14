@@ -3,6 +3,7 @@
   (:require [qi.cancellation :as cancellation]
             [qi.kernel :as kernel]
             [qi.orchestration :as orch]
+            [qi.run-outcome :as outcome]
             [qi.schema :as schema]
             [cheshire.core :as json]))
 
@@ -107,7 +108,7 @@
                                  (let [result ((:wait! subagents) child-id 0)]
                                    (when-not (= :running (:status result))
                                      (let [checked (try
-                                                     (if-let [output-schema (and (= :completed (:stop-reason result))
+                                                     (if-let [output-schema (and (outcome/successful? result)
                                                                                (:output_schema (get by-id node-id)))]
                                                        (let [value (if (contains? result :structured) (:structured result)
                                                                        (json/parse-string (:output result) true))]
@@ -117,9 +118,14 @@
                                                      (catch Throwable error
                                                        {:stop-reason :error :error (ex-message error)}))]
                                        (node! run-id node-id
-                                              #(assoc % :status (if (= :completed (:stop-reason checked)) "completed" "failed")
-                                                      :result (select-keys checked [:output :structured :stop-reason :usage :error])
-                                                      :finished_at (orch/now))))
+                                              #(assoc % :status (name (:status (outcome/normalize checked)))
+                                                      :result (select-keys (outcome/normalize checked)
+                                                                           [:output :structured :status :stop-reason :reason
+                                                                            :verification :run-id :usage :error])
+                                                      :finished_at (orch/now)))
+                                       (when (= :uncertain (:status (outcome/normalize checked)))
+                                         (throw (ex-info "Workflow child outcome is uncertain"
+                                                         {:node_id node-id :uncertain true}))))
                                      (swap! children dissoc node-id))))
                                (let [run (get-in (snapshot) [:runs run-id])
                                      by-id (into {} (map (juxt :id identity) (:nodes run)))]
@@ -161,8 +167,10 @@
                                  (let [latest (get-in (snapshot) [:runs run-id])]
                                    (if (every? #(contains? terminal-nodes (:status %)) (:nodes latest))
                                      (run! run-id #(if (= "running" (:status %))
-                                                    (assoc % :status (if (some (fn [node] (= "failed" (:status node))) (:nodes %))
-                                                                     "failed" "completed")
+                                                    (assoc % :status (cond
+                                                                      (some (fn [node] (= "failed" (:status node))) (:nodes %)) "failed"
+                                                                      (some (fn [node] (= "cancelled" (:status node))) (:nodes %)) "cancelled"
+                                                                      :else "completed")
                                                            :finished_at (orch/now)) %))
                                      (do (Thread/sleep 25) (recur))))))))
                          (catch Throwable error

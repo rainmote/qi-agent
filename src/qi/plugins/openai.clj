@@ -221,6 +221,8 @@
    :display-name (:display-name config)
    :settings-provider-id (:settings-provider-id config)
    :context-window (:context-window config)
+   :max-output-tokens (or (get-in config [:extra-body :max_tokens])
+                          (get-in config [:extra-body :max_completion_tokens]))
    :thinking-levels (:thinking-levels config)
    :default-thinking-level
    (or (:default-thinking-level config)

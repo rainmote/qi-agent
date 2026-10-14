@@ -12,6 +12,8 @@
             [qi.runtime-inspect-test]
             [qi.runtime-lab-test]
             [qi.runtime-recovery-test]
+            [qi.run-outcome-test]
+            [qi.context-integrity-test]
             [qi.remote-snapshot-test]
             [qi.remote-interaction-cancel-test]
             [qi.computer-use-test]
@@ -2097,7 +2099,7 @@
         (is (= :aborted
                (:stop-reason
                 ((:execute wait-agent) {:id run-id :timeout_ms 1000} {}))))
-        (is (= :completed
+        (is (= :cancelled
                (:status (first (:agents ((:execute list-agents) {} {}))))))
         (is (= run-id
                (get-in ((:execute delete-agent) {:id run-id} {})
@@ -3231,12 +3233,13 @@
                 [{:ns 'qi.plugins.session}
                  {:ns 'qi.plugins.mock :config {:generate generate}}
                  {:ns 'qi.plugins.context-manager
-                  :config {:context-window 120 :reserve-tokens 20
-                           :chars-per-token 1.0 :retain-messages 2}}
+                  :config {:context-window 2000 :reserve-tokens 200
+                           :chars-per-token 1.0 :retain-messages 1}}
                  {:ns 'qi.plugins.runtime}]})]
       (try
-        (let [result ((kernel/require-service ctx :agent/run)
-                      (apply str (repeat 200 "x")))
+        (let [store (kernel/require-service ctx :session/store)
+              _ ((:append! store) "message" {:message {:role "user" :content (apply str (repeat 3000 "x"))}})
+              result ((kernel/require-service ctx :agent/run) "current instruction")
               events ((:events (kernel/require-service ctx :session/store)))
               runtime-request (last @requests)]
           (is (= "done" (:content result)))
@@ -3266,6 +3269,9 @@
                   :config {:context-window 10000 :reserve-tokens 100}}
                  {:ns 'qi.plugins.runtime}]})]
       (try
+        (let [store (kernel/require-service ctx :session/store)]
+          ((:append! store) "message" {:message {:role "user" :content "old request"}})
+          ((:append! store) "message" {:message {:role "assistant" :content "old answer"}}))
         (is (= "recovered"
                (:content ((kernel/require-service ctx :agent/run) "hello"))))
         (is (= 2 @runtime-calls))
@@ -3291,13 +3297,14 @@
               [{:ns 'qi.plugins.session}
                {:ns 'qi.plugins.mock :config {:generate generate}}
                {:ns 'qi.plugins.context-manager
-                :config {:context-window 120 :reserve-tokens 20
-                         :chars-per-token 1.0 :retain-messages 2}}
+                :config {:context-window 2000 :reserve-tokens 200
+                         :chars-per-token 1.0 :retain-messages 1}}
                {:ns 'qi.plugins.runtime}]})]
     (try
       (let [session (kernel/require-service ctx :agent/session)
             store (kernel/require-service ctx :session/store)
-            {:keys [result]} ((:submit! session) (apply str (repeat 200 "x")))
+            _ ((:append! store) "message" {:message {:role "user" :content (apply str (repeat 3000 "x"))}})
+            {:keys [result]} ((:submit! session) "current instruction")
             before (System/nanoTime)]
         (is (= true (deref started 1000 :timeout)))
         (is (true? ((:abort! session))))
@@ -4242,7 +4249,8 @@
 
 (defn -main []
   (let [{:keys [fail error]}
-        (run-tests 'qi.test-runner 'qi.web-test 'qi.presets-test
+        (run-tests 'qi.test-runner 'qi.run-outcome-test 'qi.context-integrity-test
+                   'qi.web-test 'qi.presets-test
                    'qi.runtime-inspect-test 'qi.runtime-lab-test
                    'qi.session-title-test 'qi.runtime-recovery-test
                    'qi.remote-snapshot-test 'qi.remote-interaction-cancel-test

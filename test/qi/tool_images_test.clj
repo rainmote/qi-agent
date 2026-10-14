@@ -243,7 +243,7 @@
         (kernel/dispose-all! ctx)
         (fs/delete-tree directory)))))
 
-(deftest failed-semantic-compaction-keeps-bitmap-data-out-of-fallback-text
+(deftest failed-semantic-compaction-keeps-the-original-images-and-history
   (let [ctx (plugin/boot!
              (context-profile (fn [_] (throw (Exception. "Offline compactor failure"))) {}))]
     (try
@@ -253,10 +253,10 @@
                          {:role "assistant" :content "Inspected"}
                          {:role "user" :content "Continue"}]]
           ((:append! store) "message" {:message message}))
-        (is (:compacted ((:compact! manager) {:force true})))
-        (let [summary (:content (first ((:messages store))))]
-          (is (str/includes? summary "Inspect this"))
-          (is (str/includes? summary "omitted"))
-          (is (not (str/includes? summary "AQIDBA")))
-          (is (not (str/includes? summary "data:image")))))
+        (let [before ((:messages store))]
+          (is (thrown-with-msg? clojure.lang.ExceptionInfo #"original context was preserved"
+                               ((:compact! manager) {:force true})))
+          (is (= before ((:messages store))))
+          (is (= screenshot (get-in ((:messages store)) [0 :content 1])))
+          (is (not-any? #(= "session/compaction" (:type %)) ((:events store))))))
       (finally (kernel/dispose-all! ctx)))))

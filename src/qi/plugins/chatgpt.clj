@@ -500,6 +500,7 @@
               :provider :chatgpt-subscription
               :model (:model config)
               :context-window (:context-window config)
+              :max-output-tokens (get-in config [:extra-body :max_output_tokens])
               :thinking-levels [:low :medium :high]
               :default-thinking-level
               (or (:default-thinking-level config)

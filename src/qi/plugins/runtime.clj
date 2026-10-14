@@ -3,6 +3,7 @@
   (:require [qi.attachments :as attachments]
             [qi.cancellation :as cancellation]
             [qi.kernel :as kernel]
+            [qi.run-outcome :as outcome]
             [qi.schema :as schema]
             [qi.system-prompt :as system]
             [cheshire.core :as json]
@@ -573,8 +574,16 @@
       (let [prepared (if context ((:prepare! context) request) request)]
         (set-phase! ctx state listeners :model {:attempt attempt})
         (let [outcome (try
-                        {:response (kernel/waterfall ctx :llm/request
-                                                     prepared #(llm (attachments/resolve-request ctx %)))}
+                        {:response (kernel/waterfall
+                                    ctx :llm/request prepared
+                                    (fn [request]
+                                      (let [resolved (attachments/resolve-request ctx request)
+                                            checked (if context ((:check! context) resolved) resolved)]
+                                        (when context
+                                          (let [budget ((:budget! context) checked)]
+                                            (record! ctx "context/budget" (assoc budget :run-id (:run-id @state)))
+                                            (set-phase! ctx state listeners :model {:request-budget budget})))
+                                        (llm checked))))}
                         (catch Throwable error {:error error}))
               error (:error outcome)]
           (cond
@@ -585,10 +594,13 @@
                  (not overflow-retried?))
             (do
               (set-phase! ctx state listeners :compacting)
-              ((:compact! context) {:force true :reason :overflow
-                                    :cancel-token cancel-token
-                                    :provider (get-in request
-                                                      [:options :provider])})
+              (let [result ((:compact! context) {:force true :reason :overflow
+                                                 :cancel-token cancel-token
+                                                 :request prepared})]
+                (when-not (:compacted result)
+                  (throw (ex-info "Provider rejected context and no safe compaction is available"
+                                  {:code :context_unfit :reason (:reason result)
+                                   :retryable false} error))))
               (publish! ctx listeners :agent/retry
                         {:reason :context-overflow :attempt (inc attempt)})
               (recur (inc attempt) true
@@ -631,7 +643,7 @@
 
 (defn- run-agent-body!
   [ctx config active admission-lock prompt options cancel-token queue state
-   listeners]
+   listeners progress]
   (when (blank-content? prompt)
     (throw (ex-info "Prompt must not be blank" {})))
   (record-message! ctx {:role "user" :content prompt})
@@ -641,7 +653,8 @@
       (cancellation/throw-if-cancelled! cancel-token)
       (when (> step max-steps)
         (throw (ex-info "Agent exceeded its step limit"
-                        {:max-steps max-steps :messages (messages ctx)})))
+                        {:reason :step-budget :max-steps max-steps
+                         :messages (messages ctx)})))
       ;; Steering becomes context immediately before the next model request.
       (inject-queued! ctx queue listeners :steer)
       (record! ctx "step/start" {:step step})
@@ -671,6 +684,7 @@
             assistant (assoc (:message response) :role "assistant")
             tool-calls (vec (:tool_calls assistant))
             next-usage (add-usage usage (:usage response))]
+        (reset! progress {:steps step :usage next-usage})
         ;; A provider may ignore cooperative cancellation and return a normal
         ;; response later. Close the already-open step, but do not commit that
         ;; stale assistant answer or any stale tool calls into the durable
@@ -678,6 +692,8 @@
         (when (cancellation/cancelled? cancel-token)
           (close-aborted-step! ctx listeners step)
           (cancellation/throw-if-cancelled! cancel-token))
+        (when (or (not (map? (:message response))) (:error response))
+          (throw (ex-info "Provider returned an invalid response" {:reason :provider-error})))
         (record-message! ctx assistant)
         (publish! ctx listeners :agent.message/end {:message assistant})
         (if (seq tool-calls)
@@ -699,13 +715,12 @@
             (record! ctx "step/end" turn-end)
             (publish! ctx listeners :agent.turn/end turn-end)
             (cancellation/throw-if-cancelled! cancel-token)
-            (if (and (seq results) (every? :terminate results))
+            (if (some :terminate results)
               (do
                 (close-admission! ctx active admission-lock queue listeners
                                   :tool-terminated)
-                {:content (or (:content assistant) "")
-                 :terminated true :steps step :usage next-usage
-                 :messages (messages ctx)})
+                (throw (ex-info "Agent run was terminated by tool policy"
+                                {:reason :tool-terminated :terminated true})))
               (recur (inc step) next-usage)))
           (let [continue-count (finish-or-continue!
                                 ctx active admission-lock queue listeners)
@@ -715,6 +730,12 @@
             (record! ctx "step/end" turn-end)
             (publish! ctx listeners :agent.turn/end turn-end)
             (cancellation/throw-if-cancelled! cancel-token)
+            (when-not (outcome/complete-response? response)
+              (throw (ex-info "Provider returned an incomplete final response"
+                              {:reason (if (contains? #{"length" "max_tokens"}
+                                                      (some-> (:finish-reason response) name))
+                                         :output-limit :provider-incomplete)
+                               :finish-reason (:finish-reason response)})))
             (if (pos? continue-count)
               (recur (inc step) next-usage)
               {:content (or (:content assistant) "")
@@ -724,34 +745,49 @@
 (defn- run-agent!
   [ctx config active admission-lock prompt options queue state listeners]
   (let [token (or (:cancel-token options) (cancellation/create-token))
-        run-id (str (random-uuid))]
+        run-id (str (random-uuid))
+        progress (atom {:steps 0 :usage {}})
+        ended? (atom false)
+        end! (fn [result]
+               (when (compare-and-set! ended? false true)
+                 (let [terminal (assoc (select-keys result
+                                                    [:status :stop-reason :reason :error
+                                                     :usage :steps :verification :code])
+                                       :run-id run-id)]
+                   (record! ctx "agent/run/end" terminal)
+                   (publish! ctx listeners :agent.run/end terminal))))]
     (cancellation/throw-if-cancelled! token)
     (locking admission-lock
       (when-not (compare-and-set! active nil {:token token :run-id run-id
                                               :accepting-queue? true})
         (throw (ex-info "An agent run is already active" {}))))
-    (set-phase! ctx state listeners :model {:run-id run-id :attempt 0})
+    (set-phase! ctx state listeners :model {:run-id run-id :attempt 0
+                                           :last-result nil :last-error nil :request-budget nil})
     (try
-      (let [result (run-agent-body! ctx config active admission-lock prompt
-                                    options token queue state listeners)]
-        (publish! ctx listeners :agent.run/end {:run-id run-id :status :completed})
+      (record! ctx "agent/run/start" {:run-id run-id})
+      (let [result (outcome/normalize
+                    (assoc (run-agent-body! ctx config active admission-lock prompt
+                                           options token queue state listeners progress)
+                           :run-id run-id :status :completed))]
+        (end! result)
         (set-phase! ctx state listeners :idle
-                    {:run-id nil :attempt nil :last-result result})
+                    {:run-id nil :attempt nil :last-result result :last-outcome result})
         result)
-      (catch Throwable error
-        (close-admission! ctx active admission-lock queue listeners
-                          (if (:cancelled (ex-data error)) :aborted :error))
-        (if (:cancelled (ex-data error))
-          (do
-            (record! ctx "agent/aborted" {:run-id run-id})
-            (publish! ctx listeners :agent/aborted {:run-id run-id}))
-          (record! ctx "agent/error"
-                   {:run-id run-id :message (ex-message error)}))
-        (publish! ctx listeners :agent.run/end
-                  {:run-id run-id :status (if (:cancelled (ex-data error)) :cancelled :failed)})
-        (set-phase! ctx state listeners :idle
-                    {:run-id nil :attempt nil :last-error (ex-message error)})
-        (throw error))
+      (catch Throwable cause
+        (let [terminal (merge @progress (outcome/from-error cause) {:run-id run-id})
+              error (ex-info (ex-message cause) (merge (ex-data cause) terminal) cause)]
+          (close-admission! ctx active admission-lock queue listeners
+                            (if (:cancelled (ex-data error)) :aborted :error))
+          (if (:cancelled (ex-data error))
+            (do
+              (record! ctx "agent/aborted" {:run-id run-id})
+              (publish! ctx listeners :agent/aborted {:run-id run-id}))
+            (record! ctx "agent/error"
+                     {:run-id run-id :message (ex-message error)}))
+          (end! terminal)
+          (set-phase! ctx state listeners :idle
+                      {:run-id nil :attempt nil :last-error (ex-message error) :last-outcome terminal})
+          (throw error)))
       (finally
         (locking admission-lock
           (reset! active nil))))))
@@ -769,6 +805,20 @@
       (publish! ctx listeners :queue/changed {:queue @queue})
       item)))
 
+(defn- recover-interrupted-runs! [ctx]
+  (let [store (kernel/require-service ctx :session/store)
+        pending (reduce (fn [runs event]
+                          (let [id (get-in event [:data :run-id])]
+                            (case (:type event)
+                              "agent/run/start" (assoc runs id (:data event))
+                              "agent/run/end" (dissoc runs id)
+                              runs))) {} ((:events store)))]
+    ;; Legacy logs without run envelopes remain readable and are not reclassified.
+    (doseq [[id _] pending :when id]
+      (record! ctx "agent/run/end"
+               (assoc (outcome/normalize {:status :uncertain :reason :restored})
+                      :run-id id :usage nil :steps nil)))))
+
 (def plugin
   {:id :agent/default-loop
    :description "Controllable session with deterministic parallel tool batches."
@@ -776,6 +826,7 @@
    :provides #{:agent/run :agent/cancel :agent/session}
    :start
    (fn [ctx config]
+     (recover-interrupted-runs! ctx)
      (let [active (atom nil)
            admission-lock (Object.)
            queue (atom [])
@@ -810,6 +861,7 @@
                                    :follow-up %)
             :abort! abort!
             :state (fn [] @state)
+            :system-prompt #(system-prompt ctx config)
             :subscribe!
             (fn [listener]
               (when-not (fn? listener)

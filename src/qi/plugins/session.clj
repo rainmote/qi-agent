@@ -1,8 +1,9 @@
 (ns qi.plugins.session
   "Recoverable append-only JSONL sessions with checkpoints and safe forks."
   (:require [qi.kernel :as kernel]
+            [qi.cancellation :as cancellation]
+            [qi.context-summary :as summary]
             [qi.secure-files :as secure]
-            [qi.tool-images :as images]
             [cheshire.core :as json]
             [clojure.java.io :as io]
             [clojure.string :as str])
@@ -112,25 +113,6 @@
        :else messages))
    [] events))
 
-(defn- message-summary [message]
-  (let [role (:role message)
-        content (images/text-only-content (:content message))
-        tool-names (->> (:tool_calls message)
-                        (keep #(get-in % [:function :name]))
-                        (str/join ", "))]
-    (str role ": "
-         (cond
-           (and (string? content) (not (str/blank? content))) content
-           (seq content) (pr-str content)
-           (not (str/blank? tool-names)) (str "called tools " tool-names)
-           :else "[no text]")
-         (when (seq (:images message)) " [Screenshot omitted; recapture if needed.]"))))
-
-(defn- deterministic-summary [messages max-chars]
-  (let [text (str/join "\n" (map message-summary messages))]
-    (str (subs text 0 (min max-chars (count text)))
-         (when (> (count text) max-chars) "\n[summary truncated]"))))
-
 (defn compaction-plan
   "Split a snapshot without separating an assistant tool batch from its results.
   Retention is a minimum: a boundary inside a batch moves before that batch."
@@ -235,7 +217,7 @@
                           (notify! item)))))
            messages #(effective-messages @events)
            compact-body!
-           (fn [{:keys [summary retain plan]
+           (fn [{:keys [summary retain plan coverage validate! cancel-token]
                  :or {retain retain-messages}}]
               (when-not (pos-int? retain)
                 (throw (ex-info ":retain must be a positive integer"
@@ -243,7 +225,8 @@
               (locking lock
                (let [current (messages)
                      {:keys [dropped retained] :as plan}
-                     (or plan (compaction-plan current retain))]
+                     (or plan (compaction-plan current (max retain (summary/protected-retain current))))
+                     source (when (str/blank? summary) (summary/source dropped))]
                 (cond
                   (not= current (:messages plan))
                   {:compacted false :reason :context-changed
@@ -252,21 +235,22 @@
                   (empty? dropped)
                   {:compacted false :message-count (count current)}
 
+                  (and source (> (count source) max-summary-chars))
+                  {:compacted false :reason :summary-too-large :message-count (count current)}
+
                   :else
-                  (let [summary-text (if (str/blank? summary)
-                                       (deterministic-summary
-                                        dropped max-summary-chars)
-                                       summary)
-                        replacement
-                        (vec (cons {:role "system"
-                                    :content
-                                    (str "Previous conversation summary:\n"
-                                         summary-text)}
-                                   retained))
+                  (let [summary-text (or source summary)
+                        replacement (summary/replacement summary-text retained)
+                        _ (when validate! (validate! replacement))
+                        _ (cancellation/throw-if-cancelled! cancel-token)
+                        coverage (or coverage (when source
+                                                (summary/coverage dropped source
+                                                                  [{:start 0 :end (count source)}])))
                         item (append!
                               "session/compaction"
                               {:original_message_count (count current)
                                :retained_message_count (count retained)
+                               :coverage coverage
                                :replacement_messages replacement})]
                     {:compacted true
                      :event-id (:id item)
