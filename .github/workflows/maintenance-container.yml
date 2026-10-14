@@ -36,6 +36,10 @@ jobs:
         run: |
           export QI_MAINTENANCE_IMAGE="$(node -p 'require(process.env.RUNNER_TEMP + "/qi-image.json").image')"
           node maintenance/broker-smoke.mjs "$RUNNER_TEMP/qi-broker-evidence"
+      - name: Native qi worker executes a tool and reconciles both logical requests
+        run: |
+          export QI_MAINTENANCE_IMAGE="$(node -p 'require(process.env.RUNNER_TEMP + "/qi-image.json").image')"
+          node maintenance/worker-smoke.mjs "$RUNNER_TEMP/qi-worker-evidence"
       - name: Retain exact image, checks and failure evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -48,3 +52,6 @@ jobs:
             ${{ runner.temp }}/qi-container-evidence/state/events.jsonl
             ${{ runner.temp }}/qi-container-evidence/state/artifacts/
             ${{ runner.temp }}/qi-broker-evidence/report.json
+            ${{ runner.temp }}/qi-worker-evidence/report.json
+            ${{ runner.temp }}/qi-worker-evidence/failure.json
+            ${{ runner.temp }}/qi-worker-evidence/execution.json

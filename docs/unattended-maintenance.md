@@ -25,9 +25,10 @@ node maintenance/build-image.mjs /absolute/evidence/image.json
 QI_MAINTENANCE_IMAGE=sha256:EXACT_IMAGE_ID node maintenance/qi-smoke.mjs \
   c40b3eb181f2156e5fbf796835847b692b47da3f /absolute/new-qi-smoke
 QI_MAINTENANCE_IMAGE=sha256:EXACT_IMAGE_ID node maintenance/broker-smoke.mjs /absolute/new-broker-smoke
+QI_MAINTENANCE_IMAGE=sha256:EXACT_IMAGE_ID node maintenance/worker-smoke.mjs /absolute/new-worker-smoke
 ```
 
-qi-smoke 对 qi 自身的已知压缩记账缺陷运行完整 baseline、有效 red、离线 oracle、完整 candidate 检查，并运行当前控制器提交的全部测试。包含生产浏览器和 daemon E2E。broker-smoke 验证断网、无凭据和宿主预扣款。两者**模型调用均为 0**，不能作为真实模型资格证明。独立 GitHub `Maintenance container` 工作流保留镜像、日志和报告，不接收模型密钥。
+qi-smoke 对 qi 自身的已知压缩记账缺陷运行完整 baseline、有效 red、离线 oracle、完整 candidate 检查，并运行当前控制器提交的全部测试。包含生产浏览器和 daemon E2E。broker-smoke 验证断网、无凭据和宿主预扣款；worker-smoke 用真实 Babashka worker 完成一次工具写入、两次模拟 Responses 请求，并核对原生用量与宿主预算的关联。三者**模型调用均为 0**，不能作为真实模型资格证明。独立 GitHub `Maintenance container` 工作流保留镜像、日志和报告，不接收模型密钥。
 
 合同可声明 `resources`：cpus、memory_mb、work_mb、tmp_mb、pids；上限分别为 4、6144、6144、1024、1024，纳入任务哈希。完整 qi 演练使用这些上限，正式任务应按实测耗时设置；不能以资源不足为由删掉必需检查。
 
