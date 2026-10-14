@@ -12,6 +12,8 @@
 
 每次检查使用新容器，产物不跨检查共享。镜像须包含该任务的工具和离线依赖；`maintenance/image/Dockerfile` 提供 Rust、Babashka、Node 和 Chromium 的固定工具链配方，启动时从只读缓存初始化工作目录。镜像构建成功与完整容器验收分别记录，缺少环境的检查会阻断，不能标成不适用。
 
+`node maintenance/build-image.mjs /absolute/image.json [EXACT_BASELINE_SHA]` 从干净提交构建镜像。历史基线与当前源码的 Cargo 锁文件不同时，显式提供基线 SHA，将两套依赖预取到镜像；构建回执同时记录 source_sha 和 baseline_sha。历史基线仍按原锁文件执行，不用当前依赖覆盖旧证据。两者的 npm 锁文件必须相同，否则构建会拒绝，需要分别制作精确依赖镜像。
+
 ## 手动使用
 
 先保留一个经过审查的控制器提交，再从它建干净 worktree。后续维护代码的改动不会自动更新已经保存的控制器材料。

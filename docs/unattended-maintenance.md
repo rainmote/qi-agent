@@ -21,7 +21,7 @@ API 字段依据：[Responses API](https://developers.openai.com/api/reference/r
 `maintenance/image/Dockerfile` 固定 Node/Rust 基础镜像 digest、Babashka 版本及校验和、npm/Cargo 锁文件和 Playwright 浏览器版本。当前镜像基线为 Linux ARM64；其他架构需要重新固定对应镜像并验证。构建阶段可下载依赖，运行阶段断网；依赖缓存保存在只读镜像，node_modules 和编译输出复制到每次独立的可写目录，供 Vite 写入配置缓存。每个浏览器检查在自己的容器里先构建，不借用其他检查的产物。Rust 调试信息与增量缓存关闭以控制磁盘开销。
 
 ```sh
-node maintenance/build-image.mjs /absolute/evidence/image.json
+node maintenance/build-image.mjs /absolute/evidence/image.json c40b3eb181f2156e5fbf796835847b692b47da3f
 QI_MAINTENANCE_IMAGE=sha256:EXACT_IMAGE_ID node maintenance/qi-smoke.mjs \
   c40b3eb181f2156e5fbf796835847b692b47da3f /absolute/new-qi-smoke
 QI_MAINTENANCE_IMAGE=sha256:EXACT_IMAGE_ID node maintenance/broker-smoke.mjs /absolute/new-broker-smoke

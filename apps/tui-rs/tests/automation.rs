@@ -22,6 +22,9 @@ impl Client {
         socket
             .set_read_timeout(Some(Duration::from_secs(30)))
             .unwrap();
+        socket
+            .set_write_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
         Self {
             stream: BufReader::new(socket),
             id: id.into(),
@@ -33,11 +36,16 @@ impl Client {
         let id = format!("{}-{}", self.id, self.serial);
         let request = json!({"version":1,"type":"command","request_id":id,"command_id":id,
             "client_id":self.id,"agent_id":agent,"method":method,"params":params});
-        writeln!(self.stream.get_mut(), "{request}").unwrap();
+        let io_error = |error: std::io::Error| json!({"method":method,"request_id":id,"message":error.to_string()});
+        writeln!(self.stream.get_mut(), "{request}").map_err(io_error)?;
         loop {
             let mut line = String::new();
-            assert!(self.stream.read_line(&mut line).unwrap() > 0);
-            let value: Value = serde_json::from_str(&line).unwrap();
+            if self.stream.read_line(&mut line).map_err(io_error)? == 0 {
+                return Err(json!({"method":method,"request_id":id,"message":"unexpected EOF"}));
+            }
+            let value: Value = serde_json::from_str(&line).map_err(
+                |error| json!({"method":method,"request_id":id,"message":error.to_string()}),
+            )?;
             if value["type"] == "response" && value["id"] == id {
                 return if value["ok"] == true {
                     Ok(value["result"].clone())
@@ -130,6 +138,10 @@ impl Drop for Harness {
                 .stream
                 .get_ref()
                 .set_read_timeout(Some(Duration::from_secs(3)));
+            let _ = client
+                .stream
+                .get_ref()
+                .set_write_timeout(Some(Duration::from_secs(3)));
             let _ = client.call(None, "daemon.shutdown", json!({}));
         }
         let start = Instant::now();
@@ -140,6 +152,31 @@ impl Drop for Harness {
         }
         let _ = self.child.kill();
         let _ = self.child.wait();
+        // A deadlocked daemon cannot retire its workers. Only reap a process
+        // group whose live command still names this fixture's descriptor.
+        if let Ok(entries) = fs::read_dir(self.root.join("s/workers")) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let pid = fs::read(&path)
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                    .and_then(|value| value["pid"].as_i64())
+                    .and_then(|pid| i32::try_from(pid).ok());
+                if let Some(pid) = pid.filter(|pid| *pid > 1)
+                    && let Ok(output) = Command::new("ps")
+                        .args(["-p", &pid.to_string(), "-o", "args="])
+                        .output()
+                {
+                    let command = String::from_utf8_lossy(&output.stdout);
+                    if command.contains("worker serve --descriptor")
+                        && command.contains(path.to_string_lossy().as_ref())
+                        && unsafe { libc::getpgid(pid) } == pid
+                    {
+                        unsafe { libc::kill(-pid, libc::SIGTERM) };
+                    }
+                }
+            }
+        }
         let _ = fs::remove_dir_all(&self.root);
     }
 }

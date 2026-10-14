@@ -5,6 +5,7 @@ on:
     branches: [main, feat/unattended-readiness]
     paths:
       - 'maintenance/**'
+      - 'apps/tui-rs/**'
       - 'src/qi/generation.clj'
       - 'src/qi/plugins/context_manager.clj'
       - '.github/workflows/maintenance-container.yml'
@@ -25,7 +26,7 @@ jobs:
         with:
           node-version: 22.12.0
       - name: Build pinned toolchain and offline dependencies
-        run: node maintenance/build-image.mjs "$RUNNER_TEMP/qi-image.json"
+        run: node maintenance/build-image.mjs "$RUNNER_TEMP/qi-image.json" c40b3eb181f2156e5fbf796835847b692b47da3f
       - name: Disconnected worker reaches only the budgeted fake provider
         run: |
           export QI_MAINTENANCE_IMAGE="$(node -p 'require(process.env.RUNNER_TEMP + "/qi-image.json").image')"

@@ -9,22 +9,34 @@ import { durableWrite, encode } from './lib/store.mjs';
 
 const repo = fileURLToPath(new URL('..', import.meta.url));
 const destination = process.argv[2];
-if (!destination || !path.isAbsolute(destination)) throw new Error('Usage: node maintenance/build-image.mjs ABS_REPORT.json');
+const baseline = process.argv[3] ?? null;
+if (!destination || !path.isAbsolute(destination) || (baseline && !/^[a-f0-9]{40}$/.test(baseline))) {
+  throw new Error('Usage: node maintenance/build-image.mjs ABS_REPORT.json [EXACT_BASELINE_SHA]');
+}
 if (git(repo, 'status', '--porcelain')) throw new Error('Commit the reviewed image recipe before building');
 const sha = git(repo, 'rev-parse', 'HEAD');
 const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'qi-image-'));
 try {
   const archive = execFileSync('git', ['-C', repo, 'archive', sha], { maxBuffer: 128 * 1024 * 1024 });
   execFileSync('tar', ['-xf', '-', '-C', directory], { input: archive });
+  if (baseline) {
+    const seed = path.join(directory, '.qi-image-baseline');
+    await fs.mkdir(seed);
+    const source = execFileSync('git', ['-C', repo, 'archive', baseline, 'apps/tui-rs', 'package.json', 'package-lock.json'], { maxBuffer: 128 * 1024 * 1024 });
+    execFileSync('tar', ['-xf', '-', '-C', seed], { input: source });
+    if (!(await fs.readFile(path.join(seed, 'package-lock.json'))).equals(await fs.readFile(path.join(directory, 'package-lock.json')))) {
+      throw new Error('Baseline npm lock differs; build a separate image with its exact Node dependencies');
+    }
+  }
   execFileSync('docker', ['build', '--progress=plain', '--iidfile', path.join(directory, 'image.id'), '-f', 'maintenance/image/Dockerfile', '.'],
     { cwd: directory, stdio: 'inherit' });
   const image = (await fs.readFile(path.join(directory, 'image.id'), 'utf8')).trim();
   const details = JSON.parse(execFileSync('docker', ['image', 'inspect', image], { encoding: 'utf8' }))[0];
-  await durableWrite(destination, encode({ schema_version: 1, image, source_sha: sha, platform: details.Os + '/' + details.Architecture,
+  await durableWrite(destination, encode({ schema_version: 1, image, source_sha: sha, baseline_sha: baseline, platform: details.Os + '/' + details.Architecture,
     created_at: new Date().toISOString(), status: 'BUILT', validation: 'NOT_RUN' }));
   console.log(encode({ image, report: destination }));
 } catch (error) {
-  await durableWrite(destination, encode({ schema_version: 1, source_sha: sha, status: 'FAILED', validation: 'NOT_RUN',
+  await durableWrite(destination, encode({ schema_version: 1, source_sha: sha, baseline_sha: baseline, status: 'FAILED', validation: 'NOT_RUN',
     reason: error.message, created_at: new Date().toISOString() }));
   throw error;
 } finally { await fs.rm(directory, { recursive: true, force: true }); }

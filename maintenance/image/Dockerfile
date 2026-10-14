@@ -20,9 +20,15 @@ RUN npx playwright install --with-deps --only-shell chromium && \
     mkdir -p /opt/qi-cache && mv node_modules /opt/qi-cache/node_modules
 COPY . .
 ENV CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
-RUN cargo build --locked --all-targets --manifest-path apps/tui-rs/Cargo.toml && \
+RUN if [ -f .qi-image-baseline/apps/tui-rs/Cargo.toml ]; then \
+      cargo fetch --locked --manifest-path .qi-image-baseline/apps/tui-rs/Cargo.toml; \
+    fi && \
+    cargo build --locked --all-targets --manifest-path apps/tui-rs/Cargo.toml && \
     mv apps/tui-rs/target /opt/qi-cache/target && \
     sha256sum package-lock.json apps/tui-rs/Cargo.lock > /opt/qi-cache/locks.sha256 && \
+    if [ -f .qi-image-baseline/apps/tui-rs/Cargo.lock ]; then \
+      (cd .qi-image-baseline && sha256sum package-lock.json apps/tui-rs/Cargo.lock) > /opt/qi-cache/baseline-locks.sha256; \
+    fi && \
     chmod -R a+rX /opt/qi-cache && \
     rm -rf /opt/qi-source
 COPY maintenance/image/entrypoint.sh /usr/local/bin/qi-maintenance-entrypoint

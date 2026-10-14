@@ -54,15 +54,24 @@ try {
   await snapshot(controller, git(controller, 'rev-parse', 'HEAD'), currentSource);
   const currentSuite = await containerCommand({ image, workspace: currentSource, readonly: true, resources: task.resources,
     argv: ['npm', 'test'], timeoutMs: 900_000 });
+  const invalidLocks = path.join(output, 'invalid-locks');
+  await fs.mkdir(path.join(invalidLocks, 'apps/tui-rs'), { recursive: true });
+  await fs.copyFile(path.join(currentSource, 'package-lock.json'), path.join(invalidLocks, 'package-lock.json'));
+  await fs.writeFile(path.join(invalidLocks, 'apps/tui-rs/Cargo.lock'), 'unreviewed lock file\n');
+  const lockRejection = await containerCommand({ image, workspace: invalidLocks, readonly: true, resources: task.resources,
+    argv: ['node', '-e', 'console.log("unreviewed process started")'], timeoutMs: 30_000 });
   const report = { schema_version: 1, status: result.status === 'review_ready' ? 'PASS' : 'FAIL', mode: 'full-qi-offline-oracle',
     model_calls: 0, source_sha: git(controller, 'rev-parse', 'HEAD'), base_sha: base, image, resources: task.resources,
     task_status: result.status, reason: result.reason ?? null, checks: result.checks, evidence: result.evidence, candidate_sha: result.candidate_sha,
-    current_source_suite: currentSuite };
-  if (currentSuite.exit_code !== 0) report.status = 'FAIL';
+    current_source_suite: currentSuite, dependency_lock_rejection: lockRejection };
+  const locksRejected = lockRejection.exit_code === 1 && /Dependency lock pair does not match/.test(lockRejection.stderr)
+    && !lockRejection.stdout.includes('unreviewed process started');
+  if (currentSuite.exit_code !== 0 || !locksRejected) report.status = 'FAIL';
   await durableWrite(path.join(output, 'report.json'), encode(report));
   console.log(encode(report));
   assert.equal(result.status, 'review_ready');
   assert.equal(currentSuite.exit_code, 0, currentSuite.stderr);
+  assert.ok(locksRejected, 'unreviewed dependency locks must fail before executing the requested process');
 } catch (error) {
   await durableWrite(path.join(output, 'failure.json'), encode({ status: 'FAIL', reason: error.message, model_calls: 0 }));
   throw error;
