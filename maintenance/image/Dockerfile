@@ -16,15 +16,17 @@ WORKDIR /opt/qi-source
 COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm \
     npm ci --ignore-scripts --prefer-offline --no-audit --no-fund --registry=https://registry.npmjs.org
-RUN npx playwright install --with-deps chromium && \
+RUN npx playwright install --with-deps --only-shell chromium && \
     mkdir -p /opt/qi-cache && mv node_modules /opt/qi-cache/node_modules
 COPY . .
+ENV CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
 RUN cargo build --locked --all-targets --manifest-path apps/tui-rs/Cargo.toml && \
     mv apps/tui-rs/target /opt/qi-cache/target && \
     sha256sum package-lock.json apps/tui-rs/Cargo.lock > /opt/qi-cache/locks.sha256 && \
-    chmod -R a+rX /opt/qi-cache /usr/local/cargo /usr/local/rustup
+    chmod -R a+rX /opt/qi-cache && \
+    rm -rf /opt/qi-source
 COPY maintenance/image/entrypoint.sh /usr/local/bin/qi-maintenance-entrypoint
 RUN chmod 755 /usr/local/bin/qi-maintenance-entrypoint
-ENV CARGO_NET_OFFLINE=true CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0
+ENV CARGO_NET_OFFLINE=true CARGO_HOME=/tmp/qi-cargo
 WORKDIR /work
 ENTRYPOINT ["/usr/local/bin/qi-maintenance-entrypoint"]

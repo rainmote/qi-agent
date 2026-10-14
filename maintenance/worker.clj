@@ -10,11 +10,16 @@
             (not= (count namespaces) (count (set namespaces)))
             (not (some #{'qi.plugins.runtime} namespaces)))
     (throw (ex-info "Maintenance profile must use the audited single-agent plugin set" {})))
-  (let [config (update profile :plugins
+  (let [broker-url (System/getenv "QI_MAINTENANCE_BROKER_URL")
+        config (update profile :plugins
                        #(mapv (fn [spec]
                                 (case (:ns spec)
-                                  qi.plugins.runtime (update spec :config merge {:max-steps 32 :max-retries 0})
-                                  qi.plugins.openai-responses (assoc-in spec [:config :max-retries] 0)
+                                  qi.plugins.runtime (update spec :config merge {:max-steps 32 :max-retries 0
+                                                                                :max-model-requests 64 :max-wall-ms 2100000})
+                                  qi.plugins.openai-responses (update spec :config merge
+                                                                     (cond-> {:max-retries 0}
+                                                                       broker-url (assoc :base-url broker-url :api-key "maintenance-broker"
+                                                                                         :stream false)))
                                   spec)) %))
         ctx (plugin/boot! config)]
     (try (protocol/json-once! ctx prompt)

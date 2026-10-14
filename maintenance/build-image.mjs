@@ -23,4 +23,8 @@ try {
   await durableWrite(destination, encode({ schema_version: 1, image, source_sha: sha, platform: details.Os + '/' + details.Architecture,
     created_at: new Date().toISOString(), status: 'BUILT', validation: 'NOT_RUN' }));
   console.log(encode({ image, report: destination }));
+} catch (error) {
+  await durableWrite(destination, encode({ schema_version: 1, source_sha: sha, status: 'FAILED', validation: 'NOT_RUN',
+    reason: error.message, created_at: new Date().toISOString() }));
+  throw error;
 } finally { await fs.rm(directory, { recursive: true, force: true }); }

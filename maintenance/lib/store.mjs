@@ -59,16 +59,19 @@ export async function lockStore(root, { recover = false } = {}) {
     try {
       if ((await fs.readFile(file, 'utf8')) !== encode(old)) throw new Error('Lock changed during recovery');
       await fs.unlink(file);
-      return await lockStore(root);
+      return { ...await lockStore(root), recovered: true };
     } finally { await recovery.close(); await fs.unlink(file + '.recovery'); }
   }
   let closed = false;
   const assertOwner = async () => {
     if (closed || JSON.parse(await fs.readFile(file, 'utf8')).token !== owner.token) throw new Error('Stale writer fencing token');
   };
-  return {
-    assertOwner,
-    async append(type, data) {
+  // The broker and controller share one process/lease. Serialize their writes
+  // as well as fencing other processes, so concurrent events form one chain.
+  let pending = Promise.resolve();
+  let transaction = Promise.resolve();
+  const append = (type, data) => {
+    const operation = pending.then(async () => {
       await assertOwner();
       const events = await readJournal(root);
       const event = { seq: events.length + 1, previous: events.at(-1)?.hash ?? null, at: new Date().toISOString(), fence: owner.token, type, data };
@@ -76,8 +79,18 @@ export async function lockStore(root, { recover = false } = {}) {
       const handle = await fs.open(path.join(root, 'events.jsonl'), 'a', 0o600);
       try { await handle.writeFile(JSON.stringify(record) + '\n'); await handle.sync(); } finally { await handle.close(); }
       return record;
+    });
+    pending = operation;
+    return operation;
+  };
+  return {
+    assertOwner, append,
+    exclusive(fn) {
+      const operation = transaction.then(fn);
+      transaction = operation.catch(() => {});
+      return operation;
     },
-    async close() { await assertOwner(); await fs.unlink(file); closed = true; },
+    async close() { await transaction; await pending; await assertOwner(); await fs.unlink(file); closed = true; },
   };
 }
 

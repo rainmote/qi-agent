@@ -253,3 +253,41 @@ test('trusted materials and journal hashes cannot be silently rewritten', async 
   await fs.writeFile(file, (await fs.readFile(file, 'utf8')).replace('test-task', 'evil-task'));
   await assert.rejects(readJournal(f.root), /hash\/sequence mismatch/);
 });
+
+const boundedBudget = { schema_version: 1, model: 'fixture-model', effort: 'medium', task_usd: 1, daily_usd: 2,
+  max_requests: 3, context_window_tokens: 4096, max_output_tokens: 512, input_usd_per_million: 1,
+  output_usd_per_million: 2, price_valid_until: '2099-01-01T00:00:00Z', price_source: 'https://example.invalid/ceiling' };
+
+test('budgeted controller routes the worker through a credential-free disconnected broker and still verifies the patch', async (t) => {
+  const f = await fixture(t); await f.init(); let opened = 0, closed = 0;
+  const result = await implement({ ...f, id: f.task.task_id, budget: boundedBudget,
+    driver: { mode: 'qi-budgeted', paid: true, unattended: false },
+    brokerFactory: async ({ directory }) => { opened++; await fs.mkdir(directory); return { failure: () => null, close: async () => { closed++; } }; },
+    execute: async (options) => {
+      if (options.readonly) return f.execute(options);
+      assert.equal(options.network, false); assert.deepEqual(options.envNames, []);
+      assert.equal(options.argv[1], '/controller/maintenance/relay.mjs');
+      assert.equal(options.mounts.find((m) => m.target === '/gateway').writable, true);
+      await fs.writeFile(path.join(options.workspace, 'src/value.mjs'), 'export const value = 2;\n');
+      return { exit_code: 0, stdout: JSON.stringify({ type: 'result', ok: true, result: { status: 'completed' } }) + '\n', stderr: '' };
+    } });
+  assert.equal(opened, 1); assert.equal(closed, 1); assert.equal(result.status, 'review_ready');
+});
+
+test('unattended mode cannot bypass exact task authorization or a failed baseline', async (t) => {
+  const f = await fixture(t); f.task.checks[0].argv = ['node', '-e', 'process.exit(1)']; await f.init();
+  let opened = 0;
+  const options = { ...f, id: f.task.task_id, budget: boundedBudget, brokerFactory: async () => { opened++; } };
+  await assert.rejects(implement({ ...options, driver: { mode: 'qi-budgeted', paid: true, unattended: true } }), /authorization/);
+  const result = await implement({ ...options, driver: { mode: 'qi-budgeted', paid: true, unattended: false } });
+  assert.equal(result.status, 'blocked'); assert.equal(result.reason, 'baseline-failed'); assert.equal(opened, 0);
+});
+
+test('worker/container failures close the broker and preserve an uncertain terminal', async (t) => {
+  const f = await fixture(t); await f.init(); let closed = false;
+  const result = await implement({ ...f, id: f.task.task_id, budget: boundedBudget,
+    driver: { mode: 'qi-budgeted', paid: true, unattended: false },
+    brokerFactory: async () => ({ failure: () => null, close: async () => { closed = true; } }),
+    execute: async (options) => options.readonly ? f.execute(options) : Promise.reject(new Error('container cleanup unknown')) });
+  assert.equal(closed, true); assert.equal(result.status, 'uncertain'); assert.match(result.reason, /cleanup unknown/);
+});
