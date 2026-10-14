@@ -11,11 +11,19 @@ on:
 
 permissions:
   contents: read
+  actions: read
+
+concurrency:
+  group: qi-agent-releases
+  cancel-in-progress: false
+  queue: max
 
 jobs:
   verify:
     name: Verify release source
     runs-on: ubuntu-24.04
+    outputs:
+      source_sha: ${{ steps.source.outputs.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -24,6 +32,23 @@ jobs:
         with:
           node-version: 22.12.0
           cache: npm
+      - name: Freeze source and require complete main CI for the exact commit
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          QI_AGENT_TAG: ${{ inputs.tag || github.ref_name }}
+          QI_GATE_REPORT: release-ci.json
+        run: |
+          export QI_SOURCE_SHA="$(git rev-parse HEAD)"
+          node maintenance/release-gate.mjs ci
+          echo "sha=$QI_SOURCE_SHA" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-ci-evidence
+          path: release-ci.json
+          if-no-files-found: error
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy,rustfmt
@@ -54,7 +79,7 @@ jobs:
             target: linux-x86_64
           - os: ubuntu-24.04-arm
             target: linux-aarch64
-          - os: macos-13
+          - os: macos-15-intel
             target: macos-x86_64
           - os: macos-14
             target: macos-aarch64
@@ -66,7 +91,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ needs.verify.outputs.source_sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22.12.0
@@ -77,7 +102,12 @@ jobs:
       - name: Verify tag matches package versions
         env:
           QI_AGENT_TAG: ${{ inputs.tag || github.ref_name }}
+          QI_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
+          test "$(git rev-parse HEAD)" = "$QI_SOURCE_SHA"
+          node maintenance/release-gate.mjs tag
           version="${QI_AGENT_TAG#v}"
           rust_version="$(cargo metadata --no-deps --format-version 1 --manifest-path apps/tui-rs/Cargo.toml | jq -r '.packages[] | select(.name == "qi-agent-tui") | .version')"
           node_version="$(node -p 'require("./package.json").version')"
@@ -91,13 +121,16 @@ jobs:
         env:
           QI_AGENT_TARGET: ${{ matrix.target }}
           QI_AGENT_TAG: ${{ inputs.tag || github.ref_name }}
+          QI_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
         run: |
           package="qi-agent-${QI_AGENT_TAG}-${QI_AGENT_TARGET}"
           mkdir -p "dist/$package/apps/tui-rs/target/release"
           mkdir -p "dist/$package/apps/tui-rs/src"
           cp apps/tui-rs/target/release/qi-agent "dist/$package/apps/tui-rs/target/release/qi-agent"
           cp apps/tui-rs/target/release/dao "dist/$package/apps/tui-rs/target/release/dao"
-          cp -R src plugins presets scripts examples docs assets protocol "dist/$package/"
+          cp -R src plugins presets scripts examples docs assets protocol maintenance "dist/$package/"
+          mkdir -p "dist/$package/evals"
+          cp -R evals/lib "dist/$package/evals/"
           cp -R apps/web apps/web-host apps/shared apps/acp "dist/$package/apps/"
           cp apps/tui-rs/Cargo.toml apps/tui-rs/Cargo.lock "dist/$package/apps/tui-rs/"
           cp -R apps/tui-rs/src/. "dist/$package/apps/tui-rs/src/"
@@ -105,6 +138,13 @@ jobs:
             LICENSE README.md README.zh-CN.md "dist/$package/"
           tar -C dist -czf "dist/$package.tar.gz" "$package"
           (cd dist && shasum -a 256 "$package.tar.gz" > "$package.tar.gz.sha256")
+          PACKAGE_ASSET="$package.tar.gz" node --input-type=module -e '
+            import { readFileSync, writeFileSync } from "node:fs";
+            import { createHash } from "node:crypto";
+            const asset = process.env.PACKAGE_ASSET;
+            const sha256 = createHash("sha256").update(readFileSync("dist/" + asset)).digest("hex");
+            writeFileSync("dist/" + asset + ".source.json", JSON.stringify({asset, sha256,
+              sha: process.env.QI_SOURCE_SHA, tag: process.env.QI_AGENT_TAG}) + "\n");'
       - uses: actions/attest@v4
         with:
           subject-path: dist/*.tar.gz
@@ -114,33 +154,52 @@ jobs:
           path: |
             dist/*.tar.gz
             dist/*.tar.gz.sha256
+            dist/*.tar.gz.source.json
           if-no-files-found: error
           retention-days: 14
 
   publish:
     name: Publish GitHub release
-    needs: package
+    needs: [verify, package]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+      actions: read
+      attestations: read
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.verify.outputs.source_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
       - uses: actions/download-artifact@v4
         with:
-          pattern: release-*
+          pattern: release-*64
           path: dist
           merge-multiple: true
-      - name: Create aggregate checksums
+      - name: Verify complete assets, source, attestations and current CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          QI_AGENT_TAG: ${{ inputs.tag || github.ref_name }}
+          QI_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
         run: |
-          find dist -maxdepth 1 -name '*.tar.gz' -print0 \
-            | sort -z \
-            | xargs -0 shasum -a 256 \
-            | sed 's#  dist/#  #' > dist/SHA256SUMS
+          node maintenance/release-gate.mjs assets
+          for asset in dist/*.tar.gz; do
+            gh attestation verify "$asset" --repo "$GH_REPO" \
+              --signer-workflow "$GH_REPO/.github/workflows/release.yml" \
+              --source-digest "$QI_SOURCE_SHA"
+          done
+          node maintenance/release-gate.mjs ci
       - name: Publish immutable tag assets
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           QI_AGENT_TAG: ${{ inputs.tag || github.ref_name }}
+          QI_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
         run: |
+          node maintenance/release-gate.mjs tag
           if gh release view "$QI_AGENT_TAG" >/dev/null 2>&1; then
             gh release upload "$QI_AGENT_TAG" dist/*
           else

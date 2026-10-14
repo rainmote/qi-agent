@@ -10,8 +10,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Unique non-PR groups also avoid replacing an older pending main run.
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
@@ -68,6 +69,8 @@ jobs:
         run: bb test
       - name: Test evaluation fixtures and graders without model calls
         run: npm run test:eval
+      - name: Test maintenance controller and release gates without model calls
+        run: npm run test:maintenance
       - name: Test a real terminal session
         if: runner.os == 'macOS'
         run: |

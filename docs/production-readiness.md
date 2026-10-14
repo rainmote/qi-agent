@@ -97,6 +97,11 @@ qi-agent doctor
 
 ## 发布与校验
 
+发布前还必须通过 [维护发布闸门](maintenance.md)：解析 tag 的精确 SHA，核对该提交最新完整 CI
+及所有必需平台检查；package 固定 checkout 该 SHA。publish 重新校验标签、CI、完整产物、
+原始校验和、source manifest 与 attestation。缺失、取消和未知检查均阻断。Intel macOS 打包
+使用 `macos-15-intel`，替代已退役的 `macos-13`（[GitHub 退役公告](https://github.blog/changelog/2025-09-19-github-actions-macos-13-runner-image-is-closing-down/)）。
+
 推送与 `package.json`、Cargo package 版本一致的 `v*` tag 后，会先在干净环境完成 Rust
 格式与 lint、Clojure runtime、daemon/Web Host、Web UI 和 Rust TUI 测试；通过后才会在
 Linux/macOS 的 x86_64 与 arm64 runner 上用 lockfile 构建运行包。发布包包含预编译 CLI、
