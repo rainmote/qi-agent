@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter, once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
-import { createServer, type Socket } from "node:net";
+import { createServer, Socket } from "node:net";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import test from "node:test";
@@ -118,6 +118,30 @@ test("worker reports both socket loss and explicit detach to stream subscribers"
     await detached.worker.close();
     await exited;
   } finally { await detached.close(); }
+});
+
+test("daemon socket resets reject pending calls without an uncaught readline error", async (t) => {
+  const connections: Socket[] = [];
+  const original = Socket.prototype.connect;
+  t.mock.method(Socket.prototype, "connect", function (this: Socket, ...args: unknown[]) {
+    connections.push(this);
+    return Reflect.apply(original, this, args);
+  });
+  const received = new EventEmitter();
+  const daemon = await mockDaemon((command) => {
+    if (command.method !== "test.pending-reset") return false;
+    received.emit("pending");
+    return true;
+  });
+  try {
+    const admitted = once(received, "pending");
+    const pending = daemon.worker.callDaemon("test.pending-reset").then(
+      () => ({ error: null }), (error: Error) => ({ error }));
+    await admitted;
+    const error = Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" });
+    assert.doesNotThrow(() => connections.at(-1)!.emit("error", error));
+    assert.match((await pending).error?.message || "", /ECONNRESET/);
+  } finally { await daemon.close(); }
 });
 
 test("worker exit notifications terminate streams even while the daemon socket remains open", async () => {

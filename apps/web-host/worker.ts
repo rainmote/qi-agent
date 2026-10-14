@@ -270,6 +270,8 @@ export class AgentWorker extends EventEmitter {
     socket.setEncoding("utf8");
     const lines = createInterface({ input: socket, crlfDelay: Infinity });
     lines.on("line", (line) => { if (this.#socket === socket) this.handleLine(line); });
+    // readline forwards input errors separately; the socket listener alone does not contain them.
+    lines.on("error", (error) => { if (this.#socket === socket) this.fail(error); });
     socket.on("error", (error) => { if (this.#socket === socket) this.fail(error); });
     socket.on("close", () => {
       if (this.#socket !== socket) return;
