@@ -181,7 +181,12 @@ test("production Web trust, cancellation, recovery and composer E2E", { timeout:
       await p.setViewportSize({ width: 375, height: 840 });
       const bounds = await approval.boundingBox();
       assert.ok(bounds && bounds.x >= 0 && bounds.x + bounds.width <= 375 && bounds.y >= 0 && bounds.y + bounds.height <= 840);
-      for (const button of await approval.getByRole("button").all()) assert.ok((await button.boundingBox())!.height >= 44);
+      // Chromium may acknowledge viewport changes before the responsive layout commits.
+      await until(async () => {
+        const buttons = await approval.getByRole("button").all();
+        const boxes = await Promise.all(buttons.map(button => button.boundingBox()));
+        return boxes.length > 0 && boxes.every(box => box && box.height >= 44);
+      }, "Approval buttons must reach the required 44px mobile hit target after resize");
       await p.setViewportSize({ width: 1440, height: 1000 });
       rejectStop = true;
       await approval.getByRole("button", { name: "停止运行", exact: true }).click();
