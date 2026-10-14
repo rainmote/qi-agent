@@ -23,6 +23,8 @@ Updates support prompt and time/timezone changes. Active tasks can be paused, pa
 
 A claimed tick persists its delivery ID before admission. Definite admission failures retry with that same ID and bounded backoff. A lost acknowledgment or interrupted claim becomes `uncertain`, retains its identity and will not replay automatically, including after a daemon restart. Inspect actual session effects, then cancel the old task and explicitly create the appropriate future schedule. Cancelling an in-flight claim cannot be overwritten by its late completion.
 
+A one-shot schedule becomes `completed` after turn admission is acknowledged. Its asynchronous turn may still be persisting messages or running; inspect the run outcome and durable session evidence separately before treating the work as finished or verified.
+
 ## Goals
 
 `goal.set` requires `objective` and optionally `max_continuations` (default 3, maximum 20). Creation is explicit user intent; ordinary tasks must not create goals automatically. An unfinished goal prevents silent replacement by another. A public `goal.set` begins its first turn; each successful turn can trigger the next continuation until the budget is exhausted.

@@ -1805,20 +1805,37 @@ fn one_shot_schedule_survives_daemon_restart_without_a_tui() {
         assert!(started.elapsed() < PROCESS_TIMEOUT);
         thread::sleep(Duration::from_millis(50));
     }
-    let snapshot = reattached
-        .call(Some(&agent_id), "session.snapshot", json!({}), None)
-        .unwrap();
-    assert!(
-        snapshot
+    // A one-shot schedule completes when admission is acknowledged. Its async
+    // turn may not have persisted the user message when schedule.list returns.
+    loop {
+        let snapshot = reattached
+            .call(Some(&agent_id), "session.snapshot", json!({}), None)
+            .unwrap();
+        let delivered = snapshot
             .get("events")
             .and_then(Value::as_array)
             .unwrap()
             .iter()
-            .any(|event| event
-                .pointer("/data/message/content")
-                .and_then(Value::as_str)
-                == Some("run after restart"))
-    );
+            .filter(|event| {
+                event
+                    .pointer("/data/message/content")
+                    .and_then(Value::as_str)
+                    == Some("run after restart")
+            })
+            .count();
+        if delivered > 0 {
+            assert_eq!(
+                delivered, 1,
+                "scheduled prompt was delivered more than once"
+            );
+            break;
+        }
+        assert!(
+            started.elapsed() < PROCESS_TIMEOUT,
+            "admitted schedule did not persist its prompt: {snapshot}"
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
     let schedules = reattached
         .call(Some(&agent_id), "schedule.list", json!({}), None)
         .unwrap();
