@@ -1,0 +1,7 @@
+.git
+node_modules
+**/target
+apps/web/dist
+.qi-agent*
+.env*
+*.log
