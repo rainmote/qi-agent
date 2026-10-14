@@ -14,8 +14,9 @@ RUN bash /opt/install-bb.sh /usr/local/bin && rustup component add clippy rustfm
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/qi-cache/browsers
 WORKDIR /opt/qi-source
 COPY package.json package-lock.json ./
-RUN npm ci --ignore-scripts --registry=https://registry.npmjs.org && \
-    npx playwright install --with-deps chromium && \
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --ignore-scripts --prefer-offline --no-audit --no-fund --registry=https://registry.npmjs.org
+RUN npx playwright install --with-deps chromium && \
     mkdir -p /opt/qi-cache && mv node_modules /opt/qi-cache/node_modules
 COPY . .
 RUN cargo build --locked --all-targets --manifest-path apps/tui-rs/Cargo.toml && \
