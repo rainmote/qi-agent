@@ -3,6 +3,7 @@
   (:require [qi.attachments :as attachments]
             [qi.cancellation :as cancellation]
             [qi.context-summary :as summary]
+            [qi.generation :as generation]
             [qi.kernel :as kernel]
             [qi.plugins.session :as session]
             [qi.run-outcome :as outcome]
@@ -72,7 +73,6 @@
                         :chars-per-token chars-per-token :image-token-budget image-token-budget
                         :retain-messages retain-messages :max-summary-calls max-summary-calls})))
      (let [store (kernel/require-service ctx :session/store)
-           llm (kernel/require-service ctx :llm/generate)
            provider (fn [request]
                       (when-let [registry (kernel/service ctx :llm/registry)]
                         (if-let [id (get-in request [:options :provider])]
@@ -159,7 +159,8 @@
                               (fn [{:keys [start end]}]
                                 (cancellation/throw-if-cancelled! cancel-token)
                                 (try
-                                  (let [response (llm (check! (summary-request (subs source start end))))
+                                  (let [response (generation/generate! ctx (check! (summary-request (subs source start end)))
+                                                                       {:purpose :compaction})
                                         content (get-in response [:message :content])]
                                     (cancellation/throw-if-cancelled! cancel-token)
                                     (when-not (and (string? content) (not (str/blank? content))

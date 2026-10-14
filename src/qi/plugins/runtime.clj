@@ -2,6 +2,7 @@
   "Controllable agent session, deterministic tool batches, and the default loop."
   (:require [qi.attachments :as attachments]
             [qi.cancellation :as cancellation]
+            [qi.generation :as generation]
             [qi.kernel :as kernel]
             [qi.run-outcome :as outcome]
             [qi.schema :as schema]
@@ -565,8 +566,7 @@
         (recur (- remaining slice))))))
 
 (defn- generate-with-recovery! [ctx config request cancel-token state listeners]
-  (let [llm (kernel/require-service ctx :llm/generate)
-        context (kernel/service ctx :context/manager)
+  (let [context (kernel/service ctx :context/manager)
         max-retries (or (:max-retries config) 2)
         retry-delay-ms (or (:retry-delay-ms config) 250)]
     (loop [attempt 0 overflow-retried? false request request]
@@ -583,7 +583,9 @@
                                           (let [budget ((:budget! context) checked)]
                                             (record! ctx "context/budget" (assoc budget :run-id (:run-id @state)))
                                             (set-phase! ctx state listeners :model {:request-budget budget})))
-                                        (llm checked))))}
+                                        (generation/generate! ctx checked
+                                                              {:purpose :main :attempt attempt
+                                                               :run-id (:run-id @state)}))))}
                         (catch Throwable error {:error error}))
               error (:error outcome)]
           (cond

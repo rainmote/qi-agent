@@ -22,6 +22,7 @@ auth.json
 # Generated, cache, and test output
 .finesse/
 target/
+/apps/tui-rs/target
 out/
 coverage/
 .cache/
@@ -35,6 +36,10 @@ node_modules/
 apps/web/dist/
 evals/results/
 evals/exports/
+/.maintenance/state/
+/.maintenance/runs/
+/.maintenance/evidence/
+/.maintenance/tasks/current.md
 evals/**/__pycache__/
 
 # Editor and operating-system files

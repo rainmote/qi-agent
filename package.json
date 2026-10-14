@@ -7,7 +7,10 @@
     "node": ">=22.12.0"
   },
   "scripts": {
-    "test": "npm run typecheck && npm run test:web && npm run test:web-ui && npm run test:acp && npm run test:tui && bb test && npm run test:eval",
+    "test": "npm run typecheck && npm run test:web && npm run test:web-ui && npm run test:acp && npm run test:tui && bb test && npm run test:eval && npm run test:maintenance",
+    "maintenance": "node maintenance/run.mjs",
+    "test:maintenance": "node --test maintenance/tests/*.test.mjs",
+    "test:maintenance:docker": "node maintenance/container-smoke.mjs",
     "acp": "tsx apps/acp/server.ts",
     "test:lcu-e2e": "bb test-lcu-e2e",
     "test:acp": "tsx --test apps/acp/*.test.ts",

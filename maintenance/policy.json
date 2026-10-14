@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "mode": "human_reviewed_candidate",
+  "max_attempts": 3,
+  "wall_seconds": 2700,
+  "verification_reserve_seconds": 600,
+  "parent_steps": 32,
+  "readonly_child_steps": 8,
+  "max_cost_usd": null,
+  "automatic_push": false,
+  "automatic_merge": false,
+  "automatic_release": false,
+  "protected_paths": ["AGENTS.md", "LESSONS.md", "docs/code-standards.md", ".github/", ".maintenance/", "maintenance/", "evals/", "test/", "tests/", "agent.edn", "bb.edn", "package.json", "package-lock.json", "presets/", "src/qi/plugins/policy.clj", "src/qi/plugins/trust.clj", "src/qi/plugins/approval.clj"]
+}
