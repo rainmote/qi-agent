@@ -3,7 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { commitSHA, checkReview } from './github.mjs';
 import { digest, encode, identifier, readJournal, putArtifact, readArtifact, validateArtifacts } from './store.mjs';
-import { git, relative, regularFile, snapshot, changedFiles, immutableImage, containerCommand } from './execution.mjs';
+import { git, relative, regularFile, snapshot, changedFiles, verifiedTree, immutableImage, containerCommand } from './execution.mjs';
 import { assessTap } from '../../evals/lib/grading.mjs';
 import { usageLedger, mayAttempt } from './ledger.mjs';
 
@@ -130,7 +130,7 @@ export async function prepare({ repo, root, controller, task, policy, lock }) {
   git(repo, 'worktree', 'add', '--detach', workspace, task.base_sha);
   const state = taskState(await readJournal(root), task.task_id);
   return transition(root, lock, task.task_id, state.revision, 'scoped', { material_hash: materialHash,
-    profile_hash: digest(await fs.readFile(task.profile_path)), verifier_hash: await hashTree(path.join(material, 'verifier')) });
+    profile_hash: digest(await fs.readFile(path.join(material, 'profile', 'agent.edn'))), verifier_hash: await hashTree(path.join(material, 'verifier')) });
 }
 
 export async function loadTask(root, id) {
@@ -179,11 +179,14 @@ async function candidateTree(state, task, root) {
     const target = path.join(directory, file);
     await fs.mkdir(path.dirname(target), { recursive: true });
     await fs.copyFile(source, target);
+    const mode = (await fs.stat(source)).mode & 0o777;
+    await fs.chmod(target, mode);
     const bytes = await fs.readFile(target);
-    manifest.push({ file, mode: (await fs.stat(source)).mode & 0o777, sha256: digest(bytes), content: await putArtifact(root, bytes) });
+    manifest.push({ file, mode, sha256: digest(bytes), content: await putArtifact(root, bytes) });
   }
-  const patch = git(state.workspace, 'diff', '--binary', state.base_sha, '--', ...files);
-  return { directory, files, manifest, fingerprint: digest(encode(manifest)), patch: await putArtifact(root, patch + '\n') };
+  const tree = await verifiedTree(state.repository, state.base_sha, directory, manifest, root);
+  const patch = git(state.repository, 'diff', '--binary', state.base_sha, tree, '--');
+  return { directory, files, manifest, tree, fingerprint: digest(encode(manifest)), patch: await putArtifact(root, patch + '\n') };
 }
 
 export async function preflight({ root, id, lock, execute = containerCommand }) {
@@ -246,11 +249,13 @@ export async function verify({ root, id, lock, execute = containerCommand }) {
       const evidence = await putArtifact(root, encode({ base_sha: state.base_sha, checks, manifest: candidate.manifest, patch: candidate.patch }));
       if (!passed) return transition(root, lock, id, state.revision, 'failed', { reason: 'verification-failed', checks, evidence, fingerprint: candidate.fingerprint });
       // Freeze a content-addressed Git tree without changing HEAD or the user's checkout.
-      for (const file of candidate.files) {
-        if (digest(await fs.readFile(await regularFile(state.workspace, file))) !== candidate.manifest.find((item) => item.file === file).sha256) throw new Error('Candidate changed during verification');
+      if (JSON.stringify(changedFiles(state.workspace, state.base_sha)) !== JSON.stringify(candidate.files)) throw new Error('Candidate changed during verification');
+      for (const entry of candidate.manifest) {
+        const source = await regularFile(state.workspace, entry.file);
+        if (digest(await fs.readFile(source)) !== entry.sha256 || ((await fs.stat(source)).mode & 0o777) !== entry.mode) throw new Error('Candidate changed during verification');
       }
-      git(state.workspace, 'add', '--', ...candidate.files);
-      const tree = git(state.workspace, 'write-tree');
+      const tree = candidate.tree;
+      git(state.workspace, 'read-tree', tree);
       const candidateSHA = git(state.workspace, '-c', 'user.name=qi-maintenance', '-c', 'user.email=maintenance@localhost',
         'commit-tree', tree, '-p', state.base_sha, '-m', `maintenance: ${id}`);
       git(state.repository, 'update-ref', `refs/maintenance/${id}/${state.run_id ?? 'manual'}`, candidateSHA);

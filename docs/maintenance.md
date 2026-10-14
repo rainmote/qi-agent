@@ -44,7 +44,7 @@ node maintenance/run.mjs verify --state /absolute/private/maintenance-state --id
 
 预算为一个活动任务、一个写入者、最多三次实现尝试、45 分钟总墙钟，其中 10 分钟预留给验收和保存。失败后 `retry --revision N` 只能重开已知失败，沿用原期限、累计次数，使用新 run_id。相同交付指纹再次失败会因无进展停止。费用账本不完整时，不允许无人值守付费或第二次付费尝试。
 
-成功得到 `review_ready`，不是 accepted。控制器保存候选 commit（`refs/maintenance/TASK_ID/RUN_ID`）、文件内容、diff、测试日志。审查者另存：
+成功得到 `review_ready`，不是 accepted。控制器用独立 Git index 从已验收快照生成候选 commit（`refs/maintenance/TASK_ID/RUN_ID`），不继承候选工作区的暂存内容或 clean filter；完整 diff 包含新增文件和可执行权限。检查期间文件集合、内容或权限变化均使证据失效。控制器保存文件内容、diff、测试日志。审查者另存：
 
 ```json
 {"role":"human","reviewer":"actual reviewer","decision":"approve","summary":"具体审查结论","head_sha":"EXACT_CANDIDATE_SHA"}

@@ -34,8 +34,25 @@ export async function snapshot(repo, sha, target) {
 
 export function changedFiles(workspace, base) {
   const tracked = git(workspace, 'diff', '--name-only', '--no-renames', '-z', base, '--').split('\0').filter(Boolean);
+  const staged = git(workspace, 'diff', '--cached', '--name-only', '--no-renames', '-z', base, '--').split('\0').filter(Boolean);
   const untracked = git(workspace, 'ls-files', '--others', '--exclude-standard', '-z').split('\0').filter(Boolean);
-  return [...new Set([...tracked, ...untracked])].sort();
+  return [...new Set([...tracked, ...staged, ...untracked])].sort();
+}
+
+export async function verifiedTree(repo, base, directory, manifest, root) {
+  // A private index prevents staged-but-unverified bytes or Git filters from entering the commit.
+  const index = path.join(root, 'candidate-index-' + randomUUID());
+  const run = (...args) => execFileSync('git', ['-C', repo, ...args], {
+    encoding: 'utf8', env: { ...process.env, GIT_INDEX_FILE: index }, maxBuffer: 32 * 1024 * 1024,
+  }).trimEnd();
+  try {
+    run('read-tree', base);
+    for (const entry of manifest) {
+      const blob = run('hash-object', '-w', '--no-filters', '--', path.join(directory, entry.file));
+      run('update-index', '--add', '--cacheinfo', entry.mode & 0o111 ? '100755' : '100644', blob, entry.file);
+    }
+    return run('write-tree');
+  } finally { await fs.rm(index, { force: true }); await fs.rm(index + '.lock', { force: true }); }
 }
 
 export function immutableImage(image) {

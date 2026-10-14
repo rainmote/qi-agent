@@ -206,6 +206,45 @@ test('report persistence failure cannot advance the review cursor', async (t) =>
   assert.equal((await readJournal(f.root)).length, 0);
 });
 
+test('a hidden staged change outside the contract cannot enter a verified commit', async (t) => {
+  const f = await fixture(t); const scoped = await f.init();
+  await fs.writeFile(path.join(scoped.workspace, 'untouched.txt'), 'unverified staged content\n');
+  command(scoped.workspace, 'add', 'untouched.txt');
+  await fs.writeFile(path.join(scoped.workspace, 'untouched.txt'), 'keep\n');
+  const result = await implement({ ...f, id: f.task.task_id });
+  assert.notEqual(result.status, 'review_ready');
+  assert.match(result.reason, /outside the contract/);
+});
+
+test('verified new files and executable modes are included in the complete patch', async (t) => {
+  const f = await fixture(t); f.task.allowed_files.push('src/new.mjs');
+  const scoped = await f.init();
+  await fs.writeFile(path.join(scoped.workspace, 'src/new.mjs'), 'export const added = true;\n');
+  await fs.chmod(path.join(scoped.workspace, 'src/new.mjs'), 0o755);
+  const result = await implement({ ...f, id: f.task.task_id });
+  assert.equal(result.status, 'review_ready');
+  const evidence = JSON.parse(await readArtifact(f.root, result.evidence));
+  const patch = (await readArtifact(f.root, evidence.patch)).toString();
+  assert.match(patch, /new file mode 100755/);
+  assert.match(patch, /export const added = true;/);
+  assert.match(command(f.repo, 'ls-tree', result.candidate_sha, '--', 'src/new.mjs'), /^100755 blob/);
+  assert.equal(command(f.repo, 'show', result.candidate_sha + ':src/new.mjs'), 'export const added = true;');
+});
+
+test('a candidate mode change during checks invalidates the verified content', async (t) => {
+  const f = await fixture(t); const scoped = await f.init();
+  const execute = async (options) => {
+    const result = await f.execute(options);
+    if (options.workspace.includes(path.sep + 'verification' + path.sep)) {
+      await fs.chmod(path.join(scoped.workspace, 'src/value.mjs'), 0o755);
+    }
+    return result;
+  };
+  const result = await implement({ ...f, execute, id: f.task.task_id });
+  assert.notEqual(result.status, 'review_ready');
+  assert.match(result.reason, /changed during verification/);
+});
+
 test('trusted materials and journal hashes cannot be silently rewritten', async (t) => {
   const f = await fixture(t); const state = await f.init();
   await fs.writeFile(path.join(state.material, 'profile/agent.edn'), 'tampered');
