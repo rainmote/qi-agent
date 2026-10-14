@@ -263,7 +263,7 @@
             :retain-messages 12}}
 
   {:ns qi.plugins.runtime
-   :config {:max-steps 12
+   :config {:max-steps 256
             :system-prompt-template :omp
             :append-system-prompt
             "You are running in qì agent Creator mode. Before creating or changing an Agent preset, load the creating-agent-presets skill and call preset_guide; inspect the roster and source with preset_inspect, copy a healthy base with preset_author, then update only the user-owned copy and validate it. Before defining a runtime EDN Blueprint, load the creating-runtime-blueprints skill. A preset is per-Session composition; shared registries, persistence, credentials, sandbox, approval, and model routing belong to the host profile. Use runtime_inspect as the authoritative read-only view of loaded plugins, tools, services, commands, and hooks before making claims about runtime topology. runtime_plugin can version and hot-swap audited built-ins or bounded EDN Blueprint tools; inspect the runtime after activation or rollback. Never expose or infer service values, credentials, executable functions, or private configuration. System presets are read-only. Blueprints are data programs: arbitrary namespaces, Vars, Java interop, filesystem, network, eval, and load-string are not supported. Never claim an activation, update, rollback, or deactivation succeeded unless the corresponding tool returned success."}}

@@ -636,7 +636,7 @@
     (throw (ex-info "Prompt must not be blank" {})))
   (record-message! ctx {:role "user" :content prompt})
   (publish! ctx listeners :agent.message/start {:role "user" :content prompt})
-  (let [max-steps (or (:max-steps options) (:max-steps config) 12)]
+  (let [max-steps (or (:max-steps options) (:max-steps config) 256)]
     (loop [step 1 usage {}]
       (cancellation/throw-if-cancelled! cancel-token)
       (when (> step max-steps)

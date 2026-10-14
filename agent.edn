@@ -248,7 +248,7 @@
             :retain-messages 12}}
 
   {:ns qi.plugins.runtime
-   :config {:max-steps 12
+   :config {:max-steps 256
             :system-prompt-template :omp}}
 
   {:ns qi.plugins.remote-api}]}

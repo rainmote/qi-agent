@@ -11,6 +11,80 @@
 (defn- answer [text]
   {:message {:role "assistant" :content text} :finish-reason "stop"})
 
+(defn- step-limit-context [config calls finish-at]
+  (plugin/boot!
+   {:plugins
+    [{:ns 'qi.plugins.session :config {:path nil :ephemeral true}}
+     {:ns 'qi.plugins.mock
+      :config
+      {:generate
+       (fn [_]
+         (let [step (swap! calls inc)]
+           (if (= step finish-at)
+             (answer "done")
+             {:message
+              {:role "assistant"
+               :tool_calls
+               [{:id (str "step-" step)
+                 :type "function"
+                 :function {:name "calculate"
+                            :arguments "{\"operation\":\"add\",\"a\":1,\"b\":1}"}}]}
+              :finish-reason "tool_calls"})))}}
+     {:ns 'qi.plugins.math}
+     {:ns 'qi.plugins.runtime
+      :config (merge {:system-prompt "Offline step-budget test"} config)}]}))
+
+(deftest shipped-parent-profiles-use-the-raised-step-limit
+  (doseq [path ["agent.edn" "presets/standard/agent.edn"
+                "presets/creator/agent.edn"]]
+    (let [spec (some #(when (= 'qi.plugins.runtime (:ns %)) %)
+                     (:plugins (plugin/read-config path)))]
+      (is (= 256 (get-in spec [:config :max-steps])) path))))
+
+(deftest default-step-limit-allows-a-final-answer-on-the-last-step
+  (let [calls (atom 0)
+        ctx (step-limit-context {} calls 256)]
+    (try
+      (let [result ((kernel/require-service ctx :agent/run) "long tool sequence")]
+        (is (= "done" (:content result)))
+        (is (= 256 (:steps result)))
+        (is (= 256 @calls)))
+      (finally (kernel/dispose-all! ctx)))))
+
+(deftest default-step-limit-stops-before-an-extra-model-request
+  (let [calls (atom 0)
+        ctx (step-limit-context {} calls 257)]
+    (try
+      (let [error (try
+                    ((kernel/require-service ctx :agent/run) "one step too many")
+                    nil
+                    (catch clojure.lang.ExceptionInfo error error))]
+        (is (= "Agent exceeded its step limit" (some-> error ex-message)))
+        (is (= 256 (:max-steps (ex-data error))))
+        (is (= 256 @calls) "The limit must stop the next model request")
+        (is (= :idle (:phase ((:state (kernel/require-service ctx :agent/session)))))))
+      (finally (kernel/dispose-all! ctx)))))
+
+(deftest profile-and-per-run-step-limits-still-take-precedence
+  (doseq [{:keys [config options limit]}
+          [{:config {:max-steps 2} :options {} :limit 2}
+           {:config {:max-steps 1} :options {:max-steps 3} :limit 3}]
+          finish-at [limit (inc limit)]]
+    (let [calls (atom 0)
+          ctx (step-limit-context config calls finish-at)]
+      (try
+        (let [run (kernel/require-service ctx :agent/run)]
+          (if (= limit finish-at)
+            (is (= limit (:steps (run "finish within the explicit limit" options))))
+            (let [error (try
+                          (run "stop at the explicit limit" options)
+                          nil
+                          (catch clojure.lang.ExceptionInfo error error))]
+              (is (= "Agent exceeded its step limit" (some-> error ex-message)))
+              (is (= limit (:max-steps (ex-data error))))))
+          (is (= limit @calls)))
+        (finally (kernel/dispose-all! ctx))))))
+
 (defn- append-messages! [ctx messages]
   (let [store (kernel/require-service ctx :session/store)]
     (doseq [message messages]

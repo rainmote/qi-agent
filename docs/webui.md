@@ -35,6 +35,17 @@ npm run web:build
 npm run web:start -- --workspace /absolute/project/path --port 3080
 ```
 
+主 Agent 的单次提交默认最多执行 **256 轮**，由 `qi.plugins.runtime` 的
+`:max-steps` 控制。每轮包含模型生成和可能的一批工具调用，最终答复也占一轮；
+超过上限仍会返回 `Agent exceeded its step limit`，不会无限执行。仓库默认 Profile、
+Standard 和 Creator 预设都使用该上限。覆盖顺序为单次运行的 `options :max-steps`、
+实际加载的 EDN Profile、runtime 内置默认值 256；显式配置较小的值仍然有效。
+
+Profile 在 Worker 启动时读取，修改后需要重启对应 Worker，刷新浏览器不会重新读取。
+选择预设的会话使用 daemon 在创建时保存的配置快照，修改原预设不会自动更新旧快照；
+已有会话应核对实际 `config_path`，或基于更新后的预设创建会话。外置用户 Profile 也会
+继续保留自己的显式上限。
+
 WebUI 支持：
 
 - 工作区白名单的添加、移除和切换；
