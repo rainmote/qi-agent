@@ -18,7 +18,7 @@ API 字段依据：[Responses API](https://developers.openai.com/api/reference/r
 
 ## 工具链与验收
 
-`maintenance/image/Dockerfile` 固定 Node/Rust 基础镜像 digest、Babashka 版本及校验和、npm/Cargo 锁文件和 Playwright 浏览器版本。当前镜像基线为 Linux ARM64；其他架构需要重新固定对应镜像并验证。构建阶段可下载依赖，运行阶段断网；node_modules 与 Rust registry 保存在只读镜像，编译输出复制到每次独立的可写目录。Rust 调试信息与增量缓存关闭以控制磁盘开销。
+`maintenance/image/Dockerfile` 固定 Node/Rust 基础镜像 digest、Babashka 版本及校验和、npm/Cargo 锁文件和 Playwright 浏览器版本。当前镜像基线为 Linux ARM64；其他架构需要重新固定对应镜像并验证。构建阶段可下载依赖，运行阶段断网；依赖缓存保存在只读镜像，node_modules 和编译输出复制到每次独立的可写目录，供 Vite 写入配置缓存。每个浏览器检查在自己的容器里先构建，不借用其他检查的产物。Rust 调试信息与增量缓存关闭以控制磁盘开销。
 
 ```sh
 node maintenance/build-image.mjs /absolute/evidence/image.json
@@ -62,7 +62,7 @@ node maintenance/service.mjs --state /absolute/state --config /absolute/runner.j
 
 ## 停止、故障与恢复
 
-`pause` 不需要取得执行锁，写入原子停止标记；运行中的执行器检查该标记并停止容器。服务收到 SIGTERM/SIGINT 也会先暂停，再等待有界清理。重启后根据持久记录中的容器名与随机所有权标签检查容器，使用检查到的不可变容器 ID 清理；不会删除同名但所有权不同的容器。
+`pause` 不需要取得执行锁，写入原子停止标记；基线、实现和验收执行器均检查该标记，停止运行中的容器并拒绝启动后续检查，任务保留为 cancelled。服务收到 SIGTERM/SIGINT 也会先暂停，再等待有界清理。重启后根据持久记录中的容器名与随机所有权标签检查容器，使用检查到的不可变容器 ID 清理；不会删除同名但所有权不同的容器。
 
 ```sh
 node maintenance/run.mjs pause --state /absolute/state --reason "operator stop"

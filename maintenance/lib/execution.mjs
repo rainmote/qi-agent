@@ -109,18 +109,21 @@ export async function containerCommand({ image, argv, workspace, readonly = true
   if (!path.isAbsolute(workspace) || /[,\0\r\n]/.test(workspace)) throw new Error('Invalid workspace');
   args.push('--workdir', '/work', image, 'sh', '-c',
     readonly ? 'mkdir -p "$HOME" && cp -R /inputs/. /work/ && exec "$@"' : 'mkdir -p "$HOME" && exec "$@"', 'qi-maint-command', ...argv);
-  let stopping = false, stopError, poll;
+  let stopping = false, stopError, poll, pendingStop = Promise.resolve();
   try {
-    poll = setInterval(async () => {
+    poll = setInterval(() => {
       if (stopping) return;
       stopping = true;
-      try { if (await shouldStop()) await cleanupContainer(name, owner); }
-      catch (error) { stopError = error; }
-      finally { stopping = false; }
+      pendingStop = (async () => {
+        try { if (await shouldStop()) await cleanupContainer(name, owner); }
+        catch (error) { stopError = error; }
+        finally { stopping = false; }
+      })();
     }, 500);
     return await runProcess('docker', args, { timeoutMs, maxOutputBytes: 10_000_000 });
   } finally {
     clearInterval(poll);
+    await pendingStop;
     // Killing the Docker client does not guarantee that its container stopped.
     await cleanupContainer(name, owner);
     if (stopError) throw stopError;

@@ -86,6 +86,30 @@ test('a failing baseline blocks the writer before it can change source', async (
   assert.equal(await fs.readFile(path.join(scoped.workspace, 'src/value.mjs'), 'utf8'), 'export const value = 1;\n');
 });
 
+test('operator pause cancels baseline, worker and candidate checks without starting later work', async (t) => {
+  for (const phase of ['before-start', 'baseline', 'worker', 'candidate']) {
+    const f = await fixture(t); await f.init();
+    let workers = 0, stopped = phase === 'before-start';
+    const stop = () => fs.writeFile(path.join(f.root, 'pause.json'), '{"reason":"operator-stop"}');
+    if (stopped) await stop();
+    const execute = async (options) => {
+      assert.equal(stopped, false, 'no new process may start after pause');
+      if (!options.readonly) workers++;
+      const current = !options.readonly ? 'worker' : options.workspace.includes('/verification/') ? 'candidate' : 'baseline';
+      const result = await f.execute(options);
+      if (current === phase) {
+        await stop(); stopped = true;
+        assert.equal(await options.shouldStop?.(), true, 'active check must observe operator pause');
+      }
+      return result;
+    };
+    const result = await implement({ ...f, id: f.task.task_id, execute });
+    assert.equal(result.status, 'cancelled', phase);
+    assert.equal(result.reason, 'operator-paused', phase);
+    assert.equal(workers, ['before-start', 'baseline'].includes(phase) ? 0 : 1);
+  }
+});
+
 test('syntax errors, skipped tests and fabricated process success are not red evidence', async (t) => {
   for (const body of ['syntax ! error', "process.exit(0)", "import test from 'node:test'; test.skip('value is repaired', () => {});"]) {
     const f = await fixture(t);

@@ -150,8 +150,10 @@ export async function loadTask(root, id) {
 }
 
 const succeeded = (result) => result.exit_code === 0 && !result.error && !result.signal && !result.timed_out && !result.output_limited;
+const operatorPaused = (root) => fs.stat(path.join(root, 'pause.json')).then(() => true, (e) => { if (e.code === 'ENOENT') return false; throw e; });
 
 async function executeCheck({ root, lock, state, task, check, workspace, phase, deadline, execute }) {
+  if (await operatorPaused(root)) return { id: check.id, phase, status: 'CANCELLED', reason: 'operator-paused' };
   const remaining = deadline - Date.now();
   if (remaining <= 0) return { id: check.id, phase, status: 'NOT_RUN', reason: 'wall-budget' };
   const started = new Date().toISOString();
@@ -160,11 +162,13 @@ async function executeCheck({ root, lock, state, task, check, workspace, phase, 
   await lock.append('check/start', { task_id: task.task_id, check_id: check.id, phase, container: name, container_owner: owner });
   const result = await execute({ image: task.image, argv: check.argv, workspace, readonly: true,
     mounts: [{ source: path.join(state.material, 'verifier'), target: '/acceptance' }],
-    timeoutMs: Math.min(remaining, check.timeout_seconds * 1000), name, owner, resources: task.resources });
+    timeoutMs: Math.min(remaining, check.timeout_seconds * 1000), name, owner, resources: task.resources,
+    shouldStop: () => operatorPaused(root) });
   const output = await putArtifact(root, encode(result));
   const tap = check.tests ? assessTap(result.stdout, check.tests) : null;
-  const status = succeeded(result) && (!tap || tap.passed) ? 'PASS' : 'FAIL';
-  return { id: check.id, phase, status, argv: check.argv, image: task.image, started_at: started,
+  const paused = await operatorPaused(root);
+  const status = paused ? 'CANCELLED' : succeeded(result) && (!tap || tap.passed) ? 'PASS' : 'FAIL';
+  return { id: check.id, phase, status, ...(paused ? { reason: 'operator-paused' } : {}), argv: check.argv, image: task.image, started_at: started,
     ended_at: new Date().toISOString(), exit_code: result.exit_code, timed_out: result.timed_out,
     duration_ms: result.duration_ms, tests: tap?.tests ?? null, tap, output };
 }
@@ -206,7 +210,9 @@ export async function preflight({ root, id, lock, execute = containerCommand }) 
   };
   try {
     for (const spec of task.checks) {
-      if ((await check(spec, path.join(state.material, 'base'), 'baseline')).status !== 'PASS') {
+      const result = await check(spec, path.join(state.material, 'base'), 'baseline');
+      if (result.status === 'CANCELLED') return transition(root, lock, id, state.revision, 'cancelled', { reason: 'operator-paused', checks });
+      if (result.status !== 'PASS') {
         return transition(root, lock, id, state.revision, 'blocked', { reason: 'baseline-failed', checks });
       }
     }
@@ -214,6 +220,7 @@ export async function preflight({ root, id, lock, execute = containerCommand }) 
       timeout_seconds: 60, tests: task.acceptance.tests } : null;
     if (task.kind === 'bug') {
       const red = await check(acceptance, path.join(state.material, 'base'), 'red');
+      if (red.status === 'CANCELLED') return transition(root, lock, id, state.revision, 'cancelled', { reason: 'operator-paused', checks });
       const raw = JSON.parse(await readArtifact(root, red.output));
       // A completed named assertion failure, not syntax/import/timeout/skip, is valid red evidence.
       if (!red.tap?.complete || red.tap.reason !== 'acceptance_assertions_failed' || raw.exit_code !== 1 ||
@@ -248,7 +255,11 @@ export async function verify({ root, id, lock, execute = containerCommand }) {
     const candidate = await candidateTree(state, task, root);
     try {
       if (state.fingerprint === candidate.fingerprint) return transition(root, lock, id, state.revision, 'blocked', { reason: 'no-progress' });
-      for (const spec of [...task.checks, ...(acceptance ? [acceptance] : [])]) await check(spec, candidate.directory, 'candidate');
+      for (const spec of [...task.checks, ...(acceptance ? [acceptance] : [])]) {
+        if ((await check(spec, candidate.directory, 'candidate')).status === 'CANCELLED') {
+          return transition(root, lock, id, state.revision, 'cancelled', { reason: 'operator-paused', checks });
+        }
+      }
       const passed = checks.filter((item) => item.phase === 'candidate').every((item) => item.status === 'PASS');
       const evidence = await putArtifact(root, encode({ base_sha: state.base_sha, checks, manifest: candidate.manifest, patch: candidate.patch }));
       if (!passed) return transition(root, lock, id, state.revision, 'failed', { reason: 'verification-failed', checks, evidence, fingerprint: candidate.fingerprint });
@@ -289,6 +300,7 @@ export async function implement({ root, id, lock, driver, budget, execute = cont
   if ((driver.mode === 'offline') !== (driver.paid === false)) throw new Error('Paid status must match the driver mode');
   state = await preflight({ root, id, lock, execute });
   if (TERMINAL.has(state.status)) return state;
+  if (await operatorPaused(root)) return transition(root, lock, id, state.revision, 'cancelled', { reason: 'operator-paused' });
   const afterPreflight = mayAttempt({ policy, startedAt: state.started_at, attempts: state.attempts, usage, paid: driver.paid && !brokered, unattended: driver.unattended });
   if (afterPreflight) return transition(root, lock, id, state.revision, 'blocked', { reason: afterPreflight });
   const runId = randomUUID();
@@ -299,7 +311,7 @@ export async function implement({ root, id, lock, driver, budget, execute = cont
   let argv = driver.mode !== 'offline' ? ['bb', '--classpath', '/controller/src:/controller/plugins', '/controller/maintenance/worker.clj',
     '/profile/agent.edn', task.goal + '\nAllowed deliverables: ' + task.allowed_files.join(', ')] : driver.argv;
   let broker, execution;
-  const paused = () => fs.stat(path.join(root, 'pause.json')).then(() => true, (e) => { if (e.code === 'ENOENT') return false; throw e; });
+  const paused = () => operatorPaused(root);
   try {
     const mounts = [{ source: path.join(state.material, 'controller'), target: '/controller' }, { source: path.join(state.material, 'profile'), target: '/profile' }];
     if (brokered) {
@@ -328,6 +340,7 @@ export async function implement({ root, id, lock, driver, budget, execute = cont
       }
     }
   }
+  if (await paused()) return transition(root, lock, id, state.revision, 'cancelled', { reason: 'operator-paused' });
   if (broker?.failure()) return transition(root, lock, id, state.revision, 'blocked', { reason: broker.failure() });
   if (!succeeded(execution)) return transition(root, lock, id, state.revision, 'failed', { reason: execution.timed_out ? 'wall-budget' : 'driver-failed' });
   if (driver.mode !== 'offline') {
