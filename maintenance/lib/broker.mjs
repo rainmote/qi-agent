@@ -15,18 +15,23 @@ export function providerBody(body, config) {
   for (const item of body.input) {
     if (!item || !['message', 'function_call', 'function_call_output', 'reasoning'].includes(item.type ?? 'message')) throw new Error('Unsupported input item');
     if (item.type === 'reasoning') {
-      if (item.encrypted_content) throw new Error('Provider-managed reasoning state is not enabled');
+      if (typeof item.id !== 'string' || !Array.isArray(item.summary) ||
+          (item.encrypted_content != null && typeof item.encrypted_content !== 'string')) throw new Error('Invalid self-contained reasoning item');
     } else if (item.type === 'function_call_output') {
       if (typeof item.output !== 'string') throw new Error('Only text function results are enabled');
     } else if (!item.type || item.type === 'message') {
       if (typeof item.content !== 'string' && (!Array.isArray(item.content) || item.content.some((c) => !['input_text', 'output_text'].includes(c.type) || typeof c.text !== 'string'))) throw new Error('Only text content is enabled');
     }
   }
-  for (const field of ['previous_response_id', 'conversation', 'background', 'prompt', 'include']) {
+  for (const field of ['previous_response_id', 'conversation', 'background', 'prompt']) {
     if (body[field] != null && body[field] !== false) throw new Error('Unsupported provider capability: ' + field);
   }
-  const input = body.input.map(({ id, ...item }) => item);
-  return { model: config.model, instructions: body.instructions, input, tools: body.tools ?? [],
+  if (body.include != null && (!Array.isArray(body.include) || body.include.some((value) => value !== 'reasoning.encrypted_content'))) throw new Error('Unsupported provider include');
+  // Replay complete output items, including required reasoning IDs/ciphertext.
+  // This is stateless context, not a server-side response/item reference; the
+  // full-window reservation also covers its input tokens.
+  return { model: config.model, instructions: body.instructions, input: body.input, tools: body.tools ?? [],
+    include: ['reasoning.encrypted_content'],
     tool_choice: 'auto', parallel_tool_calls: true, reasoning: { effort: config.effort },
     store: false, stream: false, background: false, truncation: 'disabled', service_tier: 'default', max_output_tokens: config.max_output_tokens };
 }

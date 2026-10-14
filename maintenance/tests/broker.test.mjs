@@ -11,6 +11,19 @@ const config = { schema_version: 1, model: 'fixture-model', effort: 'medium', ta
   max_requests: 3, context_window_tokens: 4096, max_output_tokens: 512, input_usd_per_million: 1,
   output_usd_per_million: 2, price_valid_until: '2099-01-01T00:00:00Z', price_source: 'https://example.invalid/ceiling' };
 const input = { model: config.model, input: [{ role: 'user', content: 'repair the fixture' }], tools: [] };
+
+test('stateless tool rounds preserve complete reasoning and item identities without server-side references', () => {
+  const reasoning = { id: 'rs_fixture', type: 'reasoning', summary: [], encrypted_content: 'fixture-ciphertext' };
+  const call = { id: 'fc_fixture', type: 'function_call', call_id: 'call_fixture', name: 'write', arguments: '{}' };
+  let body;
+  assert.doesNotThrow(() => { body = providerBody({ ...input,
+    input: [reasoning, call, { type: 'function_call_output', call_id: 'call_fixture', output: 'written' }],
+    include: ['reasoning.encrypted_content'] }, config); });
+  assert.deepEqual(body.input[0], reasoning); assert.deepEqual(body.input[1], call);
+  assert.deepEqual(body.include, ['reasoning.encrypted_content']); assert.equal(body.store, false);
+  assert.throws(() => providerBody({ ...input, input: [{ type: 'item_reference', id: 'rs_other' }] }, config));
+  assert.throws(() => providerBody({ ...input, include: ['file_search_call.results'] }, config));
+});
 async function fixture(t, fetchImpl) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'qi-broker-')), lock = await lockStore(root);
   const directory = path.join(root, 'mailbox');

@@ -14,7 +14,7 @@
 
 请求账本保留原生 run/root-run、compaction-id 与分片序号；代理记录自己的不可复用请求 ID，并关联原生逻辑请求 ID。`run/end.request-usage` 汇总主调用、压缩和失败请求的已知 token 与未知请求数；原 `usage` 字段保留主循环统计语义。维护 worker 另有 64 个逻辑请求、32 步、35 分钟实现上限，外层继续强制 45 分钟总时间。
 
-API 字段依据：[Responses API](https://developers.openai.com/api/reference/resources/responses/methods/create)、[token 用量说明](https://developers.openai.com/api/docs/guides/token-counting)。`max_output_tokens` 包含推理与可见输出，不以输出文本长度代替账本。
+API 字段依据：[Responses API](https://developers.openai.com/api/reference/resources/responses/methods/create)、[token 用量说明](https://developers.openai.com/api/docs/guides/token-counting)、[推理模型的上下文传递](https://developers.openai.com/api/docs/guides/reasoning)。`max_output_tokens` 包含推理与可见输出，不以输出文本长度代替账本。工具往返保留完整 reasoning item、ID 和加密内容，用于 `store=false` 的无状态上下文；禁止 `previous_response_id` 和 `item_reference` 等服务器端引用。加密上下文的输入 token 也包含在完整窗口预留中。
 
 ## 工具链与验收
 

@@ -23,6 +23,7 @@ const config = { schema_version: 1, model: 'fixture-model', effort: 'medium', ta
 const budgetFile = path.join(output, 'budget.json'); await durableWrite(budgetFile, encode(config));
 execFileSync(process.execPath, [path.join(controller, 'maintenance/profile.mjs'), config.model, config.effort, path.join(profile, 'agent.edn'), budgetFile]);
 const lock = await lockStore(root);
+const reasoning = { id: 'rs_fixture', type: 'reasoning', summary: [], encrypted_content: 'fixture-ciphertext' };
 let broker, calls = 0;
 try {
   broker = await startBroker({ root, lock, config, taskId: 'worker-fixture', runId: 'worker-fixture-run', deadline: Date.now() + 60000,
@@ -36,9 +37,13 @@ try {
       const body = JSON.parse(options.body);
       assert.equal(body.tools.some((tool) => tool.name === 'write'), true);
       assert.ok(calls <= 2);
-      if (calls === 2) assert.equal(body.input.some((item) => item.type === 'function_call_output' && item.call_id === 'call_fixture' && typeof item.output === 'string'), true);
+      if (calls === 2) {
+        assert.equal(body.input.some((item) => item.type === 'function_call_output' && item.call_id === 'call_fixture' && typeof item.output === 'string'), true);
+        assert.deepEqual(body.input.find((item) => item.type === 'reasoning'), reasoning);
+        assert.equal(body.input.find((item) => item.type === 'function_call').id, 'fc_fixture');
+      }
       return Response.json({ id: 'resp_fixture_' + calls, status: 'completed', model: config.model, service_tier: 'default',
-        usage: { input_tokens: 100, output_tokens: 20 }, output: calls === 1 ? [
+        usage: { input_tokens: 100, output_tokens: 20 }, output: calls === 1 ? [reasoning,
           { id: 'fc_fixture', type: 'function_call', call_id: 'call_fixture', name: 'write', status: 'completed',
             arguments: JSON.stringify({ path: 'probe.txt', content: 'verified native worker\n' }) },
         ] : [{ id: 'msg_fixture', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'Done.', annotations: [] }] }] });
