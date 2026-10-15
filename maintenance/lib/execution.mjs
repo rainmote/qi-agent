@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { runProcess } from '../../evals/lib/core.mjs';
@@ -29,7 +30,14 @@ export async function regularFile(root, file) {
 export async function snapshot(repo, sha, target) {
   await fs.mkdir(target, { recursive: true, mode: 0o755 });
   const archive = execFileSync('git', ['-C', repo, 'archive', '--format=tar', sha], { maxBuffer: 128 * 1024 * 1024 });
-  execFileSync('tar', ['-xf', '-', '-C', target], { input: archive });
+  // BSD tar can exit successfully at the end marker before consuming padded
+  // stdin, which spawnSync reports as EPIPE. A private file has no pipe race.
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'qi-maint-snapshot-'));
+  try {
+    const file = path.join(temporary, 'source.tar');
+    await fs.writeFile(file, archive, { mode: 0o600 });
+    execFileSync('tar', ['-xf', file, '-C', target]);
+  } finally { await fs.rm(temporary, { recursive: true, force: true }); }
 }
 
 export function changedFiles(workspace, base) {
