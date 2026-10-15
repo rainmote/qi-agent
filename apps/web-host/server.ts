@@ -416,12 +416,20 @@ export async function startWebHost(options: WebHostOptions = {}) {
         if (!candidates) throw new Error("Coding candidates are not configured by this host");
         return json(response, 201, { ok: true, result: await candidates.begin(await body(request)) });
       }
-      const candidateMatch = url.pathname.match(/^\/api\/candidates\/(coding-[a-f0-9]{32})\/(status|reconcile|close)$/);
+      const candidateMatch = url.pathname.match(/^\/api\/candidates\/(coding-[a-f0-9]{32})\/(status|reconcile|close|verify|verification|checks)(?:\/([A-Za-z0-9_-]{1,100}))?$/);
       if (candidateMatch) {
         if (!candidates) throw new Error("Coding candidates are not configured by this host");
         const [, id, action] = candidateMatch;
+        if (candidateMatch[3] && action !== "checks") throw new Error("Unsupported candidate operation");
         if (action === "status" && request.method === "GET") return json(response, 200, { ok: true, result: await candidates.status(id) });
-        if (request.method === "POST" && action !== "status") return json(response, 200, { ok: true,
+        if (action === "verification" && request.method === "GET") return json(response, 200, { ok: true, result: await candidates.verification(id) });
+        if (action === "checks" && candidateMatch[3] && request.method === "GET") return json(response, 200, { ok: true, result: await candidates.checkDetails(id, candidateMatch[3]) });
+        if (action === "verify" && request.method === "POST") {
+          const record = await candidates.status(id);
+          const changes = record.writer_session ? await files.sessionChanges(record.candidate_workspace_id, record.writer_session) : null;
+          return json(response, 202, { ok: true, result: await candidates.verify(id, await body(request), changes?.turnId) });
+        }
+        if (request.method === "POST" && ["reconcile", "close"].includes(action)) return json(response, 200, { ok: true,
           result: action === "reconcile" ? await candidates.reconcile(id) : await candidates.close(id) });
         throw new Error("Unsupported candidate operation");
       }

@@ -90,6 +90,25 @@ npm run web:start -- --verification-directory /absolute/private/web-verification
 
 ## 验证
 
+### coding-candidate 的独立 verifier API
+
+先停止候选的 resident writer，并读取候选 `status` 中的完整 `source_fingerprint`。
+`POST /api/candidates/ID/verify {source_fingerprint, command_id}` 先保存验收意图，再调用原宿主选定的
+固定外部控制器；HTTP 202 返回已接纳状态。profile、验收器、镜像和 argv 来自冻结合同，浏览器不能替换。
+每个候选最多采用原策略允许的验收次数，原墙钟不重置；已确认失败后的新请求才可沿用原控制器的 retry。
+未知执行不会自动重放；运行中或未对账的验收阻止新的候选写入和关闭。
+
+`GET /api/candidates/ID/verification` 重新核对原控制器材料、原始检查回执与完整源码文件集合/字节/可执行位，
+返回 NOT_RUN、VERIFYING、PASS、FAIL、STALE、UNKNOWN。只有完整必需项、精确 base/candidate/source、
+profile/controller/verifier 哈希及固定 image 全部匹配才为 PASS；缺失、跳过、取消、超时、陈旧或损坏证据
+不能产生通过。源码再变化立即为 STALE，运行 completed 也不能提交或替代验收回执。
+
+每项检查包含 argv、退出码、起止时间和原始输出哈希；`GET /api/candidates/ID/checks/CHECK_ID` 提供相同
+绑定的具体检查元数据与有界测试计数摘要，不返回原始模型日志、配置正文或凭据。Web 最后回合关联只采用
+宿主保存的 writer session/turn ID；不同回合不能自动借用旧状态。精确源码已通过后再修改，需建立新的合同候选。
+宿主发现候选 writer 时只查询 daemon 元数据，不 hydrate 或创建模型 worker；独立 Web Host 关闭时回收该
+发现连接启动的自有 daemon。这里的工作树隔离、宿主状态权限和实际执行沙箱仍是不同边界。
+
 `workspace-files.test.ts`、`workspace-http.test.ts`、`turn-files.test.ts` 覆盖路径、跨工作区引用、私有存储、上传限额、HTML 响应头、真实 HTTP、回合完成早于接纳、跨会话同编号和恢复语义。`daemon-operations.test.ts` 使用隔离的真实 daemon 与离线模型 fixture 验证真实完成编号及订阅释放；不调用真实模型。`attachments_test.clj` 验证 durable 记录仍为 ID、模型边界才解析正文。
 
 生产浏览器 fixture 覆盖 HTML 隔离、变更展开、附件 ID payload、实际引用内容、确定失败恢复、未知后失败跨刷新恢复，以及 1440/768/414/375/320 像素宽度无页面溢出。模拟浏览器数据不能证明真实模型或外部文档转换可用。

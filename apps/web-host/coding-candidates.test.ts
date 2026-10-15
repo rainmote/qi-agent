@@ -8,7 +8,7 @@ import { CodingCandidates, type CandidateWriter, type CodingCandidateConfig } fr
 import { WorkspaceRegistry } from "./workspaces.js";
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
-async function fixture() {
+async function fixture(runVerifier?: ConstructorParameters<typeof CodingCandidates>[3]) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "qi-coding-test-")));
   const source = join(root, "source"), controller = join(root, "controller"), verifier = join(root, "verifier");
   await mkdir(join(source, "src"), { recursive: true }); await mkdir(controller); await mkdir(verifier);
@@ -23,7 +23,7 @@ async function fixture() {
   git(controller, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "trusted-fixture");
   const controllerSha = git(controller, "rev-parse", "HEAD");
   await writeFile(join(root, "profile.edn"), "{:plugins []}");
-  await writeFile(join(verifier, "acceptance.mjs"), "import test from 'node:test';import assert from 'node:assert/strict';import {value} from '/work/src/value.mjs';test('value repaired',()=>assert.equal(value,2));");
+  await writeFile(join(verifier, "acceptance.mjs"), "import test from 'node:test';import assert from 'node:assert/strict';const {value}=await import('file://'+process.cwd()+'/src/value.mjs');test('value repaired',()=>assert.equal(value,2));");
   const workspaces = new WorkspaceRegistry(join(root, "web")); await workspaces.load(source);
   const workspace = workspaces.list()[0];
   const contract = join(root, "contract.json");
@@ -35,7 +35,7 @@ async function fixture() {
     directory: join(root, "candidates"), contracts: { [workspace.id]: contract } };
   let writers: CandidateWriter[] | Error = [];
   const inspect = async () => { if (writers instanceof Error) throw writers; return writers; };
-  const manager = new CodingCandidates(config, workspaces, inspect); await manager.initialize();
+  const manager = new CodingCandidates(config, workspaces, inspect, runVerifier); await manager.initialize();
   const input = { workspace_id: workspace.id, base_sha: sha, command_id: "coding-command-1" };
   return { root, source, controller, config, contract, manager, workspaces, inspect, input,
     setWriters: (value: CandidateWriter[] | Error) => { writers = value; },
@@ -102,4 +102,47 @@ test("candidate state cannot be placed inside an original checkout", async () =>
     await assert.rejects(() => manager.initialize(), /overlaps/);
     await assert.rejects(() => stat(destination), { code: "ENOENT" });
   } finally { await f.close(); }
+});
+
+test("independent verification gates writers, deduplicates jobs, survives refresh and becomes stale", async () => {
+  let release!: () => void, entered!: () => void, calls = 0;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const f = await fixture(async (trusted, record) => {
+    calls++; entered(); await gate;
+    const { pathToFileURL } = await import("node:url");
+    const { runProcess } = await import(pathToFileURL(join(process.cwd(), "evals/lib/core.mjs")).href);
+    const lock = await trusted.store.lockStore(record.state_root);
+    try {
+      return await trusted.api.verify({ root: record.state_root, id: record.candidate_id, lock,
+        execute: async (options: any) => {
+          const argv = options.argv.map((arg: string) => arg.startsWith("/acceptance/") ? join(options.mounts[0].source, arg.slice(12)) : arg);
+          const env = { ...process.env }; delete env.NODE_TEST_CONTEXT;
+          return runProcess(process.execPath, argv.slice(1), { cwd: options.workspace, timeoutMs: options.timeoutMs, env });
+        } });
+    } finally { await lock.close(); }
+  });
+  try {
+    const record = await f.manager.begin(f.input);
+    assert.equal((await f.manager.verification(record.candidate_id)).status, "NOT_RUN");
+    await writeFile(join(record.cwd, "src/value.mjs"), "export const value=2;\n");
+    const current = (await f.manager.status(record.candidate_id)).source_fingerprint!;
+    const input = { source_fingerprint: current, command_id: "verification-command-1" };
+    assert.equal((await f.manager.verify(record.candidate_id, input)).status, "VERIFYING"); await started;
+    assert.equal((await f.manager.verify(record.candidate_id, input)).status, "VERIFYING");
+    assert.equal(calls, 1);
+    await assert.rejects(() => f.manager.claim(record.candidate_workspace_id, "writer"), /writes are fenced/);
+    await assert.rejects(() => f.manager.close(record.candidate_id), /running or unknown/);
+    release(); await f.manager.waitForVerification(record.candidate_id);
+    const verdict = await f.manager.verification(record.candidate_id);
+    assert.equal(verdict.status, "PASS", JSON.stringify(verdict)); assert.equal(verdict.checks.length, 2);
+    assert.equal(verdict.source_fingerprint, current); assert.equal(verdict.bindings?.controller_sha, f.config.controller_sha);
+    const detail = await f.manager.checkDetails(record.candidate_id, "acceptance") as any;
+    assert.equal(detail.exit_code, 0); assert.ok(Array.isArray(detail.argv)); assert.ok(!Object.hasOwn(detail, "stdout"));
+    const restarted = new CodingCandidates(f.config, f.workspaces, f.inspect, async () => { throw new Error("must not replay"); });
+    await restarted.initialize(); assert.equal((await restarted.verify(record.candidate_id, input)).status, "PASS");
+    await writeFile(join(record.cwd, "src/value.mjs"), "export const value=3;\n");
+    assert.equal((await restarted.verification(record.candidate_id)).status, "STALE");
+    await assert.rejects(() => restarted.verify(record.candidate_id, input), /Source fingerprint changed/);
+  } finally { release(); await f.close(); }
 });

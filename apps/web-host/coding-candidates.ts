@@ -4,7 +4,8 @@ import { lstat, mkdir, open, readFile, realpath, rm } from "node:fs/promises";
 import { hostname } from "node:os";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
-import { verificationGit } from "../shared/workspace-verification.mjs";
+import { verificationGit, workspaceManifest } from "../shared/workspace-verification.mjs";
+import { candidateVerdict, sourceFingerprint, type CandidateVerification } from "./candidate-verdict.js";
 import { ensurePrivateDirectory, writePrivateFileAtomically } from "./storage.js";
 import { workspaceId, type WorkspaceRegistry } from "./workspaces.js";
 
@@ -20,6 +21,8 @@ export interface CodingCandidate {
   status: "preparing" | "ready" | "unknown" | "closed";
   lease_owner: string; writer_session: string | null; original_dirty: boolean;
   reason?: string;
+  verification_attempts?: number;
+  verification?: { source_fingerprint: string; command_id: string; turn_id?: string; started_at: string; ended_at?: string; error?: string };
 }
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const within = (child: string, parent: string) => child === parent || child.startsWith(parent + sep);
@@ -57,8 +60,17 @@ async function readJSON(path: string): Promise<any> {
 export class CodingCandidates {
   readonly config: CodingCandidateConfig;
   private directory = "";
+  private jobs = new Map<string, Promise<void>>();
   constructor(config: CodingCandidateConfig, private workspaces: WorkspaceRegistry,
-    private writers: (cwd: string) => Promise<CandidateWriter[]>) {
+    private writers: (cwd: string) => Promise<CandidateWriter[]>,
+    private runVerifier: (trusted: any, record: CodingCandidate) => Promise<unknown> = async (trusted, record) => {
+      const lock = await trusted.store.lockStore(record.state_root);
+      try {
+        const { state } = await trusted.api.loadTask(record.state_root, record.candidate_id);
+        if (state.status === "failed") await trusted.api.retry({ root: record.state_root, id: record.candidate_id, lock, expectedRevision: state.revision });
+        return await trusted.api.verify({ root: record.state_root, id: record.candidate_id, lock });
+      } finally { await lock.close(); }
+    }) {
     this.config = structuredClone(config);
   }
 
@@ -195,9 +207,10 @@ export class CodingCandidates {
     });
   }
 
-  async status(id: string): Promise<CodingCandidate & { writers: CandidateWriter[] | null }> {
+  async status(id: string): Promise<CodingCandidate & { writers: CandidateWriter[] | null; source_fingerprint: string | null }> {
     const record = await this.read(id);
-    return { ...record, writers: await this.writers(record.cwd).catch(() => null) };
+    return { ...record, writers: await this.writers(record.cwd).catch(() => null),
+      source_fingerprint: await workspaceManifest(record.cwd).then(sourceFingerprint).catch(() => null) };
   }
 
   async reconcile(id: string): Promise<CodingCandidate> {
@@ -205,7 +218,10 @@ export class CodingCandidates {
       const record = await this.read(id), trusted = await this.trusted();
       const { state } = await trusted.api.loadTask(record.state_root, id);
       if (state.workspace !== record.cwd || state.base_sha !== record.base_sha || state.controller_sha !== record.controller_sha) throw new Error("Controller task binding changed");
-      if (state.status === "scoped") { record.status = "ready"; delete record.reason; }
+      if (["scoped", "verifying", "review_ready", "failed", "blocked"].includes(state.status)) {
+        record.status = "ready"; delete record.reason;
+        if (record.verification && !this.jobs.has(id) && ["review_ready", "failed", "blocked"].includes(state.status)) record.verification.ended_at ||= new Date().toISOString();
+      }
       else if (state.status === "cancelled") record.status = "closed";
       else { record.status = "unknown"; record.reason = `controller-${state.status}`; }
       await this.save(record); return this.attach(record);
@@ -216,6 +232,7 @@ export class CodingCandidates {
     return this.locked(async () => {
       const record = await this.read(id), trusted = await this.trusted();
       if (record.status === "closed") return record;
+      if (this.jobs.has(id) || (record.verification && !record.verification.ended_at)) throw new Error("Verification is running or unknown; reconcile before closing");
       const writers = await this.writers(record.cwd);
       if (writers.some(writer => writer.resident)) throw new Error("Candidate writer is still resident; stop and reconcile it before releasing ownership");
       const { state } = await trusted.api.loadTask(record.state_root, id);
@@ -236,8 +253,94 @@ export class CodingCandidates {
       const record = await this.read(owner.candidate_id);
       if (record.candidate_workspace_id !== candidateWorkspace) throw new Error("Candidate workspace binding changed");
       if (record.status !== "ready") throw new Error("Candidate is not writable; reconcile its state");
+      if (this.jobs.has(record.candidate_id) || (record.verification && !record.verification.ended_at)) throw new Error("Verification is running or unknown; candidate writes are fenced");
       if (record.writer_session && record.writer_session !== sessionId) throw new Error("Candidate already belongs to another writer session");
       record.writer_session = sessionId; await this.save(record);
     });
   }
+
+  async verify(id: string, input: Record<string, unknown>, turnId?: string): Promise<CandidateVerification> {
+    if (Object.keys(input).some(key => !["source_fingerprint", "command_id"].includes(key))
+      || typeof input.source_fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(input.source_fingerprint)
+      || !validCommand(input.command_id)) throw new Error("Explicit source_fingerprint/command_id required");
+    await this.locked(async () => {
+      const record = await this.read(id), trusted = await this.trusted();
+      const current = sourceFingerprint(await workspaceManifest(record.cwd));
+      if (input.source_fingerprint !== current) throw new Error("Source fingerprint changed; inspect the current candidate");
+      if (record.status !== "ready") throw new Error("Candidate is not ready for verification");
+      const previous = record.verification;
+      if (previous && previous.command_id === input.command_id) {
+        if (previous.source_fingerprint !== current) throw new Error("Verification command already has a different source");
+        return;
+      }
+      if (this.jobs.has(id) || (record.verification && !record.verification.ended_at)) throw new Error("Verification outcome is pending; reconcile before a new command");
+      const writers = await this.writers(record.cwd);
+      if (writers.some(writer => writer.resident)) throw new Error("Candidate writer is still resident; stop it before independent verification");
+      const { state } = await trusted.api.loadTask(record.state_root, id);
+      if (state.status === "review_ready") {
+        if (record.verification?.source_fingerprint !== current) throw new Error("Verified source changed; prepare a new contract candidate");
+        return;
+      }
+      if (!["scoped", "failed"].includes(state.status)) throw new Error("Controller outcome is unknown or not retryable; reconcile it first");
+      if ((record.verification_attempts || 0) >= trusted.policy.max_attempts) throw new Error("Frozen verification attempt budget exhausted");
+      record.verification_attempts = (record.verification_attempts || 0) + 1;
+      record.verification = { source_fingerprint: current, command_id: input.command_id as string, turn_id: turnId, started_at: new Date().toISOString() };
+      await this.save(record); // Durable intent precedes any verifier side effects.
+      const job = (async () => {
+        let error: string | undefined;
+        try { await this.runVerifier(trusted, record); }
+        catch { error = "verifier-execution-unconfirmed"; }
+        try {
+          await this.locked(async () => {
+            const latest = await this.read(id);
+            if (latest.verification?.command_id !== input.command_id) throw new Error("Verification ownership changed");
+            latest.verification!.ended_at = new Date().toISOString();
+            if (error) latest.verification!.error = error;
+            await this.save(latest);
+          });
+        } catch { /* The controller journal remains authoritative; explicit reconciliation can recover it. */ }
+      })().finally(() => { this.jobs.delete(id); });
+      this.jobs.set(id, job);
+    });
+    return this.verification(id);
+  }
+
+  async verification(id: string): Promise<CandidateVerification> {
+    const record = await this.read(id);
+    const empty: CandidateVerification = { status: "NOT_RUN", candidate_id: id, base_sha: record.base_sha, checks: [] };
+    if (!record.verification) return empty;
+    try {
+      const trusted = await this.trusted(), { state, task } = await trusted.api.loadTask(record.state_root, id);
+      const source = await workspaceManifest(record.cwd, "sha1"), current = sourceFingerprint(source.map(({ file, mode, sha256 }) => ({ file, mode, sha256 })));
+      let treeMatches = false;
+      if (state.candidate_sha) {
+        const expected = (await verificationGit(record.cwd, ["ls-tree", "-rz", state.candidate_sha])).split("\0").filter(Boolean).map(line => {
+          const [entry, file] = line.split("\t"), [mode, type, object] = entry.split(" ");
+          if (type !== "blob") throw new Error("Unsupported verified source");
+          return { file, mode, object };
+        }).sort((a, b) => a.file < b.file ? -1 : a.file > b.file ? 1 : 0);
+        treeMatches = JSON.stringify(expected) === JSON.stringify(source.map(({ file, mode, object }) => ({ file, mode, object })));
+      }
+      const raw = new Map();
+      for (const check of state.checks || []) if (check.output) raw.set(check.output.sha256, JSON.parse(await trusted.store.readArtifact(record.state_root, check.output)));
+      if (JSON.stringify(await workspaceManifest(record.cwd, "sha1")) !== JSON.stringify(source)) throw new Error("Source changed during receipt reconciliation");
+      return candidateVerdict({ record, state, task, raw, currentFingerprint: current, treeMatches, running: this.jobs.has(id) });
+    } catch { return { ...empty, status: this.jobs.has(id) ? "VERIFYING" : "UNKNOWN", source_fingerprint: record.verification.source_fingerprint, reason: "receipt-or-source-unconfirmed" }; }
+  }
+
+  async checkDetails(id: string, checkId: string): Promise<unknown> {
+    if (!/^[A-Za-z0-9_-]{1,100}$/.test(checkId)) throw new Error("Invalid verifier check identity");
+    const record = await this.read(id), trusted = await this.trusted();
+    const { state } = await trusted.api.loadTask(record.state_root, id);
+    const matches = (state.checks || []).filter((check: any) => check.id === checkId && check.phase === "candidate");
+    if (matches.length !== 1) throw new Error("No unique candidate check evidence");
+    const check = matches[0], output = JSON.parse(await trusted.store.readArtifact(record.state_root, check.output));
+    return { candidate_id: id, source_fingerprint: record.verification?.source_fingerprint,
+      id: check.id, phase: check.phase, status: check.status, argv: check.argv, image: check.image,
+      started_at: check.started_at, ended_at: check.ended_at, exit_code: output.exit_code,
+      timed_out: output.timed_out === true, output_sha256: check.output.sha256,
+      summary: String(output.stdout || "").split("\n").filter(line => /^(?:# |ℹ )(?:tests|pass|fail|skipped|cancelled) \d+$/.test(line)).slice(-10) };
+  }
+
+  async waitForVerification(id: string): Promise<void> { await this.jobs.get(id); }
 }

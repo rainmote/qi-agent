@@ -214,6 +214,7 @@ export class SessionManager {
   }
 
   async candidateWriters(cwd: string): Promise<Array<{ agent_id: string; resident: boolean }>> {
+    this.#daemonWorkspace = this.workspaces.list().find(workspace => workspace.path === cwd) || null;
     const control = this.workerFactory(cwd, join(cwd, ".qi-agent", ".candidate-discovery"),
       this.repositoryRoot, this.daemonEnvironment) as AgentWorker;
     try {
