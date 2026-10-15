@@ -15,7 +15,8 @@ async function fixture(initialCount=2){
  const page=await browser.newPage({viewport:{width:1440,height:1000}});
  page.on('pageerror',e=>errors.push(e.message));
  await page.addInitScript(()=>{window.sources=[];window.EventSource=class extends EventTarget{constructor(url){super();this.url=url;window.sources.push(this);queueMicrotask(()=>this.dispatchEvent(new Event('ready')));}close(){this.closed=true;}}});
- const controls={holdSnapshot:null,holdOpen:null,holdPolicy:null,holdModels:null,snapshotOverride:null,steers:[],modelCatalog:models,providerSaves:0,providerRetries:0,dropSubmit:false,rejectSubmit:false,uploads:[],submissions:[],operationStatus:"completed"};
+ const controls={holdSnapshot:null,holdOpen:null,holdPolicy:null,holdModels:null,snapshotOverride:null,steers:[],modelCatalog:models,providerSaves:0,providerRetries:0,dropSubmit:false,rejectSubmit:false,uploads:[],submissions:[],operationStatus:"completed",preferenceEvents:{A:[],B:[]},rejectPreference:false};
+ const sessionSnapshot=(id,n=2)=>{const value=snapshot(id,n);value.events.push(...controls.preferenceEvents[id]);return value;};
  const provider={id:"mock-provider",name:"Mock Provider",protocol:"openai-completions",baseUrl:"https://example.invalid/v1",apiKeyConfigured:true,authType:"api-key",authStatus:"configured",models:[{id:"mock-model",name:"Mock Model"}]};
  await page.route('**/api/**', async route=>{
   const path=new URL(route.request().url()).pathname; let result; let held;
@@ -33,7 +34,7 @@ async function fixture(initialCount=2){
   }
   else if(path==='/api/providers/reload'){controls.providerRetries++;assert.deepEqual(route.request().postDataJSON(),{sessionIds:['A']});result={scope:'open-web-sessions',applied:['A'],failures:[]};}
   else if(path.includes('/operations/')) result={status:controls.operationStatus,result:{accepted:true}};
-  else if(path.endsWith('/open')) {const id=path.split('/')[3]; result={session:sessions.find(s=>s.id===id),snapshot:controls.snapshotOverride||snapshot(id,initialCount),eventCursor:"fixture:0"};if(id===controls.holdOpen?.id)held=controls.holdOpen;}
+  else if(path.endsWith('/open')) {const id=path.split('/')[3]; result={session:sessions.find(s=>s.id===id),snapshot:controls.snapshotOverride||sessionSnapshot(id,initialCount),eventCursor:"fixture:0"};if(id===controls.holdOpen?.id)held=controls.holdOpen;}
   else if(path.endsWith('/rpc')){
    const {method}=route.request().postDataJSON(); const id=path.split('/')[3];
    if(method==='trust.status') result={configured:false};
@@ -44,7 +45,8 @@ async function fixture(initialCount=2){
    else if(method==='turn.submit'){controls.submissions.push(route.request().postDataJSON());if(controls.dropSubmit){controls.dropSubmit=false;await route.abort();return;}if(controls.rejectSubmit){controls.rejectSubmit=false;await route.fulfill({status:400,json:{ok:false,error:{message:'Fixture rejected before acceptance'}}});return;}result={accepted:true};}
    else if(method==='turn.steer'){controls.steers.push(route.request().postDataJSON());result={id:'steer-fixture'};}
    else if(method==='command.execute') result={output:'test-only'};
-   else if(method==='session.snapshot') {result=snapshot(id);if(id===controls.holdSnapshot?.id){held=controls.holdSnapshot;result.events[1].data.message.content='STALE-SNAPSHOT';}}
+   else if(method==='session.preferences.set') {if(controls.rejectPreference){controls.rejectPreference=false;await route.fulfill({status:400,json:{ok:false,error:{message:'Fixture preference not saved'}}});return;}const {response_detail}=route.request().postDataJSON().params;assert.ok(['short','auto','detailed'].includes(response_detail));const events=controls.preferenceEvents[id];const event={id:`preference-${id}-${events.length}`,seq:10000+events.length,at:'2026-10-15T15:00:00Z',type:'session/preferences',data:{response_detail}};events.push(event);result={response_detail,event};}
+   else if(method==='session.snapshot') {result=sessionSnapshot(id);if(id===controls.holdSnapshot?.id){held=controls.holdSnapshot;result.events[1].data.message.content='STALE-SNAPSHOT';}}
    else if(method==='context.status') result=null;
    else if(method==='model.list') {result=controls.modelCatalog;if(id===controls.holdModels?.id)held=controls.holdModels;}
    else throw new Error(`Unmocked ${method}`);
@@ -219,7 +221,16 @@ try{
   await page.frameLocator('iframe[title="example.html 静态预览"]').getByRole('heading',{name:'Static fixture'}).waitFor();
   assert.equal(await page.evaluate(()=>window.fixtureScriptRan),undefined);
   for(const width of [1440,768,414,375,320]){await page.setViewportSize({width,height:900});await settle(page);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`workbench overflow ${width}`);}
-  await page.getByRole('button',{name:'本轮变更',exact:true}).click();await page.getByText('修改 · note.md',{exact:true}).click();assert.match(await page.locator('.workspace-diff pre').innerText(),/\+new/);
+  await page.getByRole('button',{name:'本轮变更',exact:true}).click();
+  await page.getByLabel('本轮结果摘要').waitFor();assert.equal(await page.getByLabel('本轮结果摘要').locator('p').count(),3);
+  assert.match(await page.getByLabel('本轮结果摘要').innerText(),/部分记录[\s\S]*尚未关联[\s\S]*核对遗漏/);
+  assert.equal(await page.locator('.workspace-diff').getAttribute('open'),'');assert.match(await page.locator('.workspace-diff pre').innerText(),/\+new/);
+  await page.getByLabel('结果详略',{exact:true}).selectOption('short');await page.waitForFunction(()=>document.querySelector('select[aria-label="结果详略"]').value==='short');
+  assert.equal(await page.locator('.workspace-diff').getAttribute('open'),null);assert.equal(await page.locator('.workspace-capture-scope').getAttribute('open'),'');
+  controls.rejectPreference=true;await page.getByLabel('结果详略',{exact:true}).selectOption('detailed');await page.getByRole('alert').filter({hasText:'Fixture preference not saved'}).waitFor();assert.equal(await page.getByLabel('结果详略',{exact:true}).inputValue(),'short');
+  await page.getByLabel('结果详略',{exact:true}).selectOption('detailed');await page.waitForFunction(()=>document.querySelector('select[aria-label="结果详略"]').value==='detailed');assert.equal(await page.locator('.workspace-diff').getAttribute('open'),'');
+  await page.reload();await page.getByRole('button',{name:'添加附件与工具',exact:true}).click();await page.getByRole('menuitem',{name:'文件与变更',exact:true}).click();assert.equal(await page.getByLabel('结果详略',{exact:true}).inputValue(),'detailed');
+  await page.screenshot({path:process.env.QI_U3_SCREENSHOT||'/tmp/qi-u3-result-summary.png',fullPage:true});
   await page.getByRole('button',{name:'关闭文件面板',exact:true}).click();
   await page.getByLabel('选择附件').setInputFiles({name:'note.txt',mimeType:'text/plain',buffer:Buffer.from('attachment fixture')});
   await page.getByRole('list',{name:'待发送附件'}).getByText('note.txt',{exact:true}).waitFor();

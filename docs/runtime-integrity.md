@@ -61,6 +61,14 @@ merging associated errors and retaining outcomes across snapshots and replay.
 “结果未确认 · 需要核对”. Only explicit verification evidence can display a passed
 verification label. Legacy errors without an identity remain ordinary errors.
 
+Session response detail (`short`, `auto`, `detailed`) is persisted as
+`session/preferences`, read through `session.preferences` and changed through
+`session.preferences.set`. The next request's system prompt includes the selected
+presentation preference, including an explicit requirement to disclose missing,
+failed, partial or unknown verification. Already dispatched requests are unchanged.
+Preferences survive clear and worker recovery within the same session; they do
+not change tools, trust, policy, budgets, or acceptance state.
+
 Child failures, cancellation, and uncertainty propagate to workflow nodes.
 Failed/cancelled dependencies are skipped; an uncertain child suspends the
 workflow as uncertain. Contradictory `completed` plus `error` is a failure.

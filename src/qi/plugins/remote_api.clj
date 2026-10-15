@@ -3,6 +3,7 @@
   (:require [qi.attachments :as attachments]
             [qi.command :as command]
             [qi.kernel :as kernel]
+            [qi.session-preferences :as preferences]
             [clojure.java.io :as io])
   (:import [java.time Instant]))
 
@@ -119,6 +120,7 @@
      :path (:path store)
      :cursor (or (:seq (last ((:events store)))) 0)
      :events ((:events store))
+     :preferences (preferences/snapshot ((:events store)))
      :state ((:state session))
      :models (when models
                {:current (public-provider ((:current models)))
@@ -173,6 +175,19 @@
        (method! "session.summary" "Return compact lifecycle and activity metadata."
                 empty-params {:type "object"}
                 (fn [_] (session-summary ctx)))
+       (method! "session.preferences" "Read this session's response-detail preference."
+                empty-params {:type "object"}
+                (fn [_] (preferences/snapshot ((:events store)))))
+       (method! "session.preferences.set" "Set response detail at the next model request; permissions are unchanged."
+                (object-params {"response_detail" {:type "string"
+                                                  :enum (vec (sort preferences/response-details))}}
+                               "response_detail")
+                {:type "object"}
+                (fn [{:keys [response_detail]}]
+                  (let [event ((:append! store) "session/preferences"
+                               {:response_detail response_detail})]
+                    (kernel/emit! ctx :session/event event)
+                    {:response_detail response_detail :event event})))
        (method! "session.events" "Return durable events after a cursor."
                 (object-params {"after" {:type "integer" :minimum 0}})
                 {:type "object"}

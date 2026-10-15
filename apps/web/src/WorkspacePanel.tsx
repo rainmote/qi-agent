@@ -13,6 +13,8 @@ export interface WorkspacePanelApi {
 export interface WorkspacePanelProps {
   workspaceId: string; sessionId?: string; api: WorkspacePanelApi;
   onReference?: (text: string) => void; onClose?: () => void;
+  responseDetail?: "short" | "auto" | "detailed";
+  onResponseDetail?: (value: "short" | "auto" | "detailed") => Promise<void>;
 }
 
 export function sandboxedHtml(text: string): string {
@@ -20,11 +22,21 @@ export function sandboxedHtml(text: string): string {
 }
 
 /** File access is server-authorized; changing workspace aborts and discards all prior reads. */
-export function WorkspacePanel({ workspaceId, sessionId, api, onReference, onClose }: WorkspacePanelProps) {
+export function WorkspacePanel({ workspaceId, sessionId, api, onReference, onClose, responseDetail = "auto", onResponseDetail }: WorkspacePanelProps) {
   const [path, setPath] = useState(""), [query, setQuery] = useState(""), [listing, setListing] = useState<FileListing | null>(null);
   const [preview, setPreview] = useState<FilePreview | null>(null), [changes, setChanges] = useState<ChangeSet | null>(null);
   const [tab, setTab] = useState<"files" | "changes">("files"), [busy, setBusy] = useState(false), [error, setError] = useState("");
   const [revision, setRevision] = useState(0), read = useRef<AbortController | null>(null), view = useRef<AbortController | null>(null);
+  const [savingDetail, setSavingDetail] = useState(false), [detailError, setDetailError] = useState("");
+  const detailScope = useRef(0);
+  useEffect(() => { detailScope.current++; setSavingDetail(false); setDetailError(""); return () => { detailScope.current++; }; }, [workspaceId, sessionId]);
+  const saveDetail = async (value: "short" | "auto" | "detailed") => {
+    if (!onResponseDetail || savingDetail) return;
+    const scope = detailScope.current; setSavingDetail(true); setDetailError("");
+    try { await onResponseDetail(value); }
+    catch (failure) { if (scope === detailScope.current) setDetailError(failure instanceof Error ? failure.message : "保存失败，请重新选择。"); }
+    finally { if (scope === detailScope.current) setSavingDetail(false); }
+  };
   useEffect(() => { setPath(""); setQuery(""); setPreview(null); setChanges(null); setListing(null); view.current?.abort(); }, [workspaceId]);
   useEffect(() => {
     const controller = new AbortController(); read.current?.abort(); read.current = controller;
@@ -50,6 +62,14 @@ export function WorkspacePanel({ workspaceId, sessionId, api, onReference, onClo
     <nav className="workspace-tabs" aria-label="文件视图"><button type="button" aria-pressed={tab === "files"} onClick={() => setTab("files")}>文件</button>
       <button type="button" aria-pressed={tab === "changes"} onClick={() => { setTab("changes"); setPreview(null); }}>本轮变更</button>
       <button type="button" onClick={() => setRevision(value => value + 1)} disabled={busy}>刷新</button></nav>
+    {onResponseDetail && sessionId && <div className="workspace-detail-preference" aria-busy={savingDetail}>
+      <label>结果详略<select aria-label="结果详略" value={responseDetail} disabled={savingDetail}
+        onChange={event => void saveDetail(event.target.value as "short" | "auto" | "detailed")}>
+        <option value="short">简洁</option><option value="auto">自动</option><option value="detailed">详细</option>
+      </select></label>
+      <p className="workspace-detail-help" role={detailError ? "alert" : "status"}>{detailError
+        ? `${detailError} 请核对当前设置后重新选择。` : savingDetail ? "正在保存…" : "下一模型请求前生效；文件详情随偏好展开。"}</p>
+    </div>}
     {tab === "files" && <><input className="workspace-search" type="search" value={query} aria-label="搜索文件路径" placeholder="搜索文件路径…"
       onChange={event => { setQuery(event.target.value); setPreview(null); }} />
       <div className="workspace-breadcrumb"><button type="button" disabled={!path && !query} onClick={() => { setPath(path.split("/").slice(0, -1).join("/")); setQuery(""); setPreview(null); }}>上一级</button><span>{query ? "搜索结果" : path || "工作区根目录"}</span></div></>}
@@ -73,8 +93,16 @@ export function WorkspacePanel({ workspaceId, sessionId, api, onReference, onClo
         {preview.kind === "pdf" && <><iframe title={`${preview.name} PDF 预览`} src={api.contentUrl(workspaceId, preview.path)} referrerPolicy="no-referrer" /><p className="workspace-muted">若浏览器无法显示 PDF，可下载后打开。</p></>}
       </section>}
       {tab === "changes" && !busy && !changes && <p className="workspace-muted">本会话暂无已完成回合的文件快照。</p>}
-      {tab === "changes" && changes && <><p className="workspace-muted">{changes.partial ? "部分文件已对比。 " : ""}{changes.notice}</p>
-        {changes.files.length === 0 ? <p className="workspace-muted">记录范围内没有文本改动。</p> : changes.files.map(file => <details className="workspace-diff" key={file.path}><summary>{file.status === "added" ? "新增" : file.status === "deleted" ? "删除" : "修改"} · {file.path}</summary><pre tabIndex={0}>{file.diff}</pre></details>)}</>}
+      {tab === "changes" && changes && <>
+        <div className="workspace-result-summary" aria-label="本轮结果摘要">
+          <p><strong>变更</strong> · {changes.files.length} 个文本文件{changes.partial ? " · 部分记录" : " · 限定范围内的快照"}</p>
+          <p><strong>验收</strong> · 尚未关联本轮文件指纹的独立验收记录</p>
+          <p><strong>下一步</strong> · {changes.partial ? "核对遗漏与差异，再运行验收" : "核对差异并运行验收"}</p>
+        </div>
+        <details className="workspace-capture-scope" open={changes.partial || responseDetail === "detailed"}>
+          <summary>快照范围{changes.partial ? " · 需要核对" : "与限制"}</summary><p className="workspace-muted">{changes.notice}</p>
+        </details>
+        {changes.files.length === 0 ? <p className="workspace-muted">记录范围内没有文本改动。</p> : changes.files.map((file, index) => <details className="workspace-diff" key={`${changes.turnId}:${file.path}:${responseDetail}`} open={responseDetail === "detailed" || (responseDetail === "auto" && changes.partial && index === 0)}><summary>{file.status === "added" ? "新增" : file.status === "deleted" ? "删除" : "修改"} · {file.path}</summary><pre tabIndex={0}>{file.diff}</pre></details>)}</>}
     </div>
   </aside>;
 }

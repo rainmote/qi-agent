@@ -6,6 +6,7 @@
             [qi.kernel :as kernel]
             [qi.run-outcome :as outcome]
             [qi.run-progress :as run-progress]
+            [qi.session-preferences :as preferences]
             [qi.schema :as schema]
             [qi.system-prompt :as system]
             [cheshire.core :as json]
@@ -51,6 +52,8 @@
       :tool-names (when resources (mapv :name (kernel/tools ctx)))
       :workspace (:workspace snapshot)
       :local-date (when resources (str (java.time.LocalDate/now)))
+      :response-detail (preferences/selected-detail
+                        ((:events (kernel/require-service ctx :session/store))))
       :project-trusted (:project-trusted snapshot)})))
 
 (defn- blank-content? [content]

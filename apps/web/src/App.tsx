@@ -958,7 +958,14 @@ export function App() {
     </aside>}
 
     {workbench && workspaceId && <section className="workbench-drawer" aria-label="工作台" onKeyDown={event => { if (event.key === "Escape") setWorkbench(null); }}>
-      <div className="workbench-content">{workbench === "files" ? <WorkspacePanel workspaceId={workspaceId} sessionId={activeSession?.id} api={api.workspaceFiles}
+      <div className="workbench-content">{workbench === "files" ? <WorkspacePanel key={activeSession?.id || workspaceId} workspaceId={workspaceId} sessionId={activeSession?.id} api={api.workspaceFiles}
+        responseDetail={([...projection?.events || []].reverse().find(event => event.type === "session/preferences")?.data.response_detail as "short" | "auto" | "detailed") || "auto"}
+        onResponseDetail={async value => {
+          const id = activeSession?.id; if (!id) throw new Error("请先开始一个会话");
+          const current = captureOperation();
+          await api.rpc(id, "session.preferences.set", { response_detail: value });
+          if (current()) await refreshSnapshot(id);
+        }}
         onClose={() => setWorkbench(null)} onReference={reference => { setComposer(value => `${value}${value ? " " : ""}${reference} `); setWorkbench(null); composerInput.current?.focus(); }} />
         : <><header className="workbench-heading"><strong>{workbench === "automation" ? "自动化" : workbench === "plugins" ? "插件" : "计划与协作"}</strong>
           <button type="button" onClick={() => setWorkbench(null)} aria-label="关闭工作台">×</button></header>

@@ -5,8 +5,50 @@
             [qi.plugins.runtime :as runtime]
             [qi.plugins.session :as session]
             [qi.plugins.subagent-in-process :as child]
+            [qi.session-preferences :as preferences]
+            [clojure.string :as str]
             [babashka.fs :as fs]
             [clojure.test :refer [deftest is testing]]))
+
+(deftest response-detail-is-durable-and-presentation-only
+  (let [directory (fs/create-temp-dir {:prefix "qi-response-detail-"})
+        path (str (fs/path directory "session.jsonl"))
+        requests (atom [])
+        config {:plugins [{:ns 'qi.plugins.session :config {:path path}}
+                          {:ns 'qi.plugins.mock
+                           :config {:generate (fn [request]
+                                                (swap! requests conj request)
+                                                {:message {:role "assistant" :content "ok"}
+                                                 :finish-reason "stop"})}}
+                          {:ns 'qi.plugins.runtime :config {:system-prompt "base"}}
+                          {:ns 'qi.plugins.remote-registry}
+                          {:ns 'qi.plugins.remote-api}]}]
+    (try
+      (let [ctx (plugin/boot! config)]
+        (try
+          (let [rpc (:invoke! (kernel/require-service ctx :remote/registry))]
+            (is (= {:response_detail "auto"} (rpc "session.preferences" {})))
+            (doseq [mode ["short" "auto" "detailed"]]
+              (rpc "session.preferences.set" {:response_detail mode})
+              ((kernel/require-service ctx :agent/run) "test")
+              (let [prompt (:system-prompt (last @requests))]
+                (is (str/includes? prompt (str "Response detail: " mode)))
+                (is (str/includes? prompt "verification"))
+                (is (str/includes? prompt "grants no permissions"))))
+            (is (thrown? clojure.lang.ExceptionInfo
+                         (rpc "session.preferences.set" {:response_detail "allow"})))
+            (is (thrown? clojure.lang.ExceptionInfo
+                         (rpc "session.preferences.set" {:response_detail "short" :permissions "allow"}))))
+          (finally (kernel/dispose-all! ctx))))
+      (let [ctx (plugin/boot! config)]
+        (try
+          (let [rpc (:invoke! (kernel/require-service ctx :remote/registry))]
+            (is (= "detailed" (get-in (rpc "session.snapshot" {}) [:preferences :response_detail])))
+            (rpc "session.clear" {})
+            (is (= {:response_detail "detailed"} (rpc "session.preferences" {}))))
+          (finally (kernel/dispose-all! ctx))))
+      (is (= "auto" (:response_detail (preferences/snapshot [{:type "session/preferences" :data {:response_detail "unrecognized"}}]))))
+      (finally (fs/delete-tree directory)))))
 
 (defn- answer [text]
   {:message {:role "assistant" :content text} :finish-reason "stop"})
