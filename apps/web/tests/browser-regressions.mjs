@@ -15,7 +15,7 @@ async function fixture(initialCount=2){
  const page=await browser.newPage({viewport:{width:1440,height:1000}});
  page.on('pageerror',e=>errors.push(e.message));
  await page.addInitScript(()=>{window.sources=[];window.EventSource=class extends EventTarget{constructor(url){super();this.url=url;window.sources.push(this);queueMicrotask(()=>this.dispatchEvent(new Event('ready')));}close(){this.closed=true;}}});
- const controls={holdSnapshot:null,holdOpen:null,holdPolicy:null,holdModels:null,modelCatalog:models,providerSaves:0,providerRetries:0,dropSubmit:false,rejectSubmit:false,uploads:[],submissions:[],operationStatus:"completed"};
+ const controls={holdSnapshot:null,holdOpen:null,holdPolicy:null,holdModels:null,snapshotOverride:null,steers:[],modelCatalog:models,providerSaves:0,providerRetries:0,dropSubmit:false,rejectSubmit:false,uploads:[],submissions:[],operationStatus:"completed"};
  const provider={id:"mock-provider",name:"Mock Provider",protocol:"openai-completions",baseUrl:"https://example.invalid/v1",apiKeyConfigured:true,authType:"api-key",authStatus:"configured",models:[{id:"mock-model",name:"Mock Model"}]};
  await page.route('**/api/**', async route=>{
   const path=new URL(route.request().url()).pathname; let result; let held;
@@ -33,7 +33,7 @@ async function fixture(initialCount=2){
   }
   else if(path==='/api/providers/reload'){controls.providerRetries++;assert.deepEqual(route.request().postDataJSON(),{sessionIds:['A']});result={scope:'open-web-sessions',applied:['A'],failures:[]};}
   else if(path.includes('/operations/')) result={status:controls.operationStatus,result:{accepted:true}};
-  else if(path.endsWith('/open')) {const id=path.split('/')[3]; result={session:sessions.find(s=>s.id===id),snapshot:snapshot(id,initialCount),eventCursor:"fixture:0"};if(id===controls.holdOpen?.id)held=controls.holdOpen;}
+  else if(path.endsWith('/open')) {const id=path.split('/')[3]; result={session:sessions.find(s=>s.id===id),snapshot:controls.snapshotOverride||snapshot(id,initialCount),eventCursor:"fixture:0"};if(id===controls.holdOpen?.id)held=controls.holdOpen;}
   else if(path.endsWith('/rpc')){
    const {method}=route.request().postDataJSON(); const id=path.split('/')[3];
    if(method==='trust.status') result={configured:false};
@@ -42,6 +42,7 @@ async function fixture(initialCount=2){
    else if(method==='subagent.status') result={providers:[],jobs:[]};
    else if(method==='policy.status') {result=policy;if(id===controls.holdPolicy?.id){held=controls.holdPolicy;result={...policy,mode:'allow'};}}
    else if(method==='turn.submit'){controls.submissions.push(route.request().postDataJSON());if(controls.dropSubmit){controls.dropSubmit=false;await route.abort();return;}if(controls.rejectSubmit){controls.rejectSubmit=false;await route.fulfill({status:400,json:{ok:false,error:{message:'Fixture rejected before acceptance'}}});return;}result={accepted:true};}
+   else if(method==='turn.steer'){controls.steers.push(route.request().postDataJSON());result={id:'steer-fixture'};}
    else if(method==='command.execute') result={output:'test-only'};
    else if(method==='session.snapshot') {result=snapshot(id);if(id===controls.holdSnapshot?.id){held=controls.holdSnapshot;result.events[1].data.message.content='STALE-SNAPSHOT';}}
    else if(method==='context.status') result=null;
@@ -58,6 +59,35 @@ const gate=(id)=>({id,seen:deferred(),release:deferred(),done:deferred()});
 const settle=(page)=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
 const open=async(page,id)=>{await page.locator('.session-link').filter({hasText:`会话${id}`}).click();await page.locator('.session-header-title button').filter({hasText:`会话${id}`}).waitFor();};
 try{
+ {
+  const {page,controls}=await fixture(0);await page.goto(base);await page.locator('.session-header-title button').waitFor();
+  const ends=['completed','failed','cancelled','uncertain'].map((status,index)=>({id:`outcome-${status}`,seq:100+index,at:'2026-10-15T00:00:00Z',type:'agent/run/end',data:{'run-id':`native-${status}`,status,reason:status==='uncertain'?'restored':status,verification:'not-run',...(status==='failed'?{error:'Offline provider fixture'}:{})}}));
+  const dispatch=async(events)=>page.evaluate(events=>{const source=window.sources.findLast(source=>!source.closed);for(const event of events)source.dispatchEvent(new MessageEvent('worker',{data:JSON.stringify(event)}));},events);
+  await dispatch(ends.flatMap(event=>[{type:'event',event:'agent.run/end',data:event.data},{type:'event',event:event.type,data:event.data,durable:true,event_id:event.id,seq:event.seq}]));
+  await page.getByText(/结果未确认 · 需要核对/).waitFor();
+  assert.equal(await page.locator('.run-outcome').count(),4);
+  assert.equal(await page.locator('.run-outcome').filter({hasText:'尚未验收'}).count(),4);
+  assert.equal(await page.locator('.inline-error').count(),0);
+  controls.snapshotOverride={...snapshot('A',0),events:ends,state:{phase:'idle','last-outcome':ends.at(-1).data,revision:5}};
+  await page.reload();await page.getByText(/结果未确认 · 需要核对/).waitFor();
+  assert.equal(await page.locator('.run-outcome').count(),4);
+  for(const width of [1440,375]){
+   await page.setViewportSize({width,height:1000});await settle(page);
+   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+   if(process.env.QI_AGENT_BROWSER_ARTIFACTS)await page.screenshot({path:`${process.env.QI_AGENT_BROWSER_ARTIFACTS}/run-outcomes-${width}.png`,fullPage:true,animations:'disabled'});
+  }
+  await dispatch([{type:'event',event:'agent/state',data:{phase:'compacting','run-id':'active',revision:6,compaction:{'compaction-id':'c','completed-chunks':2,'total-chunks':6,'elapsed-ms':500,status:'progress'}}}]);
+  await page.getByRole('status').filter({hasText:'整理上下文 2/6'}).waitFor();
+  await page.locator('textarea').fill('Change the next step');
+  await page.getByRole('button',{name:'下一步引导',exact:true}).click();
+  await page.getByText('已接收，下一模型请求前生效',{exact:true}).waitFor();
+  assert.equal(controls.steers.length,1);
+  await dispatch([{type:'event',event:'agent/state',data:{phase:'idle',revision:7}}]);
+  await page.getByRole('button',{name:'发送消息',exact:true}).waitFor();
+  assert.equal(await page.locator('.composer-hint.has-run').count(),0);
+  await page.close();
+  console.log(JSON.stringify({nativeOutcomesAndCompactionProgress:'passed',cases:['four outcomes','live and durable deduplication','reload','375px','steer receipt','progress closes']}));
+ }
  for(const returnToA of [false,true]){
   const {page,controls}=await fixture();const held=gate('A');controls.holdSnapshot=held;
   await page.goto(base);await page.locator('.session-header-title button').waitFor();

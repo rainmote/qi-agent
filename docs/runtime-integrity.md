@@ -37,6 +37,30 @@ deadline. Its dedicated profile uses 64 requests and 35 minutes for implementati
 See [unattended maintenance](unattended-maintenance.md) for host-enforced cost
 reservation and the distinction between a configured price ceiling and billing.
 
+The default loop stops three consecutive identical read-tool batches with
+`failed/no-progress`; `no-progress` retains the result fingerprint and last three
+call IDs. Arguments and canonical result values are normalized independently of
+call IDs and execution timing. Changed results, consumed steering/follow-ups,
+and successful sequential mutations reset the counter. A steer accepted during
+the threshold batch still reaches its next model boundary. Explicit polling
+tools (`job_output`, `job_list`, `wait_agent`, `list_agents`, or a plugin declaring
+`:progress-mode :poll`) use a separate finite limit of 32 unchanged batches.
+`max-repeated-tool-results` and `max-stalled-polls` can narrow these limits.
+This detects consecutive unchanged batches, not arbitrary alternating loops or
+semantic task completion. It never retries, rolls back, or replays an operation.
+
+Read-only batches use at most four worker futures by default, configurable with
+`max-parallel-tools`. Approval stays serial, mixed sequential batches stay serial,
+and durable tool results retain model order. Cancellation closes waiting slots
+before their bodies can start; a non-cooperative running body can still outlive
+its cancelled result.
+
+Web and TUI project the same native outcomes into one history row per run ID,
+merging associated errors and retaining outcomes across snapshots and replay.
+`completed` plus `not-run` reads “运行完成 · 尚未验收”; restored uncertainty reads
+“结果未确认 · 需要核对”. Only explicit verification evidence can display a passed
+verification label. Legacy errors without an identity remain ordinary errors.
+
 Child failures, cancellation, and uncertainty propagate to workflow nodes.
 Failed/cancelled dependencies are skipped; an uncertain child suspends the
 workflow as uncertain. Contradictory `completed` plus `error` is a failure.
@@ -84,6 +108,14 @@ summaries and oversized replacements leave the original history active.
 Manual deterministic compaction returns `summary-too-large` rather than
 truncating a prefix. All original message events remain recoverable.
 
+Semantic compaction emits durable `context/compaction` facts with `started`,
+`progress`, and `completed`/`failed`/`cancelled` states, native run or independent
+operation identity, compaction ID, completed/total chunks and elapsed time.
+They do not become model messages. Active native runs project them as
+`compacting`; Web/TUI show “整理上下文 n/N” and close the progress on every outcome.
+Queue injection persists `queue/consumed` with the original item ID. Web steering
+is labelled “下一步引导” and acknowledges the next model-request boundary.
+
 An unfit immutable prefix or current instruction, exhausted compaction call
 limit, or unavailable safe split returns structured `code: context_unfit` with
 `retryable: false`. Summary generation failure returns `reason: summary-failed`.
@@ -93,6 +125,25 @@ its exact instruction and current tool work; use a larger-window provider or
 start a new explicit task with the needed state.
 
 ## Regression checks
+
+Read-only telemetry can be exported without starting a daemon or a schedule:
+
+```sh
+node maintenance/report-telemetry.mjs \
+  --from 2026-10-14T00:00:00+08:00 --to 2026-10-15T00:00:00+08:00 \
+  --timezone Asia/Singapore --session-root /absolute/workspace/.qi-agent/sessions
+```
+
+Roots are explicit and repeatable; timestamps require offsets and the interval
+is `[from,to)`. Traffic is grouped by explicit `sample_kind`/`sample-kind` on a
+session/event, or `--sample-kind production|fixture|ci|unclassified`; the default
+is unclassified. Unlabelled historical logs are never inferred as production.
+No admitted or terminal runs means `no_samples` and null rates. Missing sources,
+corrupt lines, invalid timestamps, unreadable files and skipped symlinks remain
+visible with `status: incomplete`. Logical requests deduplicate by session and
+request ID; known token subtotals and unknown request counts remain separate,
+and complete invoice totals stay null. Cross-window starts are considered when
+detecting orphan terminal events; terminal coverage uses only admitted runs.
 
 Run `bb test` for backend coverage, or `npm test` for the complete existing
 typecheck, web host/UI, ACP, TUI, backend, and evaluation test suites.

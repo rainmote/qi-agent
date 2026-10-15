@@ -482,6 +482,7 @@ export function App() {
         if (current()) trust.setStatus(trustStatus);
       } else if (mode === "steer") {
         await api.rpc(session.id, "turn.steer", { message: content });
+        if (current()) flashNotice("已接收，下一模型请求前生效");
       } else if (projection?.state.phase && projection.state.phase !== "idle") {
         await api.rpc(session.id, "turn.follow-up", { message: content });
       } else {
@@ -837,8 +838,8 @@ export function App() {
       </div>
       </ComposerAttachments>
     </div>
-    <div className={`composer-hint ${phase !== "idle" || stopping ? "has-run" : ""}`}><span role="status">{stopping ? "正在停止，请等待运行结束…" : projection?.interactions.length ? "先确认上方操作 · 可继续编辑草稿" : phase !== "idle" ? `${phaseLabel(phase)} · Enter 排队发送` : "Enter 发送 · Shift + Enter 换行"}</span>
-      {phase !== "idle" && !projection?.interactions.length && composer.trim() && <button type="button" className="steer-button" disabled={busy || uploading || stopping || !!pendingOperation} onClick={() => void send("steer")}>立即引导</button>}
+    <div className={`composer-hint ${phase !== "idle" || stopping ? "has-run" : ""}`}><span role="status">{stopping ? "正在停止，请等待运行结束…" : projection?.interactions.length ? "先确认上方操作 · 可继续编辑草稿" : phase !== "idle" ? `${phaseLabel(phase)}${phase === "compacting" && projection?.state.compaction ? ` ${projection.state.compaction["completed-chunks"]}/${projection.state.compaction["total-chunks"]}` : ""} · Enter 排队发送` : "Enter 发送 · Shift + Enter 换行"}</span>
+      {phase !== "idle" && !projection?.interactions.length && composer.trim() && <button type="button" className="steer-button" disabled={busy || uploading || stopping || !!pendingOperation} onClick={() => void send("steer")}>下一步引导</button>}
     </div>
     {stopError && !projection?.interactions.length && <p className="composer-error" role="alert">{stopError} <button type="button" onClick={() => void stopRun()}>重试停止</button></p>}
   </div>;

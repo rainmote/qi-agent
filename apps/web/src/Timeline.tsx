@@ -7,6 +7,7 @@ import type { Projection } from "./projection";
 import { type ToolBatch, type TimelineRow } from "./timeline-model";
 import { captureAnchor, restoreAnchor, timelineLayout, visibleRange, type RowMeasurement, type ScrollAnchor } from "./virtual-timeline";
 import type { DurableEvent } from "./types";
+import { outcomeText, runOutcome } from "./run-outcome";
 
 function text(value: unknown): string {
   if (typeof value === "string") return value;
@@ -240,7 +241,7 @@ type DisplayRow = TimelineRow | { id: string; kind: "stream" | "run-error" };
 
 function estimateRow(row: DisplayRow, width: number): number {
   if (row.kind === "tools") return 52;
-  if (row.kind === "decision" || row.kind === "error" || row.kind === "run-error") return 56;
+  if (row.kind === "decision" || row.kind === "error" || row.kind === "run-error" || row.kind === "outcome") return 64;
   if (!("event" in row)) return 100;
   const message = row.event.data.message as Record<string, unknown>;
   const content = text(message.content);
@@ -390,6 +391,9 @@ export function Timeline({ projection, scrollRef, pluginSlots = [] }: {
           <Icon name="shield" /><span>{String(row.event.data.tool || "工具")} {row.event.data.decision === "allow" ? "已获批准" : "被拒绝"}</span>
         </div>}
         {row.kind === "error" && <div className="inline-error">{String(row.event.data.message || "运行失败")}</div>}
+        {row.kind === "outcome" && <div className={`run-outcome ${row.event.data.status}`}>
+          {outcomeText(runOutcome(row.event.data)!)}
+        </div>}
         {row.kind === "run-error" && <div className="inline-error">{projection.lastRunError}</div>}
         {row.kind === "stream" && <article className="message message-assistant is-streaming">
           <div className="message-body">

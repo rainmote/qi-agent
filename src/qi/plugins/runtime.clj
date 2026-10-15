@@ -5,6 +5,7 @@
             [qi.generation :as generation]
             [qi.kernel :as kernel]
             [qi.run-outcome :as outcome]
+            [qi.run-progress :as run-progress]
             [qi.schema :as schema]
             [qi.system-prompt :as system]
             [cheshire.core :as json]
@@ -378,16 +379,23 @@
                              (:id call)))]
         (recur remaining blocked-by)))))
 
-(defn- execute-slots-in-parallel! [ctx slots tasks]
-  (doseq [{:keys [entry terminal?] :as slot} slots
-          :when (and (:prepared entry) (not @terminal?))]
-    (swap! tasks conj
-           (future
-             (complete-slot! ctx slot
-                             (execute-prepared!
-                              ctx entry #(begin-slot! ctx slot %)))))))
+(defn- execute-slots-in-parallel! [ctx slots tasks cancel-token limit]
+  ;; A bounded number of workers also bounds futures, rather than starting an
+  ;; unbounded batch of futures that merely block on a semaphore.
+  (let [pending (atom (seq (filter #(and (:prepared (:entry %)) (not @(:terminal? %))) slots)))]
+    (dotimes [_ (min limit (count @pending))]
+      (swap! tasks conj
+             (future
+               (loop []
+                 (when-not (cancellation/cancelled? cancel-token)
+                   (let [[before _] (swap-vals! pending next)]
+                     (when-let [{:keys [entry terminal?] :as slot} (first before)]
+                       (when-not @terminal?
+                         (complete-slot! ctx slot
+                                         (execute-prepared! ctx entry #(begin-slot! ctx slot %))))
+                       (recur))))))))))
 
-(defn- execute-batch! [ctx tool-calls cancel-token]
+(defn- execute-batch! [ctx tool-calls cancel-token max-parallel-tools]
   (let [update! (fn [execution update]
                   (kernel/emit! ctx :tool.execution/update
                                 {:execution-id (:token execution)
@@ -422,7 +430,7 @@
       (try
         (if (sequential-batch? prepared)
           (execute-slots-sequentially! ctx slots cancel-token)
-          (execute-slots-in-parallel! ctx slots tasks))
+          (execute-slots-in-parallel! ctx slots tasks cancel-token max-parallel-tools))
         (let [executed (mapv #(deref (:completion %)) slots)]
           (when (cancellation/cancelled? cancel-token)
             (doseq [task @tasks]
@@ -463,7 +471,10 @@
                    (assoc :partial-assistant "" :partial-reasoning "")
 
                    (not= phase :model)
-                   (dissoc :partial-assistant :partial-reasoning))))]
+                   (dissoc :partial-assistant :partial-reasoning)
+
+                   (not= phase :compacting)
+                   (dissoc :compaction))))]
     (publish! ctx listeners :agent/state next-state)
     next-state))
 
@@ -497,10 +508,11 @@
 
 (defn- inject-queued! [ctx queue listeners kind]
   (let [items (drain-kind! queue kind)]
-    (doseq [{:keys [message]} items]
+    (doseq [{:keys [id message]} items]
       (record-message! ctx {:role "user" :content message})
+      (record! ctx "queue/consumed" {:id id :kind kind})
       (publish! ctx listeners :agent.message/queued-consumed
-                {:kind kind :message message}))
+                {:id id :kind kind :message message}))
     (when (seq items)
       (publish! ctx listeners :queue/changed {:queue @queue}))
     (count items)))
@@ -650,7 +662,8 @@
     (throw (ex-info "Prompt must not be blank" {})))
   (record-message! ctx {:role "user" :content prompt})
   (publish! ctx listeners :agent.message/start {:role "user" :content prompt})
-  (let [max-steps (or (:max-steps options) (:max-steps config) 256)]
+  (let [max-steps (or (:max-steps options) (:max-steps config) 256)
+        tool-progress (atom nil)]
     (loop [step 1 usage {}]
       (cancellation/throw-if-cancelled! cancel-token)
       (when (> step max-steps)
@@ -658,7 +671,8 @@
                         {:reason :step-budget :max-steps max-steps
                          :messages (messages ctx)})))
       ;; Steering becomes context immediately before the next model request.
-      (inject-queued! ctx queue listeners :steer)
+      (when (pos? (inject-queued! ctx queue listeners :steer))
+        (reset! tool-progress nil))
       (record! ctx "step/start" {:step step})
       (publish! ctx listeners :agent.turn/start {:step step})
       (let [current-system-prompt (system-prompt ctx config)
@@ -707,7 +721,7 @@
                                      (truncated-tool-results tool-calls)))
                              (do
                                (set-phase! ctx state listeners :tool)
-                               (execute-batch! ctx tool-calls cancel-token)))
+                               (execute-batch! ctx tool-calls cancel-token (or (:max-parallel-tools config) 4))))
                 results (mapv second executions)
                 turn-end (cond-> {:step step :tool-count (count results)}
                            (cancellation/cancelled? cancel-token)
@@ -723,7 +737,13 @@
                                   :tool-terminated)
                 (throw (ex-info "Agent run was terminated by tool policy"
                                 {:reason :tool-terminated :terminated true})))
-              (recur (inc step) next-usage)))
+              (do
+                ;; A steer accepted during the last tool still gets its next
+                ;; model boundary, including at the repetition threshold.
+                (if (some #(= :steer (:kind %)) @queue)
+                  (reset! tool-progress nil)
+                  (run-progress/observe! ctx tool-progress executions config))
+                (recur (inc step) next-usage))))
           (let [continue-count (finish-or-continue!
                                 ctx active admission-lock queue listeners)
                 turn-end (cond-> {:step step :tool-count 0}
@@ -739,7 +759,7 @@
                                          :output-limit :provider-incomplete)
                                :finish-reason (:finish-reason response)})))
             (if (pos? continue-count)
-              (recur (inc step) next-usage)
+              (do (reset! tool-progress nil) (recur (inc step) next-usage))
               {:content (or (:content assistant) "")
                :steps step :usage next-usage
                :messages (messages ctx)})))))))
@@ -754,7 +774,7 @@
                (when (compare-and-set! ended? false true)
                  (let [terminal (assoc (select-keys result
                                                     [:status :stop-reason :reason :error
-                                                     :usage :request-usage :steps :verification :code])
+                                                     :usage :request-usage :steps :verification :code :no-progress])
                                        :run-id run-id)]
                    (record! ctx "agent/run/end" terminal)
                    (publish! ctx listeners :agent.run/end terminal))))]
@@ -831,12 +851,22 @@
    :provides #{:agent/run :agent/cancel :agent/session}
    :start
    (fn [ctx config]
+     (doseq [key [:max-parallel-tools :max-repeated-tool-results :max-stalled-polls]
+             :when (contains? config key)]
+       (when-not (pos-int? (get config key))
+         (throw (ex-info "Invalid runtime limit" {:key key :value (get config key)}))))
      (recover-interrupted-runs! ctx)
      (let [active (atom nil)
            admission-lock (Object.)
            queue (atom [])
            listeners (atom {})
            state (atom {:phase :idle :run-id nil :revision 0})
+           _ (kernel/on! ctx :context/compaction
+                         (fn [_ event]
+                           (when (and (:run-id event) (= (:run-id event) (:run-id @active)))
+                             (set-phase! ctx state listeners
+                                         (if (contains? #{:started :progress} (:status event)) :compacting :model)
+                                         {:compaction event}))))
            run (fn
                  ([prompt] (run-agent! ctx config active admission-lock prompt
                                        {} queue state listeners))
