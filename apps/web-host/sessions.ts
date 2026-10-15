@@ -213,6 +213,18 @@ export class SessionManager {
     return (await Promise.all(this.workspaces.list().map((workspace) => this.list(workspace)))).flat();
   }
 
+  async candidateWriters(cwd: string): Promise<Array<{ agent_id: string; resident: boolean }>> {
+    const control = this.workerFactory(cwd, join(cwd, ".qi-agent", ".candidate-discovery"),
+      this.repositoryRoot, this.daemonEnvironment) as AgentWorker;
+    try {
+      const agents = await control.callDaemon("agent.list") as Array<{ agent_id: string; workspace_path: string; is_child?: boolean; residency?: string; status?: string }>;
+      return agents.filter(agent => !agent.is_child && agent.workspace_path === cwd).map(agent => {
+        if (!agent.residency || !["resident", "inactive", "stopped"].includes(agent.residency)) throw new Error("Writer residency is unknown");
+        return { agent_id: agent.agent_id, resident: agent.residency === "resident" };
+      });
+    } finally { await control.close(); }
+  }
+
   async listPresets(): Promise<unknown> {
     const active = this.#open.values().next().value as OpenSession | undefined;
     if (active) return active.worker.callDaemon("preset.list");

@@ -32,6 +32,34 @@ Web 输入框现在提供「添加附件」「文件与变更」和「引用文�
 
 ## 独立验收回执
 
+### 显式 coding-candidate 准入
+
+宿主可用 `--candidate-config /absolute/host-config.json` 启用候选 API。未配置时不会自动创建候选。
+配置必须由操作人预选干净的外部可信控制器提交、私有状态目录，以及每个原始 workspace_id 对应的冻结任务合同：
+
+```json
+{"schema_version":1,"controller_path":"/absolute/reviewed-controller","controller_sha":"EXACT_REVIEWED_SHA",
+ "directory":"/absolute/private/coding-state","contracts":{"WORKSPACE_ID":"/absolute/frozen-task.json"}}
+```
+
+这是已有维护合同的交互入口，不是从浏览器上传策略、profile、验收器或镜像的入口。候选不能修改保存的可信
+控制器；新增入口代码及配置需独立审查后使用。配置不是启用授权，当前实现不会自动安装或激活它。
+
+认证后的 `POST /api/candidates/begin` 接收 `base_sha/workspace_id/command_id`，基线必须匹配宿主合同。
+返回 `candidate_id/cwd/candidate_workspace_id/lease_owner/status`。独立 detached worktree 只包含该提交；
+`original_dirty=true` 明确表示原目录未提交内容未包含，原目录保持原样。候选作为独立工作区注册，可在其中
+创建普通 Web 会话。原 daemon 的 workspace-write lease 继续保证原生 root 写入互斥；Web 另绑定首个 writer
+session，后续会话不能接管同一候选。直接从其他工具运行的写入仍受原权限/隔离边界约束，worktree 本身不是 OS 沙箱。
+
+相同操作编号与合同返回同一候选；改变参数、合同或控制器时拒绝复用。两个控制器竞争同一原工作区时，只有
+一个拥有候选。prepare 前先保存意图，响应丢失或中断不重复创建工作树：通过 `GET /api/candidates/ID/status`
+查看，再显式 `POST /api/candidates/ID/reconcile` 核对原控制器材料。reconcile 仅在确认本机原操作 PID 已死亡时
+恢复外层文件锁，不按超时抢占；原维护控制器的未知状态仍需按其恢复规则处理。
+
+`POST /api/candidates/ID/close` 只在 daemon 已确认没有 resident writer 时取消任务并释放候选所有权；失联、
+未知 residency 或仍存活 writer 均保留所有权。先通过现有 agent.stop 停止写入并对账。关闭不删除候选或原始
+文件；旧候选不能因新候选出现而重新获得 Web 写权限。验收另走可信 verifier，准入成功不表示验收通过。
+
 普通 Web 编码可以使用维护合同已准备的独立候选工作区。daemon 的 workspace-write lease 保持一个 root
 写入者；停止该 worker 后，由候选外、固定提交的可信维护控制器执行 `verify`。它已有基线、有效 red、
 只读源码副本、独立验收器、容器限额和完整源码快照绑定。Web 不执行测试命令，也不以 `remote/run-result`

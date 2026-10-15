@@ -13,6 +13,8 @@ import { WorkspaceRegistry } from "./workspaces.js";
 import type { AgentWorker } from "./worker.js";
 import { WorkspaceFiles } from "./workspace-files.js";
 import { TurnFiles } from "./turn-files.js";
+import { CodingCandidates, type CodingCandidateConfig } from "./coding-candidates.js";
+import { mutation } from "../shared/methods.js";
 import { readSessionReference, resolveReferences } from "./workspace-references.js";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -37,6 +39,8 @@ interface WebHostOptions {
   unsafeAllowNetwork?: boolean;
   verificationDirectory?: string;
   verificationControllerSha?: string;
+  candidateConfig?: CodingCandidateConfig;
+  candidateConfigFile?: string;
 }
 
 function addressInUse(error: unknown): error is NodeJS.ErrnoException {
@@ -296,6 +300,9 @@ export async function startWebHost(options: WebHostOptions = {}) {
   } : null;
   const sessions = new SessionManager(workspaces, repositoryRoot,
     ownedDaemonEnvironment || { providerSettingsPath: providers.statePath, attachmentDirectory: files.attachmentDirectory });
+  const candidateConfig = options.candidateConfigFile ? JSON.parse(await readFile(options.candidateConfigFile, "utf8")) as CodingCandidateConfig : options.candidateConfig;
+  const candidates = candidateConfig ? new CodingCandidates(candidateConfig, workspaces, cwd => sessions.candidateWriters(cwd)) : undefined;
+  await candidates?.initialize();
 
   const readiness = async () => {
     const workspaceRoots = workspaces.list().map((workspace) => workspace.path);
@@ -404,6 +411,19 @@ export async function startWebHost(options: WebHostOptions = {}) {
         const removed = await providers.remove(id);
         const reload = await sessions.reloadProviderSettings();
         return json(response, 200, { ok: true, result: { removed, reload } });
+      }
+      if (url.pathname === "/api/candidates/begin" && request.method === "POST") {
+        if (!candidates) throw new Error("Coding candidates are not configured by this host");
+        return json(response, 201, { ok: true, result: await candidates.begin(await body(request)) });
+      }
+      const candidateMatch = url.pathname.match(/^\/api\/candidates\/(coding-[a-f0-9]{32})\/(status|reconcile|close)$/);
+      if (candidateMatch) {
+        if (!candidates) throw new Error("Coding candidates are not configured by this host");
+        const [, id, action] = candidateMatch;
+        if (action === "status" && request.method === "GET") return json(response, 200, { ok: true, result: await candidates.status(id) });
+        if (request.method === "POST" && action !== "status") return json(response, 200, { ok: true,
+          result: action === "reconcile" ? await candidates.reconcile(id) : await candidates.close(id) });
+        throw new Error("Unsupported candidate operation");
       }
       if (url.pathname === "/api/workspaces" && request.method === "POST") {
         const input = await body(request);
@@ -560,6 +580,7 @@ export async function startWebHost(options: WebHostOptions = {}) {
             && Buffer.byteLength(JSON.stringify(params.message ?? "")) > 256 * 1024) throw new Error("Message references and text exceed 256 KiB");
           const worker = await sessions.worker(id);
           const workspace = workspaces.list().find(item => item.path === worker.workspaceRoot);
+          if (workspace && mutation(input.method)) await candidates?.claim(workspace.id, id);
           let turnId: string | undefined;
           if (input.method === "turn.submit") {
             if (!workspace) throw new Error("Turn workspace is not permitted");
@@ -604,6 +625,7 @@ export async function startWebHost(options: WebHostOptions = {}) {
     workspaces,
     sessions,
     files,
+    candidates,
     close: async () => {
       if (options.stateDirectory) await sessions.shutdownDaemon();
       await sessions.closeAll();
@@ -628,6 +650,7 @@ function parseArguments(arguments_: string[]): WebHostOptions {
     else if (argument === "--workspace") options.workspace = arguments_[++index];
     else if (argument === "--verification-directory") options.verificationDirectory = arguments_[++index];
     else if (argument === "--verification-controller-sha") options.verificationControllerSha = arguments_[++index];
+    else if (argument === "--candidate-config") options.candidateConfigFile = arguments_[++index];
     else if (argument === "--unsafe-allow-network") options.unsafeAllowNetwork = true;
     else throw new Error(`Unknown Web Host argument: ${argument}`);
   }
