@@ -175,8 +175,11 @@ session catalog 的目录扫描不应阻塞 daemon 或 active worker。初版可
 历史 bridge 在 TUI 退出和 RPC EOF 时调用 `abort!`；该 bridge 已删除。当前 transport closure 只关闭
 attachment；终止执行必须通过 `turn.abort`/`run.abort` 或 `agent.stop` 等具名 mutation 命令。
 
-Rust worker proxy 可显式设置 `QI_AGENT_RUN_WALL_MS`，从原生 run 开始事件起用单调时钟计时；到期直接终止
-Babashka 进程组并保存独立的 `uncertain` / `not-run` 回执。根与子 run 共享 worker 故障域，任一到期会中断
+Rust worker proxy 可显式设置 `QI_AGENT_RUN_WALL_MS`，从原生 run 开始事件起用单调时钟计时，
+同时持久化 deadline 身份；到期发送协作取消，在 1–1000ms 宽限（默认 250ms）后回收 Babashka
+进程组并保存独立的 `uncertain` / `not-run` 回执。重连和 daemon 重启不延长原期限；期限与完成同时到达时
+期限优先。新 generation 按 worker/session/run 核对宿主回执，明确更正旧进程可能晚写的 completed，不重放工作。
+根与子 run 共享 worker 故障域，任一到期会中断
 整棵树；恢复不重放旧请求。默认关闭；单独的 `:max-wall-ms` 仍只是下一次模型调用的准入预算。详见
 [运行完整性与边界](runtime-integrity.md)。
 

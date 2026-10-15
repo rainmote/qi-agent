@@ -72,17 +72,35 @@ reservation and the distinction between a configured price ceiling and billing.
 The Rust resident worker proxy additionally supports the explicit host environment
 `QI_AGENT_RUN_WALL_MS` (positive integer milliseconds, unset by default). It starts
 a monotonic timer on each observed native `agent/run/start`; duplicate starts do
-not extend it and matching ends disarm it. Expiry kills the owned Babashka process
+not extend it and ends strictly before the deadline disarm it. Equality/late ends
+cannot win the deadline race. Each start/end atomically saves a private
+`<descriptor>.deadlines.json` with worker, generation, native run/session and
+wall-clock `started_at_ms/deadline_at_ms` identities. Enforcement uses monotonic
+time; wall timestamps are diagnostic. The proxy survives daemon restarts, so a
+replacement daemon does not reset the deadline.
+
+Expiry enters `cancelling` and dispatches cooperative root/child aborts on a
+separate RPC lane, then kills the owned Babashka process
 group even when a model or tool ignores cancellation. The earliest root/child
 expiry retires the shared worker tree. Private socket authentication cannot block
 the timer, and output from an older generation cannot arm or complete a new run.
 Invalid settings stop the proxy before it starts a worker.
+`QI_AGENT_RUN_CANCEL_GRACE_MS` selects 1–1000 ms (default 250) between expiry and
+retirement. A blocked RPC pipe cannot stall that timer. Further mutations are
+refused during cancellation; read-only snapshots fence matching outcomes as
+uncertain. The proxy retains its session lease until its child has exited.
 
 Before signalling, the proxy writes a private `<descriptor>.watchdog.json` receipt
 (with the `.json` extension replaced), then records the signal result, run IDs,
-generation, limit and `uncertain` / `not-run`. Failure to persist diagnostics is
+generation, deadlines, cancellation request, grace, limit and `uncertain` / `not-run`. Failure to persist diagnostics is
 logged and does not prevent termination. Normal recovery closes interrupted
-native runs as `uncertain/restored` and does not replay them. The exit notification
+native runs as `uncertain/restored` and does not replay them. In a replacement
+generation the runtime checks the host-selected private receipt, matching worker,
+older generation, session and an existing native start. It appends an explicit
+`host-arbitrated` uncertain/hard-wall-timeout correction before admitting work,
+even if the old worker persisted a late completed terminal. The original fact
+remains in the log; the corrective end supersedes it and is not appended again.
+Malformed/oversized host receipts block recovery. The exit notification
 also carries `hard-wall-timeout`. This limits local execution, not remote billing
 or remote side effects already dispatched. It covers native runs observed by the
 Rust proxy, not direct `bb` calls or arbitrary detached processes that escape the

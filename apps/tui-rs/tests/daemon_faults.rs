@@ -564,6 +564,113 @@ struct TestClient {
     counter: u64,
 }
 
+#[test]
+fn native_deadline_survives_daemon_restart_and_preserves_another_root() {
+    let mut harness = Harness::start_with_env(
+        "examples/daemon-approval-mock.edn",
+        &[
+            ("QI_AGENT_RUN_WALL_MS", "3000"),
+            ("QI_AGENT_RUN_CANCEL_GRACE_MS", "200"),
+        ],
+    );
+    let mut client = TestClient::connect(&harness.socket, "deadline-client").unwrap();
+    let created = client
+        .call(
+            None,
+            "agent.create",
+            json!({"workspace":harness.workspace()}),
+            Some("deadline-create"),
+        )
+        .unwrap();
+    let agent = created["agent"]["agent_id"].as_str().unwrap().to_owned();
+    let worker = created["agent"]["worker_id"].as_str().unwrap();
+    let descriptor = harness
+        .root
+        .join("s/workers")
+        .join(format!("{worker}.json"));
+    let session = PathBuf::from(created["agent"]["session_path"].as_str().unwrap());
+    let other_workspace = harness.root.join("other");
+    fs::create_dir(&other_workspace).unwrap();
+    let other = client
+        .call(
+            None,
+            "agent.create",
+            json!({"workspace":other_workspace}),
+            Some("deadline-other-create"),
+        )
+        .unwrap();
+    let other_worker = other["agent"]["worker_id"].as_str().unwrap();
+    let other_descriptor = harness
+        .root
+        .join("s/workers")
+        .join(format!("{other_worker}.json"));
+    let read = |path: &Path| -> Value { serde_json::from_slice(&fs::read(path).unwrap()).unwrap() };
+    let other_before = read(&other_descriptor);
+    client
+        .call(Some(&agent), "agent.attach", json!({}), None)
+        .unwrap();
+    client
+        .call(
+            Some(&agent),
+            "turn.submit",
+            json!({"message":"wait for approval"}),
+            Some("deadline-submit"),
+        )
+        .unwrap();
+    let journal_path = descriptor.with_extension("deadlines.json");
+    let started = Instant::now();
+    let journal = loop {
+        let journal = read(&journal_path);
+        if !journal["runs"].as_array().unwrap().is_empty() {
+            break journal;
+        }
+        assert!(started.elapsed() < PROCESS_TIMEOUT);
+        thread::sleep(Duration::from_millis(20));
+    };
+    let original_deadline = journal["runs"][0]["deadline_at_ms"].clone();
+    let native_run = journal["runs"][0]["run_id"].as_str().unwrap().to_owned();
+    assert_eq!(journal["generation"], 1);
+    drop(client);
+    harness.kill_and_restart_daemon();
+    let mut replacement = TestClient::connect(&harness.socket, "deadline-after-restart").unwrap();
+    replacement
+        .call(None, "daemon.doctor", json!({}), None)
+        .unwrap();
+    let receipt_path = descriptor.with_extension("watchdog.json");
+    loop {
+        if receipt_path.exists() && read(&descriptor)["generation"].as_u64().unwrap_or(0) >= 2 {
+            break;
+        }
+        assert!(started.elapsed() < PROCESS_TIMEOUT);
+        thread::sleep(Duration::from_millis(20));
+    }
+    let receipt = read(&receipt_path);
+    assert_eq!(receipt["runs"][0]["deadline_at_ms"], original_deadline);
+    assert_eq!(receipt["generation"], 1);
+    assert_eq!(receipt["status"], "uncertain");
+    let other_after = read(&other_descriptor);
+    assert_eq!(other_after["generation"], other_before["generation"]);
+    assert_eq!(other_after["child_pid"], other_before["child_pid"]);
+    let deadline = Instant::now() + PROCESS_TIMEOUT;
+    loop {
+        let events: Vec<Value> = fs::read_to_string(&session)
+            .unwrap()
+            .lines()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect();
+        let terminal = events.iter().rev().find(|event| {
+            event["type"] == "agent/run/end" && event["data"]["run-id"] == native_run
+        });
+        if terminal.is_some_and(|event| event["data"]["reason"] == "hard-wall-timeout") {
+            assert_eq!(terminal.unwrap()["data"]["status"], "uncertain");
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert!(!harness.workspace().join("approval.txt").exists());
+}
+
 impl TestClient {
     fn connect(socket: &Path, client_id: &str) -> std::io::Result<Self> {
         let stream = UnixStream::connect(socket)?;

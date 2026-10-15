@@ -39,6 +39,29 @@
 (defn successful? [result]
   (= :completed (:status (normalize result))))
 
+(defn host-deadline-outcomes
+  "Correct terminals from an expired older worker generation in this session.
+  The host's private receipt is authoritative only for its bound identities."
+  [receipt {:keys [worker-id generation session-id]} events]
+  (let [receipt-generation (:generation receipt)
+        starts (set (keep #(when (= "agent/run/start" (:type %)) (get-in % [:data :run-id])) events))
+        corrected (set (keep #(when (and (= "agent/run/end" (:type %))
+                                         (contains? #{:hard-wall-timeout "hard-wall-timeout"} (get-in % [:data :reason]))
+                                         (= receipt-generation (get-in % [:data :host-generation])))
+                                (get-in % [:data :run-id])) events))]
+    (if (and (= 1 (:schema_version receipt)) (= "hard-wall-timeout" (:reason receipt))
+             (= worker-id (:worker_id receipt)) (string? worker-id)
+             (integer? generation) (integer? receipt-generation) (< receipt-generation generation))
+      (->> (:runs receipt)
+           (filter #(and (= session-id (:session_id %)) (string? (:run_id %))
+                         (contains? starts (:run_id %)) (not (contains? corrected (:run_id %)))))
+           (mapv (fn [run]
+                   (assoc (normalize {:status :uncertain :reason :hard-wall-timeout})
+                          :run-id (:run_id run) :usage nil :steps nil
+                          :host-worker-id worker-id :host-generation receipt-generation
+                          :host-arbitrated true :deadline-at-ms (:deadline_at_ms run)))))
+      [])))
+
 (defn from-error [error]
   (normalize (merge (select-keys (ex-data error)
                                 [:run-id :reason :cancelled :usage :steps :code :no-progress])

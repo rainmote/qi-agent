@@ -93,10 +93,20 @@ type ActiveWriter = Arc<Mutex<Option<(u64, UnixStream)>>>;
 type ActiveStdin = Arc<Mutex<Option<BufWriter<ChildStdin>>>>;
 
 /// Host policy, measured with a monotonic clock and independent of provider cooperation.
+struct RunDeadline {
+    start: Instant,
+    started_at_ms: u128,
+    deadline_at_ms: u128,
+    agent_id: Option<String>,
+    session_id: Option<String>,
+}
+
 struct RunWatchdog {
     limit: Option<Duration>,
-    runs: BTreeMap<String, Instant>,
+    runs: BTreeMap<String, RunDeadline>,
     generation: u64,
+    cancel_started: Option<Instant>,
+    grace: Duration,
 }
 
 impl RunWatchdog {
@@ -105,36 +115,129 @@ impl RunWatchdog {
             limit,
             runs: BTreeMap::new(),
             generation: 0,
+            cancel_started: None,
+            grace: Duration::from_millis(250),
         }
     }
 
-    fn observe(&mut self, value: &Value, now: Instant, generation: u64) {
+    fn observe(&mut self, value: &Value, now: Instant, generation: u64) -> bool {
         if generation != self.generation
             || self.limit.is_none()
             || value.get("type").and_then(Value::as_str) != Some("event")
         {
-            return;
+            return false;
         }
         let Some(id) = value.get("run_id").and_then(Value::as_str) else {
-            return;
+            return false;
         };
         match value.get("event").and_then(Value::as_str) {
             Some("agent/run/start") => {
-                self.runs.entry(id.to_owned()).or_insert(now);
+                if self.runs.contains_key(id) || self.expired(now) {
+                    return false;
+                }
+                let started_at_ms = now_ms();
+                self.runs.insert(
+                    id.to_owned(),
+                    RunDeadline {
+                        start: now,
+                        started_at_ms,
+                        deadline_at_ms: started_at_ms
+                            .saturating_add(self.limit.unwrap().as_millis()),
+                        agent_id: value
+                            .get("agent_id")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned),
+                        session_id: value
+                            .get("session_id")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned),
+                    },
+                );
+                true
             }
             Some("agent/run/end") => {
-                self.runs.remove(id);
+                // A terminal delivered at/after the deadline cannot disarm it,
+                // even when the timer thread has not yet observed expiry.
+                if self.expired(now) {
+                    return false;
+                }
+                self.runs.remove(id).is_some()
             }
-            _ => {}
+            _ => false,
         }
     }
 
     fn expired(&self, now: Instant) -> bool {
-        self.limit.is_some_and(|limit| {
-            self.runs
-                .values()
-                .any(|start| now.duration_since(*start) >= limit)
-        })
+        self.cancel_started.is_some()
+            || self.limit.is_some_and(|limit| {
+                self.runs
+                    .values()
+                    .any(|run| now.saturating_duration_since(run.start) >= limit)
+            })
+    }
+
+    fn records(&self) -> Vec<Value> {
+        self.runs
+            .iter()
+            .map(|(id, run)| {
+                json!({
+                    "run_id": id, "agent_id": run.agent_id, "session_id": run.session_id,
+                    "started_at_ms": run.started_at_ms, "deadline_at_ms": run.deadline_at_ms,
+                })
+            })
+            .collect()
+    }
+
+    fn journal(&self, descriptor: &WorkerDescriptor) -> Value {
+        json!({"schema_version":1, "worker_id":descriptor.worker_id,
+            "generation":self.generation,
+            "phase":if self.cancel_started.is_some() {"cancelling"} else {"running"},
+            "runs":self.records(), "cancel_grace_ms":self.grace.as_millis()})
+    }
+
+    fn fence(&self, value: &mut Value, now: Instant) -> bool {
+        if !self.expired(now) {
+            return false;
+        }
+        let terminal = matches!(
+            value.get("event").and_then(Value::as_str),
+            Some("agent/run/end" | "agent.run/end" | "remote/run-result")
+        ) || matches!(
+            value.get("type").and_then(Value::as_str),
+            Some("run-result" | "result")
+        );
+        // Read-only snapshots can arrive during cancellation. A matching run
+        // outcome cannot expose completed while host arbitration is unresolved.
+        self.fence_outcomes(value);
+        terminal
+    }
+
+    fn fence_outcomes(&self, value: &mut Value) {
+        match value {
+            Value::Object(object) => {
+                let id = object
+                    .get("run-id")
+                    .or_else(|| object.get("run_id"))
+                    .and_then(Value::as_str);
+                if id.is_some_and(|id| self.runs.contains_key(id)) && object.contains_key("status")
+                {
+                    object.insert("status".into(), json!("uncertain"));
+                    object.insert("reason".into(), json!("hard-wall-timeout"));
+                    object.insert("stop-reason".into(), json!("restored"));
+                    object.insert("verification".into(), json!("not-run"));
+                    object.insert("host_arbitrated".into(), json!(true));
+                }
+                for child in object.values_mut() {
+                    self.fence_outcomes(child);
+                }
+            }
+            Value::Array(values) => {
+                for child in values {
+                    self.fence_outcomes(child);
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -154,8 +257,8 @@ fn run_wall_limit(value: Option<String>) -> Result<Option<Duration>> {
         .transpose()
 }
 
-fn write_watchdog_receipt(descriptor_path: &Path, value: &Value) -> Result<()> {
-    let path = descriptor_path.with_extension("watchdog.json");
+fn write_worker_record(descriptor_path: &Path, extension: &str, value: &Value) -> Result<()> {
+    let path = descriptor_path.with_extension(extension);
     let temporary =
         descriptor_path.with_extension(format!("watchdog-{}.tmp", uuid::Uuid::new_v4()));
     let mut file = OpenOptions::new()
@@ -169,6 +272,63 @@ fn write_watchdog_receipt(descriptor_path: &Path, value: &Value) -> Result<()> {
     fs::rename(&temporary, &path)?;
     fs::File::open(path.parent().context("watchdog receipt has no parent")?)?.sync_all()?;
     Ok(())
+}
+
+fn write_watchdog_receipt(descriptor_path: &Path, value: &Value) -> Result<()> {
+    write_worker_record(descriptor_path, "watchdog.json", value)
+}
+
+fn cancel_grace(value: Option<String>) -> Result<Duration> {
+    let milliseconds = value
+        .unwrap_or_else(|| "250".into())
+        .parse::<u64>()
+        .context("QI_AGENT_RUN_CANCEL_GRACE_MS must be an integer from 1 to 1000")?;
+    if !(1..=1000).contains(&milliseconds) {
+        bail!("QI_AGENT_RUN_CANCEL_GRACE_MS must be an integer from 1 to 1000");
+    }
+    Ok(Duration::from_millis(milliseconds))
+}
+
+fn request_deadline_cancel(
+    stdin: ActiveStdin,
+    descriptor: Arc<Mutex<WorkerDescriptor>>,
+    generation: u64,
+    agents: Vec<String>,
+) {
+    // A full/busy RPC pipe must not block host enforcement. The old pipe closes
+    // on retirement, and the generation check forbids writing into its replacement.
+    thread::spawn(move || {
+        let mut current = stdin.lock().expect("worker stdin mutex poisoned");
+        if descriptor
+            .lock()
+            .expect("descriptor mutex poisoned")
+            .generation
+            != generation
+        {
+            return;
+        }
+        if let Some(writer) = current.as_mut() {
+            for agent in agents {
+                let root = descriptor
+                    .lock()
+                    .expect("descriptor mutex poisoned")
+                    .agent_id
+                    .clone();
+                let request = if agent == root {
+                    json!({"id":format!("watchdog-{}", uuid::Uuid::new_v4()),"method":"turn.abort","params":{}})
+                } else {
+                    json!({"id":format!("watchdog-{}", uuid::Uuid::new_v4()),"method":"subagent.invoke",
+                        "params":{"agent_id":agent,"method":"turn.abort","params":{}}})
+                };
+                if serde_json::to_writer(&mut *writer, &request).is_err()
+                    || writer.write_all(b"\n").is_err()
+                    || writer.flush().is_err()
+                {
+                    break;
+                }
+            }
+        }
+    });
 }
 
 pub fn read_descriptor(path: &Path) -> Result<WorkerDescriptor> {
@@ -200,6 +360,12 @@ pub fn serve(descriptor_path: &Path) -> Result<()> {
         Err(error) => return Err(error).context("invalid QI_AGENT_RUN_WALL_MS"),
     };
     let watchdog = Arc::new(Mutex::new(RunWatchdog::new(wall_limit)));
+    watchdog.lock().expect("watchdog mutex poisoned").grace =
+        match std::env::var("QI_AGENT_RUN_CANCEL_GRACE_MS") {
+            Ok(value) => cancel_grace(Some(value))?,
+            Err(std::env::VarError::NotPresent) => cancel_grace(None)?,
+            Err(error) => return Err(error).context("invalid QI_AGENT_RUN_CANCEL_GRACE_MS"),
+        };
     let descriptor_path = descriptor_path.to_path_buf();
     let descriptor = read_descriptor(&descriptor_path)?;
     let log_directory = RuntimePaths::discover()?.logs_dir;
@@ -267,6 +433,7 @@ pub fn serve(descriptor_path: &Path) -> Result<()> {
                 let events = Arc::clone(&event_buffer);
                 let descriptor = Arc::clone(&live_descriptor);
                 let shutdown = Arc::clone(&shutdown_requested);
+                let watchdog = Arc::clone(&watchdog);
                 let log_directory = log_directory.clone();
                 thread::spawn(move || {
                     if let Err(error) = authenticate_and_attach(
@@ -279,6 +446,7 @@ pub fn serve(descriptor_path: &Path) -> Result<()> {
                         Arc::clone(&descriptor),
                         shutdown,
                         latest_epoch,
+                        watchdog,
                     ) {
                         let worker_id = &descriptor
                             .lock()
@@ -298,13 +466,44 @@ pub fn serve(descriptor_path: &Path) -> Result<()> {
 
         {
             let mut timer = watchdog.lock().expect("watchdog mutex poisoned");
-            if timer.expired(Instant::now()) {
+            let now = Instant::now();
+            if timer.expired(now) && timer.cancel_started.is_none() {
+                timer.cancel_started = Some(now);
+                let current = live_descriptor.lock().expect("descriptor mutex poisoned");
+                if let Err(error) = write_worker_record(
+                    &descriptor_path,
+                    "deadlines.json",
+                    &timer.journal(&current),
+                ) {
+                    append_log(
+                        &log_directory,
+                        &descriptor.worker_id,
+                        &format!("deadline cancellation persistence failed: {error:#}\n"),
+                    );
+                }
+                let mut agents = vec![current.agent_id.clone()];
+                agents.extend(timer.runs.values().filter_map(|run| run.agent_id.clone()));
+                agents.sort();
+                agents.dedup();
+                request_deadline_cancel(
+                    Arc::clone(&stdin),
+                    Arc::clone(&live_descriptor),
+                    current.generation,
+                    agents,
+                );
+            }
+            if !hard_timeout
+                && timer
+                    .cancel_started
+                    .is_some_and(|start| now.saturating_duration_since(start) >= timer.grace)
+            {
                 let current = live_descriptor.lock().expect("descriptor mutex poisoned");
                 let mut receipt = json!({
-                    "reason": "hard-wall-timeout", "status": "uncertain",
+                    "schema_version":1, "reason": "hard-wall-timeout", "status": "uncertain",
                     "verification": "not-run", "generation": current.generation,
                     "worker_id": current.worker_id, "child_pid": child.id(),
                     "run_ids": timer.runs.keys().collect::<Vec<_>>(),
+                    "runs":timer.records(), "cancel_requested":true, "cancel_grace_ms":timer.grace.as_millis(),
                     "at_ms": now_ms(), "limit_ms": wall_limit.map(|limit| limit.as_millis()),
                     "signal_sent": false
                 });
@@ -456,6 +655,10 @@ fn start_babashka(
         let mut timer = watchdog.lock().expect("watchdog mutex poisoned");
         timer.runs.clear();
         timer.generation = snapshot.generation;
+        timer.cancel_started = None;
+        if timer.limit.is_some() {
+            write_worker_record(descriptor_path, "deadlines.json", &timer.journal(&snapshot))?;
+        }
     }
     let own_process_group = watchdog
         .lock()
@@ -493,6 +696,10 @@ fn start_babashka(
         .stderr(Stdio::piped());
     if own_process_group {
         command.process_group(0);
+        command.env(
+            "QI_AGENT_HOST_DEADLINE_RECEIPT",
+            descriptor_path.with_extension("watchdog.json"),
+        );
     }
     if let Some(backend) = &snapshot.repl_backend {
         command
@@ -566,6 +773,7 @@ fn authenticate_and_attach(
     descriptor: Arc<Mutex<WorkerDescriptor>>,
     shutdown_requested: Arc<AtomicBool>,
     latest_epoch: Arc<AtomicU64>,
+    watchdog: SharedWatchdog,
 ) -> Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(3)))?;
     let mut reader = BufReader::new(stream.try_clone()?);
@@ -616,6 +824,36 @@ fn authenticate_and_attach(
         for line in reader.lines() {
             let Ok(line) = line else { break };
             if line.trim().is_empty() {
+                continue;
+            }
+            let request = serde_json::from_str::<Value>(&line).unwrap_or(Value::Null);
+            let method = request
+                .get("method")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let allowed_during_cancel = matches!(
+                method,
+                "shutdown"
+                    | "turn.abort"
+                    | "turn.state"
+                    | "session.snapshot"
+                    | "session.events"
+                    | "runtime.status"
+                    | "remote.methods"
+            ) || (method == "subagent.invoke"
+                && request.pointer("/params/method").and_then(Value::as_str) == Some("turn.abort"));
+            if !allowed_during_cancel
+                && watchdog
+                    .lock()
+                    .expect("watchdog mutex poisoned")
+                    .expired(Instant::now())
+            {
+                send_active(
+                    &active,
+                    &json!({"version":1,"type":"response","id":request.get("id"),"ok":false,
+                    "error":{"message":"Worker deadline expired; reconcile before resubmitting",
+                        "data":{"type":"deadline_cancelling"}}}),
+                );
                 continue;
             }
             if serde_json::from_str::<Value>(&line)
@@ -682,11 +920,23 @@ fn spawn_stdout_reader(
             {
                 break;
             }
-            watchdog.lock().expect("watchdog mutex poisoned").observe(
-                &value,
-                Instant::now(),
-                generation,
-            );
+            {
+                let mut timer = watchdog.lock().expect("watchdog mutex poisoned");
+                let now = Instant::now();
+                if timer.observe(&value, now, generation) {
+                    let current = descriptor.lock().expect("descriptor mutex poisoned");
+                    if let Err(error) = write_worker_record(
+                        &descriptor_path,
+                        "deadlines.json",
+                        &timer.journal(&current),
+                    ) {
+                        eprintln!("worker deadline journal persistence failed: {error:#}");
+                    }
+                }
+                if timer.fence(&mut value, now) {
+                    continue;
+                }
+            }
             let kind = value
                 .get("type")
                 .and_then(Value::as_str)
@@ -808,7 +1058,7 @@ mod tests {
             2,
         );
         timer.observe(&event("agent/run/start", "old"), start, 1);
-        assert!(!timer.expired(start + Duration::from_secs(1)));
+        assert!(timer.expired(start + Duration::from_secs(1)));
     }
 
     #[test]
@@ -821,6 +1071,52 @@ mod tests {
         for invalid in ["", "0", "-1", "1.5", "99999999999999999999999"] {
             assert!(run_wall_limit(Some(invalid.into())).is_err());
         }
+        assert_eq!(cancel_grace(None).unwrap(), Duration::from_millis(250));
+        for invalid in ["0", "-1", "1001", "x"] {
+            assert!(cancel_grace(Some(invalid.into())).is_err());
+        }
+    }
+
+    #[test]
+    fn deadline_wins_equal_and_late_terminal_races_and_fences_snapshots() {
+        let start = Instant::now();
+        for offset in [100, 101] {
+            let mut timer = RunWatchdog::new(Some(Duration::from_millis(100)));
+            timer.generation = 1;
+            timer.observe(
+                &json!({"type":"event","event":"agent/run/start","run_id":"r"}),
+                start,
+                1,
+            );
+            let now = start + Duration::from_millis(offset);
+            timer.observe(
+                &json!({"type":"event","event":"agent/run/end","run_id":"r"}),
+                now,
+                1,
+            );
+            assert!(timer.expired(now));
+            let mut terminal = json!({"type":"event","event":"agent/run/end","run_id":"r"});
+            assert!(timer.fence(&mut terminal, now));
+            let mut snapshot = json!({"type":"response","result":{"last-outcome":{"run-id":"r","status":"completed"}}});
+            assert!(!timer.fence(&mut snapshot, now));
+            assert_eq!(
+                snapshot.pointer("/result/last-outcome/status"),
+                Some(&json!("uncertain"))
+            );
+        }
+        let mut timer = RunWatchdog::new(Some(Duration::from_millis(100)));
+        timer.generation = 1;
+        timer.observe(
+            &json!({"type":"event","event":"agent/run/start","run_id":"r"}),
+            start,
+            1,
+        );
+        timer.observe(
+            &json!({"type":"event","event":"agent/run/end","run_id":"r"}),
+            start + Duration::from_millis(99),
+            1,
+        );
+        assert!(!timer.expired(start + Duration::from_millis(200)));
     }
 
     #[test]

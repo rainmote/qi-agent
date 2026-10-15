@@ -3,6 +3,7 @@
   (:require [qi.attachments :as attachments]
             [qi.cancellation :as cancellation]
             [qi.generation :as generation]
+            [qi.env :as env]
             [qi.kernel :as kernel]
             [qi.run-outcome :as outcome]
             [qi.run-progress :as run-progress]
@@ -10,6 +11,7 @@
             [qi.schema :as schema]
             [qi.system-prompt :as system]
             [cheshire.core :as json]
+            [clojure.java.io :as io]
             [clojure.string :as str]))
 
 (defn- record! [ctx type data]
@@ -841,8 +843,26 @@
       (publish! ctx listeners :queue/changed {:queue @queue})
       item)))
 
+(defn- host-deadline-receipt []
+  (when-let [path (env/get "QI_AGENT_HOST_DEADLINE_RECEIPT")]
+    (let [file (io/file path)]
+      (when (.exists file)
+        (with-open [input (io/input-stream file)]
+          (let [bytes (.readNBytes input 262145)]
+            (when (> (alength bytes) 262144)
+              (throw (ex-info "Host deadline receipt exceeds its read bound" {})))
+            (json/parse-string (String. bytes java.nio.charset.StandardCharsets/UTF_8) true)))))))
+
 (defn- recover-interrupted-runs! [ctx]
   (let [store (kernel/require-service ctx :session/store)
+        receipt (host-deadline-receipt)
+        _ (doseq [terminal (outcome/host-deadline-outcomes
+                            receipt {:worker-id (env/get "QI_AGENT_WORKER_ID")
+                                     :generation (some-> (env/get "QI_AGENT_WORKER_GENERATION") parse-long)
+                                     :session-id (:session-id store)} ((:events store)))]
+            ;; Keep the original late fact and append an explicit host correction.
+            ;; Never dispatch another provider request before it is durable.
+            (record! ctx "agent/run/end" terminal))
         pending (reduce (fn [runs event]
                           (let [id (get-in event [:data :run-id])]
                             (case (:type event)
