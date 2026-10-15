@@ -3241,7 +3241,7 @@ impl Runtime {
                     worker.alive.store(false, Ordering::SeqCst);
                 }
                 if !wait_for_worker_stop(&descriptor_path, descriptor.pid, Duration::from_secs(5)) {
-                    terminate_worker_process_group(descriptor.pid);
+                    terminate_worker_groups(&descriptor);
                 }
                 retire_orphaned_worker(&descriptor)?;
                 self.database
@@ -5309,29 +5309,47 @@ fn retire_orphaned_worker(descriptor: &WorkerDescriptor) -> Result<()> {
         bail!("existing worker proxy is still alive; refusing a second session writer")
     }
     if let Some(group) = descriptor.pid {
+        let child_group = descriptor.child_process_group.unwrap_or(group);
+        if descriptor.child_process_group.is_some()
+            && descriptor.child_pid.is_some_and(|pid| pid != child_group)
+        {
+            bail!("orphan worker process group does not match its recorded child")
+        }
         if let Some(child_pid) = descriptor.child_pid.filter(|pid| process_alive(Some(*pid)))
-            && unsafe { libc::getpgid(child_pid as i32) } != group as i32
+            && unsafe { libc::getpgid(child_pid as i32) } != child_group as i32
         {
             bail!("orphan worker process ownership could not be verified")
         }
-        // Tools can survive both the proxy and its BB child. A group without
-        // its original leader still belongs to that worker session.
-        if unsafe { libc::kill(-(group as i32), 0) } == 0 {
-            terminate_worker_process_group(Some(group));
-            let deadline = std::time::Instant::now() + Duration::from_secs(5);
-            while unsafe { libc::kill(-(group as i32), 0) } == 0
-                && std::time::Instant::now() < deadline
-            {
-                thread::sleep(Duration::from_millis(20));
-            }
+        // New watchdog workers have an explicitly recorded BB group. Legacy
+        // workers share the proxy group. Retire both before another writer.
+        let mut groups = vec![group, child_group];
+        groups.sort_unstable();
+        groups.dedup();
+        for group in groups {
             if unsafe { libc::kill(-(group as i32), 0) } == 0 {
-                bail!("orphan worker tools have not exited; refusing a second session writer")
+                terminate_worker_process_group(Some(group));
+                let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                while unsafe { libc::kill(-(group as i32), 0) } == 0
+                    && std::time::Instant::now() < deadline
+                {
+                    thread::sleep(Duration::from_millis(20));
+                }
+                if unsafe { libc::kill(-(group as i32), 0) } == 0 {
+                    bail!("orphan worker tools have not exited; refusing a second session writer")
+                }
             }
         }
     } else if process_alive(descriptor.child_pid) {
         bail!("orphan worker has no recorded process group")
     }
     Ok(())
+}
+
+fn terminate_worker_groups(descriptor: &WorkerDescriptor) {
+    if let Some(group) = descriptor.child_process_group {
+        terminate_worker_process_group(Some(group));
+    }
+    terminate_worker_process_group(descriptor.pid);
 }
 
 fn terminate_worker_process_group(pid: Option<u32>) {
@@ -5363,7 +5381,7 @@ fn terminate_failed_worker_start(
         }
         return;
     };
-    terminate_worker_process_group(descriptor.pid.or(fallback_pid));
+    terminate_worker_groups(&descriptor);
     let _ = fs::remove_file(&descriptor.socket_path);
     if remove_descriptor {
         let _ = fs::remove_file(descriptor_path);
@@ -5939,6 +5957,7 @@ mod tests {
             generation: 4,
             pid: None,
             child_pid: None,
+            child_process_group: None,
             session_id: Some("session-1".into()),
             status: "running".into(),
             started_at_ms: 0,
@@ -6492,6 +6511,7 @@ mod tests {
             generation: 1,
             pid: None,
             child_pid: None,
+            child_process_group: None,
             session_id: None,
             status: "running".into(),
             started_at_ms: 0,
