@@ -77,6 +77,26 @@ test('disabled and out-of-window ticks are silent; pause works without acquiring
   await resume(f); assert.equal(await fs.stat(path.join(f.root, 'pause.json')).then(() => true, () => false), false);
 });
 
+test('scheduled DeepSeek tasks require the dedicated key before qualification and never borrow an OpenAI key', async (t) => {
+  const before = { DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY, OPENAI_API_KEY: process.env.OPENAI_API_KEY };
+  t.after(() => {
+    for (const [key, value] of Object.entries(before)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  });
+  for (const hasKey of [false, true]) {
+    const f = await fixture(t);
+    f.budget = { ...f.budget, provider: 'deepseek', model: 'deepseek-flash', effort: 'high' };
+    await enqueue(f);
+    if (hasKey) { process.env.DEEPSEEK_API_KEY = 'fixture-only'; delete process.env.OPENAI_API_KEY; }
+    else { delete process.env.DEEPSEEK_API_KEY; process.env.OPENAI_API_KEY = 'wrong-provider-fixture'; }
+    const result = await tick(f);
+    assert.equal(result.status, 'paused');
+    assert.match(result.reason, hasKey ? /development trial/ : /DEEPSEEK_API_KEY/);
+    assert.equal((await readJournal(f.root)).some((e) => e.type === 'budget/reserved' || e.type === 'task/created'), false);
+  }
+});
+
 test('container recovery verifies ownership and removes the inspected immutable ID', async () => {
   const name = 'qi-maint-' + 'a'.repeat(36), owner = 'b'.repeat(36), id = 'c'.repeat(64), calls = [];
   const run = async (_, args) => { calls.push(args); return args[0] === 'inspect' ?

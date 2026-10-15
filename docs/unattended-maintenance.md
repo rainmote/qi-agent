@@ -4,17 +4,27 @@
 
 ## 费用与权限边界
 
-付费入口为 `run --budgeted-live --budget /absolute/budget.json`。候选容器完全断网，不持有 API key；容器内 HTTP relay 只向专用 `/gateway` 目录写请求。宿主 broker 检查路由、模型和请求类型，持久化费用预留后才向固定的 OpenAI Responses 地址发出一次请求。禁止重定向、远程图片/文件、托管工具、会话引用与后台生成。普通函数工具的执行仍在候选容器内。
+付费入口为 `run --budgeted-live --budget /absolute/budget.json`。候选容器完全断网，不持有 API key；容器内 HTTP relay 只向专用 `/gateway` 目录写请求。宿主 broker 检查路由、模型和请求类型，持久化费用预留后才向审核过的固定供应商地址发出一次请求。`provider: openai` 使用 `https://api.openai.com/v1/responses` 与宿主 `OPENAI_API_KEY`；`provider: deepseek` 使用 `https://api.deepseek.com/responses` 与宿主 `DEEPSEEK_API_KEY`。旧预算省略 provider 时仍按 OpenAI 处理；DeepSeek 模型必须显式选择供应商，不能借用另一家的凭据。禁止自定义地址、重定向、远程图片/文件、托管工具、会话引用与后台生成。普通函数工具的执行仍在候选容器内。
 
 `budget.json` 必须明确模型、effort、单任务/滚动 24 小时费用、请求数、模型完整上下文窗口、输出上限，以及有来源和失效时间的价格上界。价格需覆盖该模型所有输入档位和缓存写入收费；缓存命中按普通输入价格计，不预先使用折扣。每次预留 `完整输入窗口 × 输入价格上界 + 输出上限 × 输出价格上界`，并向上取整到微美元。额度不足时不会调用模型；余额尚够实际短请求却不足最坏预留时，同样停止。
 
-只有返回匹配模型、默认服务档位和有效 token 用量，才释放未使用的预留。失败、超时、响应丢失或费用字段不明时保留整笔占额，阻断所有新请求，重启和跨日不能清零。无论调用来自主循环、压缩还是工具直接访问代理，都经过同一个宿主预算。
+只有返回匹配模型、允许的服务档位和有效 token 用量，才释放未使用的预留。OpenAI 必须返回默认档位；DeepSeek 不支持档位选择，允许该字段缺失／null／default，其他值阻断。失败、超时、响应丢失或费用字段不明时保留整笔占额，阻断所有新请求，重启和跨日不能清零。无论调用来自主循环、压缩还是工具直接访问代理，都经过同一个宿主预算。
 
 这保证的是**审核价格配置下的请求费用上界**，不是供应商最终账单证明。`invoice_cost_usd` / `total_cost_usd` 继续保留为 null。模型窗口或价格填错会破坏上界假设，应使用专用项目凭据并在供应商侧另设可用的消费限制。未知费用只能凭实际提供方回执使用 `reconcile-budget --review receipt.json` 对账；`resume` 不会抹掉费用。
 
 请求账本保留原生 run/root-run、compaction-id 与分片序号；代理记录自己的不可复用请求 ID，并关联原生逻辑请求 ID。`run/end.request-usage` 汇总主调用、压缩和失败请求的已知 token 与未知请求数；原 `usage` 字段保留主循环统计语义。维护 worker 另有 64 个逻辑请求、32 步、35 分钟实现上限，外层继续强制 45 分钟总时间。
 
 API 字段依据：[Responses API](https://developers.openai.com/api/reference/resources/responses/methods/create)、[token 用量说明](https://developers.openai.com/api/docs/guides/token-counting)、[推理模型的上下文传递](https://developers.openai.com/api/docs/guides/reasoning)。`max_output_tokens` 包含推理与可见输出，不以输出文本长度代替账本。工具往返保留完整 reasoning item、ID 和加密内容，用于 `store=false` 的无状态上下文；禁止 `previous_response_id` 和 `item_reference` 等服务器端引用。加密上下文的输入 token 也包含在完整窗口预留中。
+
+### DeepSeek V4.1 Flash
+
+使用 `budget.deepseek.example.json`；2026-10-15 核对的官方 API 名称为 `deepseek-flash`，不是模型版本文字 `deepseek-v4.1-flash`。允许 effort 为 `none/low/high/max`，默认模板选择官方默认 `high`。模型与预算变更需要重新生成 profile 并重新取得真实 dev／heldout 资格。
+
+DeepSeek 的 Responses 接口返回明文 `reasoning.content`。代理完整回传该内容及工具调用身份，不要求 OpenAI 的 summary／密文；带有无法回传的加密上下文或非空 summary 会被拒绝。DeepSeek 请求不发送 `include`、`service_tier`、`background` 或 `truncation`，其接口本身无状态，超出窗口会拒绝。仍只允许文本和普通函数工具。
+
+预算应使用**峰值、未命中缓存**的输入价格和峰值输出价格，覆盖跨时段请求；已缓存 token 和推理 token 均纳入原始总量，不额外使用折扣。模板的 1,048,576 token 是对官方 1M 窗口的保守上界；价格、有效期和金额必须另填。生成的 DeepSeek profile 仅能配合预算代理使用，不读取宿主真实 key，也不支持旧的 `--supervised-live` 直连路径。
+
+依据：[官方模型与价格](https://api-docs.deepseek.com/quick_start/pricing/)、[effort](https://api-docs.deepseek.com/guides/thinking_mode/)、[Responses 兼容说明](https://api-docs.deepseek.com/guides/responses_api/)、[请求和用量字段](https://api-docs.deepseek.com/api/create-response/)。离线回归覆盖固定域名与凭据选择、工具往返中的明文上下文、无档位用量结算、异常用量保留占额，以及真实 Babashka worker／relay／模拟模型的文件写入；这些检查不代表已完成真实 DeepSeek 调用。
 
 ## 工具链与验收
 
@@ -34,7 +44,7 @@ qi-smoke 对 qi 自身的已知压缩记账缺陷运行完整 baseline、有效 
 
 ## 首次配置与资格试跑
 
-1. 使用干净的、单独审查过的控制器 checkout；复制 `budget.example.json` 并填写真实模型、审核价格和额度。占位符不会通过校验。API key 仅通过宿主的 `OPENAI_API_KEY` 环境变量提供，不写入 JSON、命令参数、镜像或 vault。
+1. 使用干净的、单独审查过的控制器 checkout；复制对应供应商的 budget 示例并填写真实模型、审核价格和额度。占位符不会通过校验。API key 仅通过宿主对应的 `OPENAI_API_KEY` 或 `DEEPSEEK_API_KEY` 环境变量提供，不写入 JSON、命令参数、镜像或 vault。
 2. 生成匹配的专用 profile：`node maintenance/profile.mjs MODEL EFFORT /absolute/agent.edn /absolute/budget.json`。
 3. 填写两个独立任务合同，`split` 分别为 `dev` 和 `heldout`；留出题的答案不能出现在控制器、镜像、提示词或候选可读材料里。每个任务固定镜像、base SHA、允许文件、可信验收目录与检查清单。
 4. 分别执行 `prepare`、`run --budgeted-live`，通过后执行 `record-trial`。`trial_passed` 是评测证据，不是人工接受或合入。每次先完成上一任务，再准备下一任务。

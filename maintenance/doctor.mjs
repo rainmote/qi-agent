@@ -4,6 +4,7 @@ import { promises as fs } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { git, immutableImage } from './lib/execution.mjs';
 import { validateBudget, budgetSnapshot } from './lib/budget.mjs';
+import { providerConfig, providerCredential } from './lib/provider.mjs';
 import { readJournal, encode } from './lib/store.mjs';
 import { scheduleSlot } from './lib/runner.mjs';
 import { runProcess } from '../evals/lib/core.mjs';
@@ -17,7 +18,11 @@ async function check(name, fn) {
 }
 await check('controller', () => { if (git(controller, 'status', '--porcelain')) throw new Error('Controller must be committed and clean'); return git(controller, 'rev-parse', 'HEAD'); });
 await check('budget', async () => { validateBudget(JSON.parse(await fs.readFile(args.budget, 'utf8'))); return 'Reviewed model, price ceiling and limits configured'; });
-await check('credential', () => { if (!process.env.OPENAI_API_KEY) throw new Error('Dedicated OPENAI_API_KEY is not configured'); return 'present (value not inspected or printed)'; });
+await check('credential', async () => {
+  const budget = JSON.parse(await fs.readFile(args.budget, 'utf8'));
+  providerCredential(budget);
+  return providerConfig(budget).credentialEnv + ' present (value not printed)';
+});
 await check('image', async () => {
   immutableImage(args.image);
   const result = await runProcess('docker', ['image', 'inspect', '--format', '{{.Id}} {{.Os}}/{{.Architecture}}', args.image], { timeoutMs: 10_000 });

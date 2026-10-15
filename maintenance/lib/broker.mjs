@@ -4,9 +4,11 @@ import { promises as fs, constants } from 'node:fs';
 import path from 'node:path';
 import { reserveRequest, settleRequest, validateBudget } from './budget.mjs';
 import { durableWrite, encode } from './store.mjs';
+import { providerConfig, providerCredential } from './provider.mjs';
 
 const MAX_BYTES = 2 * 1024 * 1024;
 export function providerBody(body, config) {
+  const provider = providerConfig(config);
   if (!body || typeof body !== 'object' || body.model !== config.model ||
       (body.tools ?? []).some((tool) => tool.type !== 'function') ||
       !Array.isArray(body.input)) throw new Error('Only the approved model and stateless text/function inputs are allowed');
@@ -15,7 +17,13 @@ export function providerBody(body, config) {
   for (const item of body.input) {
     if (!item || !['message', 'function_call', 'function_call_output', 'reasoning'].includes(item.type ?? 'message')) throw new Error('Unsupported input item');
     if (item.type === 'reasoning') {
-      if (typeof item.id !== 'string' || !Array.isArray(item.summary) ||
+      if (provider.id === 'deepseek') {
+        if (typeof item.id !== 'string' || !Array.isArray(item.content) ||
+            item.content.some((part) => part?.type !== 'reasoning_text' || typeof part.text !== 'string') ||
+            item.encrypted_content != null || (item.summary != null && (!Array.isArray(item.summary) || item.summary.length))) {
+          throw new Error('DeepSeek reasoning requires self-contained plaintext content');
+        }
+      } else if (typeof item.id !== 'string' || !Array.isArray(item.summary) ||
           (item.encrypted_content != null && typeof item.encrypted_content !== 'string')) throw new Error('Invalid self-contained reasoning item');
     } else if (item.type === 'function_call_output') {
       if (typeof item.output !== 'string') throw new Error('Only text function results are enabled');
@@ -30,10 +38,14 @@ export function providerBody(body, config) {
   // Replay complete output items, including required reasoning IDs/ciphertext.
   // This is stateless context, not a server-side response/item reference; the
   // full-window reservation also covers its input tokens.
-  return { model: config.model, instructions: body.instructions, input: body.input, tools: body.tools ?? [],
-    include: ['reasoning.encrypted_content'],
-    tool_choice: 'auto', parallel_tool_calls: true, reasoning: { effort: config.effort },
-    store: false, stream: false, background: false, truncation: 'disabled', service_tier: 'default', max_output_tokens: config.max_output_tokens };
+  const common = { model: config.model, instructions: body.instructions, input: body.input, tools: body.tools ?? [],
+    tool_choice: 'auto', reasoning: { effort: config.effort }, stream: false, max_output_tokens: config.max_output_tokens };
+  // DeepSeek is always stateless, rejects oversized context and returns plain
+  // reasoning content; encrypted include / tier / truncation have no meaning.
+  if (provider.id === 'deepseek') return common;
+  return { ...common,
+    include: ['reasoning.encrypted_content'], parallel_tool_calls: true,
+    store: false, background: false, truncation: 'disabled', service_tier: 'default' };
 }
 
 async function boundedJSON(file) {
@@ -49,9 +61,11 @@ async function boundedJSON(file) {
 }
 
 export async function startBroker({ root, lock, config, taskId, runId, deadline, directory,
-  credential = process.env.OPENAI_API_KEY, fetchImpl = fetch, stopped = async () => false }) {
+  credential, fetchImpl = fetch, stopped = async () => false }) {
   validateBudget(config);
-  if (!credential) throw new Error('Missing dedicated OPENAI_API_KEY');
+  const provider = providerConfig(config);
+  credential ??= providerCredential(config);
+  if (!credential.trim()) throw new Error('Missing dedicated ' + provider.credentialEnv);
   await fs.mkdir(directory, { recursive: false, mode: 0o700 });
   let closing = false, fatal = null, timer, activeAbort;
   const seen = new Set();
@@ -85,7 +99,7 @@ export async function startBroker({ root, lock, config, taskId, runId, deadline,
           const abortAt = setTimeout(() => activeAbort?.abort(), Math.max(1, Math.min(180_000, deadline - Date.now())));
           let response;
           try {
-            const upstream = await fetchImpl('https://api.openai.com/v1/responses', { method: 'POST', redirect: 'error',
+            const upstream = await fetchImpl(provider.endpoint, { method: 'POST', redirect: 'error',
               headers: { authorization: 'Bearer ' + credential, 'content-type': 'application/json' },
               body: JSON.stringify(body), signal: activeAbort.signal });
             // Read a bounded response without forwarding headers or error text.

@@ -1,7 +1,9 @@
 import { readJournal, digest, encode, putArtifact } from './store.mjs';
+import { providerConfig, knownServiceTier } from './provider.mjs';
 
 const positive = (v) => Number.isFinite(v) && v > 0;
 export function validateBudget(config) {
+  providerConfig(config);
   if (config?.schema_version !== 1 || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(config.model ?? '') ||
       !/^[a-z][a-z_-]*$/.test(config.effort ?? '') ||
       !positive(config.task_usd) || !positive(config.daily_usd) || config.task_usd > config.daily_usd ||
@@ -67,7 +69,7 @@ async function reserve({ root, lock, config, taskId, runId, requestId, deadline,
   if (usage.task_microusd + reserved > Math.floor(config.task_usd * 1e6) ||
       usage.daily_microusd + reserved > Math.floor(config.daily_usd * 1e6)) throw new Error('cost-budget');
   const data = { task_id: taskId, run_id: runId, request_id: requestId, reserved_microusd: reserved,
-    config_hash: digest(encode(config)), model: config.model, scope: usage.scope,
+    config_hash: digest(encode(config)), provider: providerConfig(config).id, model: config.model, scope: usage.scope,
     logical_request_id: accounting.logical_request_id ?? null, native_run_id: accounting.native_run_id ?? null,
     purpose: accounting.purpose ?? null };
   await lock.append('budget/reserved', data); // fsync before any provider call
@@ -91,7 +93,7 @@ export async function reconcileBudget({ root, lock, receipt }) {
 export async function settleRequest({ lock, reservation, config, response }) {
   const usage = response?.usage;
   const known = ['completed', 'incomplete', 'failed', 'cancelled'].includes(response?.status) &&
-    response.model === config.model && response.service_tier === 'default' &&
+    response.model === config.model && knownServiceTier(config, response) &&
     Number.isSafeInteger(usage?.input_tokens) && usage.input_tokens >= 0 && usage.input_tokens <= config.context_window_tokens &&
     Number.isSafeInteger(usage?.output_tokens) && usage.output_tokens >= 0 && usage.output_tokens <= config.max_output_tokens;
   const charged = known ? Math.ceil(usage.input_tokens * config.input_usd_per_million + usage.output_tokens * config.output_usd_per_million) : reservation.reserved_microusd;
