@@ -22,6 +22,8 @@
 
 `maintenance/host-controller.sh` 在镜像内运行可信 Node 控制器，并将专用目录以完全相同的绝对路径挂载。控制器通过宿主 Docker 创建同级验收容器，因此路径不能映射成另一个名字。宿主不必全局安装 Node。
 
+宿主预检查使用 `git --no-optional-locks status`，禁止 root 调用者刷新并替换非 root checkout 的 index；Git 检查失败立即停止。若从已有镜像启动已固定的旧控制器，可将另行审查的新版 launcher 放在专用根目录，记录 launcher 的提交与哈希，同时保持 `ROOT/repo`、镜像和 controller_sha 原样；不把旧 CI 结论套到新控制器源码上。
+
 此可信控制器持有 Docker socket，具有启动宿主容器的能力，必须运行已审查的精确源码。候选和验收容器不挂载 Docker socket；它们断网、非 root、根目录只读，只能写自己的工作区。脚本不接受任意程序，仅接受四种离线 smoke 入口。
 
 每次使用新的 `evidence/` 目录，依次执行，任一失败停止并保留输出：

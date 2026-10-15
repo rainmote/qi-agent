@@ -16,7 +16,10 @@ printf '%s\n' "$image" | LC_ALL=C grep -Eq '^sha256:[a-f0-9]{64}$'
 case "$smoke" in broker-smoke|worker-smoke|container-smoke|qi-smoke) ;; *) exit 2 ;; esac
 repo=$root/repo
 [ "$(git -c safe.directory="$repo" -C "$repo" rev-parse HEAD)" = "$source" ]
-[ -z "$(git -c safe.directory="$repo" -C "$repo" status --porcelain)" ]
+# Root may invoke this launcher for a non-root checkout. Optional index refresh
+# would replace its index with a root-owned file. Also propagate status errors.
+checkout_status=$(git --no-optional-locks -c safe.directory="$repo" -C "$repo" status --porcelain)
+[ -z "$checkout_status" ]
 [ "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$image")" = linux/arm64 ]
 owner_uid=$(stat -c %u "$root")
 owner_gid=$(stat -c %g "$root")
