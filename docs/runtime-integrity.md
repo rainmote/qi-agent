@@ -108,17 +108,21 @@ worker process group; tool-group guards and outer container/PID limits remain
 separate. Host scheduling and storage delays can add latency to enforcement.
 
 
-The default loop stops three consecutive identical read-tool batches with
-`failed/no-progress`; `no-progress` retains the result fingerprint and last three
-call IDs. Arguments and canonical result values are normalized independently of
-call IDs and execution timing. Changed results, consumed steering/follow-ups,
-and successful sequential mutations reset the counter. A steer accepted during
-the threshold batch still reaches its next model boundary. Explicit polling
-tools (`job_output`, `job_list`, `wait_agent`, `list_agents`, or a plugin declaring
-`:progress-mode :poll`) use a separate finite limit of 32 unchanged batches.
-`max-repeated-tool-results` and `max-stalled-polls` can narrow these limits.
-This detects consecutive unchanged batches, not arbitrary alternating loops or
-semantic task completion. It never retries, rolls back, or replays an operation.
+The default loop stops after three unchanged read results, including short cycles
+in a bounded eight-batch fingerprint window, with `failed/no-progress`. The last
+three call IDs, result fingerprints and evidence gap are retained. Arguments and
+canonical results ignore IDs and timing. Successful sequential mutations and
+consumed steering/follow-ups reset tracking; changing results do not accumulate
+identical fingerprints. Explicit polling tools retain their separate finite cap
+of 32 consecutive unchanged batches. Configuration can narrow these limits.
+
+The terminal includes one `diagnostic-plan`: a read-only suggestion to inspect a
+different source/revision, with the original run/root IDs, request count/limit and
+deadline. This is data for inspection, never an automatic dispatch or a fresh
+budget. An explicitly uncertain action stops immediately with a reconciliation-only
+suggestion; it is not dispatched a second time. Cancellation still wins and
+keeps its own terminal. No retry, replay, rollback or directory reset is added.
+The bounded window does not identify arbitrary semantic loops or completion.
 
 Read-only batches use at most four worker futures by default, configurable with
 `max-parallel-tools`. Approval stays serial, mixed sequential batches stay serial,

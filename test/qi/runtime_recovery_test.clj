@@ -641,3 +641,41 @@
       (is (= "done" (:content (progress-attempt ctx))))
       (is (= 5 @bodies))
       (finally (kernel/dispose-all! ctx)))))
+
+(deftest alternating-read-cycle-produces-one-budget-bound-diagnostic
+  (let [requests (atom 0) ctx (progress-fixture
+                             (fn [_] (let [n (swap! requests inc)]
+                                       (progress-tool-answer [(progress-call n (str "{\"target\":\"" (if (odd? n) "A" "B") "\"}"))])))
+                             (fn [args _] args) {:max-model-requests 8 :max-wall-ms 5000} {})]
+    (try
+      (let [result (progress-attempt ctx)
+            terminal (:data (last (filter #(= "agent/run/end" (:type %)) (progress-events ctx))))
+            plan (:diagnostic-plan result)]
+        (is (= :no-progress (:reason result))) (is (= 5 @requests))
+        (is (= :read-cycle (get-in result [:no-progress :kind])))
+        (is (= ["3" "4" "5"] (:call-ids plan)))
+        (is (= 3 (count (:evidence plan))))
+        (is (= 2 (count (set (map :result-fingerprint (:evidence plan))))))
+        (is (= :no-new-observation (:evidence-gap plan)))
+        (is (= 1 (count (:steps plan)))) (is (every? :read-only (:steps plan)))
+        (is (false? (:automatic-execution plan)))
+        (is (= 5 (get-in plan [:budget :requests-used])))
+        (is (= 8 (get-in plan [:budget :max-requests])))
+        (is (integer? (get-in plan [:budget :deadline-at-ms])))
+        (is (= plan (:diagnostic-plan terminal))))
+      (finally (kernel/dispose-all! ctx)))))
+
+(deftest uncertain-write-produces-reconciliation-without-a-second-dispatch
+  (let [requests (atom 0) writes (atom 0)
+        ctx (progress-fixture (fn [_] (progress-tool-answer [(progress-call (swap! requests inc) "{}")]))
+                              (fn [_ _] (swap! writes inc) (throw (ex-info "external response lost" {:uncertain true})))
+                              {:max-model-requests 4 :max-wall-ms 5000} {:execution-mode :sequential})]
+    (try
+      (let [result (progress-attempt ctx) plan (:diagnostic-plan result)]
+        (is (= :no-progress (:reason result))) (is (= 1 @writes @requests))
+        (is (= :uncertain-action (get-in result [:no-progress :kind])))
+        (is (= :external-result-unreconciled (:evidence-gap plan)))
+        (is (= [:reconcile-current-state] (mapv :action (:steps plan))))
+        (is (every? :read-only (:steps plan)))
+        (is (= 1 (get-in plan [:budget :requests-used]))))
+      (finally (kernel/dispose-all! ctx)))))

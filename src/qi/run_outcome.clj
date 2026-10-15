@@ -64,7 +64,7 @@
 
 (defn from-error [error]
   (normalize (merge (select-keys (ex-data error)
-                                [:run-id :reason :cancelled :usage :steps :code :no-progress])
+                                [:run-id :reason :cancelled :usage :steps :code :no-progress :diagnostic-plan])
                     {:status :failed :error (ex-message error)})))
 
 (defn complete-response?

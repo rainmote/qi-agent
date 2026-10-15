@@ -137,7 +137,9 @@
 (deftest sdk-exceptions-after-input-are-uncertain-and-block-subsequent-dispatch
   (let [{:keys [ctx] :as f} (fixture)]
     (try
-      (run! f ["throw" "must-not-run"])
+      (let [error (try (run! f ["throw" "must-not-run"]) nil (catch Exception error error))]
+        (is (= :no-progress (:reason (ex-data error))))
+        (is (= :external-result-unreconciled (get-in (ex-data error) [:diagnostic-plan :evidence-gap]))))
       (is (= ["throw"] (mapv #(get-in % [:args :code]) (filter #(= "call" (:event %)) (events f)))))
       (is (get-in ((:status (kernel/service ctx :computer-use/runtime))) [:uncertain :uncertain]))
       (finally (dispose! f)))))

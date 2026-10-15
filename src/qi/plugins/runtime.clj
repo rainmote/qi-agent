@@ -785,7 +785,7 @@
                                        :root-request-usage (generation/root-request-summary ctx root-run-id))
                          terminal (select-keys result
                                                 [:run-id :root-run-id :status :stop-reason :reason :error
-                                                 :usage :request-usage :root-request-usage :steps :verification :code :no-progress])]
+                                                 :usage :request-usage :root-request-usage :steps :verification :code :no-progress :diagnostic-plan])]
                      (record! ctx "agent/run/end" terminal)
                      (publish! ctx listeners :agent.run/end terminal)
                      result))
