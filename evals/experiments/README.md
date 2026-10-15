@@ -1,5 +1,16 @@
 # 离线盲测准备
 
+## 运行交互时延矩阵
+
+`bb --classpath src:plugins evals/experiments/interaction_latency.clj` 使用真实 runtime、队列、取消 token、
+工具批次与 context manager，分别测慢模型、慢工具、分片压缩各 30 次引导与 30 次协作取消。
+每条保留 native run、queue item、profile 与 runner 指纹，使用同一进程的单调时钟分别记录接收、消费与终态；
+不得跨机器相减时钟。30 只是冻结 fixture 样本数，不是生产分位数。取消时压缩不得提交半成品 checkpoint。
+
+浏览器生产 bundle + 隔离 API fixture 的渲染/回执时延应独立记录；不能把上述原生服务时间直接称为浏览器反馈。
+目标接收 p95≤250ms、协作取消 p95≤1s；不协作 provider 的外部硬期限另以 daemon/process 矩阵验收。
+本实验不加载认证、不调用真实模型、不生成生产样本、不修改运行策略，完整费用为 null。
+
 `memory_recall.clj` 保留原来的理想标注表示对照，不是语义召回实验。
 `memory-blind.mjs` 将相同的 20 条冻结开发历史投影为无答案的输入，并经实际
 context manager 捕获 checkpoint 与临时分层摘要两组请求。最后一条历史约束也进入
