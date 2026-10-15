@@ -8,6 +8,7 @@
             [qi.sandbox :as sandbox]
             [qi.secure-files :as secure]
             [babashka.fs :as fs]
+            [babashka.process :as process]
             [clojure.java.io :as io]
             [clojure.string :as str])
   (:import [java.nio.file Files LinkOption Path]
@@ -283,8 +284,19 @@
                                (concat (vals known) handles)))))))
     (catch Throwable _)))
 
+(defn- process-groups-available? []
+  (and (fs/executable? "/usr/bin/perl") (fs/executable? "/bin/kill")
+       (fs/executable? "/bin/ps") (some? (io/resource "qi/process_guard.pl"))))
+
+(defn- signal-group! [child signal]
+  ;; The launcher creates this group before executing user code. Retaining the
+  ;; group identity also covers orphans missed between ProcessHandle polls.
+  @(process/process ["/bin/kill" signal "--" (str "-" (.pid child))]
+                    {:out :string :err :string}))
+
 (defn- terminate-process-tree! [process tracked]
   (remember-descendants! process tracked)
+  (signal-group! process "-TERM")
   (let [root (.toHandle process)
         handles (conj (vec (reverse (vals @tracked))) root)]
     (doseq [handle handles]
@@ -293,6 +305,7 @@
     (try
       (.waitFor process 200 TimeUnit/MILLISECONDS)
       (catch Throwable _))
+    (signal-group! process "-KILL")
     (doseq [handle handles]
       (when (.isAlive handle)
         (.destroyForcibly handle)))))
@@ -326,6 +339,10 @@
   ;; user startup files before executing the requested command, which leaks
   ;; unrelated configuration into results and conflicts with a workspace-only
   ;; sandbox (for example ~/.profile becomes a spurious permission error).
+  (when-not (process-groups-available?)
+    (throw (ex-info "POSIX process-group launcher is unavailable" {})))
+  (into ["/usr/bin/perl" (-> (io/resource "qi/process_guard.pl") io/file .getCanonicalPath)
+         "--parent" (str (.pid (java.lang.ProcessHandle/current))) "--"]
   (case sandbox
     :none ["/bin/sh" "-c" command]
     :seatbelt ["/usr/bin/sandbox-exec"
@@ -335,7 +352,7 @@
     :unavailable
     (throw (ex-info
             "Process execution is unavailable because no safe sandbox was found"
-            {:sandbox sandbox}))))
+            {:sandbox sandbox})))))
 
 (defn- spawn! [root output-root sandbox default-timeout max-timeout
                max-output max-output-file-chars max-output-files
@@ -478,8 +495,10 @@
             :root (str workspace-root)
             :default-timeout-ms timeout-ms
             :max-timeout-ms max-timeout-ms
+            :process-group-enabled (boolean (process-groups-available?))
             :capabilities (cond-> #{:fs/read :fs/write}
-                            (not= :unavailable mode) (conj :process))
+                            (and (not= :unavailable mode)
+                                 (process-groups-available?)) (conj :process))
             :resolve! (fn [path] (str (existing-inside workspace-root path)))
             :resolve-write! (fn [path]
                               (str (writable-inside workspace-root path)))
