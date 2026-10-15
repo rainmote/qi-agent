@@ -5,6 +5,7 @@ import { basename, extname, isAbsolute, join, relative, resolve, sep } from "nod
 import { homedir } from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { readWorkspaceVerification, type VerificationConfig, type WorkspaceVerification } from "../shared/workspace-verification.mjs";
 import type { WorkspaceRegistry } from "./workspaces.js";
 import { ensurePrivateDirectory, writePrivateFileAtomically } from "./storage.js";
 
@@ -23,7 +24,7 @@ export interface FileEntry { name: string; path: string; kind: "directory" | "fi
 export interface FileListing { path: string; entries: FileEntry[]; truncated: boolean }
 export interface FilePreview { path: string; name: string; mime: string; size: number; kind: "text" | "image" | "pdf" | "html" | "unsupported"; text?: string; notice?: string }
 export interface FileChange { path: string; status: "added" | "modified" | "deleted"; before: string; after: string; diff: string }
-export interface ChangeSet { turnId: string; files: FileChange[]; partial: boolean; notice?: string }
+export interface ChangeSet { turnId: string; files: FileChange[]; partial: boolean; notice?: string; verification?: WorkspaceVerification }
 interface Snapshot { workspaceId: string; sessionId?: string; files: Record<string, string>; partial: boolean }
 export interface ServedFile { body: Buffer; headers: Record<string, string> }
 
@@ -55,7 +56,10 @@ function diff(path: string, before: string, after: string): string {
 export class WorkspaceFiles {
   readonly attachmentDirectory: string;
   readonly snapshotDirectory: string;
-  constructor(private readonly workspaces: WorkspaceRegistry, options: { attachmentDirectory?: string; snapshotDirectory?: string } = {}) {
+  private readonly verification: VerificationConfig | undefined;
+  constructor(private readonly workspaces: WorkspaceRegistry, options: { attachmentDirectory?: string; snapshotDirectory?: string; verification?: VerificationConfig } = {}) {
+    this.verification = options.verification;
+    if (this.verification && (!isAbsolute(this.verification.directory) || !/^[a-f0-9]{40}$/.test(this.verification.controllerSha))) throw new Error("Pin an absolute verifier directory and trusted controller SHA");
     this.attachmentDirectory = options.attachmentDirectory || process.env.QI_AGENT_ATTACHMENT_DIR || join(process.env.QI_AGENT_HOME || join(homedir(), ".qi-agent"), "attachments");
     this.snapshotDirectory = options.snapshotDirectory || join(workspaces.stateDirectory, "snapshots");
   }
@@ -248,7 +252,11 @@ export class WorkspaceFiles {
     const check = this.workspaces.lease(workspaceId), key = createHash("sha256").update(sessionId).digest("hex");
     try {
       const latest = JSON.parse((await this.privateRead(this.snapshotDirectory, `${workspaceId}-${key}.latest.json`, 4096)).toString());
-      const result = await this.changes(workspaceId, latest.turnId); check(); return result;
+      const result = await this.changes(workspaceId, latest.turnId);
+      // Snapshot JSON cannot assert its own acceptance, including old cached projections.
+      delete result.verification;
+      if (this.verification) result.verification = await readWorkspaceVerification(this.verification, this.workspaces.get(workspaceId).path, result);
+      check(); return result;
     } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
   }
 

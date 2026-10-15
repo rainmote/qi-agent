@@ -15,7 +15,7 @@ async function fixture(initialCount=2){
  const page=await browser.newPage({viewport:{width:1440,height:1000}});
  page.on('pageerror',e=>errors.push(e.message));
  await page.addInitScript(()=>{window.sources=[];window.EventSource=class extends EventTarget{constructor(url){super();this.url=url;window.sources.push(this);queueMicrotask(()=>this.dispatchEvent(new Event('ready')));}close(){this.closed=true;}}});
- const controls={holdSnapshot:null,holdOpen:null,holdPolicy:null,holdModels:null,snapshotOverride:null,steers:[],modelCatalog:models,providerSaves:0,providerRetries:0,dropSubmit:false,rejectSubmit:false,uploads:[],submissions:[],operationStatus:"completed",preferenceEvents:{A:[],B:[]},rejectPreference:false};
+ const controls={holdSnapshot:null,holdOpen:null,holdPolicy:null,holdModels:null,snapshotOverride:null,steers:[],modelCatalog:models,providerSaves:0,providerRetries:0,dropSubmit:false,rejectSubmit:false,uploads:[],submissions:[],operationStatus:"completed",preferenceEvents:{A:[],B:[]},rejectPreference:false,verification:undefined};
  const sessionSnapshot=(id,n=2)=>{const value=snapshot(id,n);value.events.push(...controls.preferenceEvents[id]);return value;};
  const provider={id:"mock-provider",name:"Mock Provider",protocol:"openai-completions",baseUrl:"https://example.invalid/v1",apiKeyConfigured:true,authType:"api-key",authStatus:"configured",models:[{id:"mock-model",name:"Mock Model"}]};
  await page.route('**/api/**', async route=>{
@@ -24,7 +24,7 @@ async function fixture(initialCount=2){
   else if(path.endsWith('/attachments')) {const input=route.request().postDataJSON();controls.uploads.push(input);result={type:'attachment',id:`fixture-upload-${controls.uploads.length}`,workspaceId,name:input.name,mime:input.mime,size:Buffer.from(input.base64,'base64').length};}
   else if(path.endsWith('/files') || path.endsWith('/search')) result={path:'',entries:[{name:'note.md',path:'note.md',kind:'file'},{name:'example.html',path:'example.html',kind:'file'}],truncated:false};
   else if(path.endsWith('/preview')) {const html=new URL(route.request().url()).searchParams.get('path')==='example.html';result={path:html?'example.html':'note.md',name:html?'example.html':'note.md',mime:html?'text/html':'text/markdown',size:200,kind:html?'html':'text',text:html?'<h1>Static fixture</h1><script>parent.fixtureScriptRan=true</script>':'# bounded file fixture'};}
-  else if(path.endsWith('/changes')) result={turnId:'fixture-turn',partial:true,files:[{path:'note.md',status:'modified',before:'old',after:'new',diff:'--- a/note.md\n+++ b/note.md\n-old\n+new'}],notice:'Fixture changes only'};
+  else if(path.endsWith('/changes')) result={turnId:'fixture-turn',partial:!controls.verification,verification:controls.verification,files:[{path:'note.md',status:'modified',before:'old',after:'new',diff:'--- a/note.md\n+++ b/note.md\n-old\n+new'}],notice:'Fixture changes only'};
   else if(path.endsWith('/references')) result={files:[{path:'note.md'}],sessions:[sessions[1]]};
   else if(path.endsWith('/resolve-references')) result=route.request().postDataJSON().message+'\n[User-selected source]\nbounded file fixture';
   else if(path==='/api/presets') result=[{id:'standard',name:'Standard',trust:'system'}];
@@ -229,6 +229,16 @@ try{
   assert.equal(await page.locator('.workspace-diff').getAttribute('open'),null);assert.equal(await page.locator('.workspace-capture-scope').getAttribute('open'),'');
   controls.rejectPreference=true;await page.getByLabel('结果详略',{exact:true}).selectOption('detailed');await page.getByRole('alert').filter({hasText:'Fixture preference not saved'}).waitFor();assert.equal(await page.getByLabel('结果详略',{exact:true}).inputValue(),'short');
   await page.getByLabel('结果详略',{exact:true}).selectOption('detailed');await page.waitForFunction(()=>document.querySelector('select[aria-label="结果详略"]').value==='detailed');assert.equal(await page.locator('.workspace-diff').getAttribute('open'),'');
+  for (const status of ['PASS','UNKNOWN','NOT_RUN']) {
+   controls.verification={status,checks:[{id:'acceptance',status:'PASS'}]};
+   await page.getByRole('button',{name:'刷新',exact:true}).click();
+   const summary=page.getByLabel('本轮结果摘要');
+   await page.getByRole('button',{name:'刷新',exact:true}).waitFor({state:'visible'});
+   if(status==='PASS') await summary.getByText(/独立验收通过/).waitFor();
+   else if(status==='UNKNOWN') await summary.getByText(/验收结果未确认/).waitFor();
+   else await summary.getByText(/尚未关联本轮文件指纹/).waitFor();
+  }
+
   await page.reload();await page.getByRole('button',{name:'添加附件与工具',exact:true}).click();await page.getByRole('menuitem',{name:'文件与变更',exact:true}).click();assert.equal(await page.getByLabel('结果详略',{exact:true}).inputValue(),'detailed');
   await page.screenshot({path:process.env.QI_U3_SCREENSHOT||'/tmp/qi-u3-result-summary.png',fullPage:true});
   await page.getByRole('button',{name:'关闭文件面板',exact:true}).click();

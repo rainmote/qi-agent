@@ -21,6 +21,16 @@ export function sandboxedHtml(text: string): string {
   return `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">${text}`;
 }
 
+export function WorkspaceVerificationSummary({ changes }: { changes: ChangeSet }) {
+  const passed = !changes.partial && changes.verification?.status === "PASS" && !!changes.verification.checks?.length && changes.verification.checks.every(check => check.status === "PASS");
+  return <div className="workspace-result-summary" aria-label="本轮结果摘要">
+          <p><strong>变更</strong> · {changes.files.length} 个文本文件{changes.partial ? " · 部分记录" : " · 限定范围内的快照"}</p>
+          <p><strong>验收</strong> · {passed ? `独立验收通过 · ${changes.verification?.checks?.length || 0} 项检查` : changes.verification?.status === "UNKNOWN" ? "验收结果未确认，文件或验收材料需要核对" : "尚未关联本轮文件指纹的独立验收记录"}</p>
+          <p><strong>下一步</strong> · {passed ? "审查已验证快照；合入与发布仍需明确授权" : changes.partial ? "核对遗漏与差异，再运行验收" : "核对差异并运行验收"}</p>
+  </div>;
+
+}
+
 /** File access is server-authorized; changing workspace aborts and discards all prior reads. */
 export function WorkspacePanel({ workspaceId, sessionId, api, onReference, onClose, responseDetail = "auto", onResponseDetail }: WorkspacePanelProps) {
   const [path, setPath] = useState(""), [query, setQuery] = useState(""), [listing, setListing] = useState<FileListing | null>(null);
@@ -94,11 +104,7 @@ export function WorkspacePanel({ workspaceId, sessionId, api, onReference, onClo
       </section>}
       {tab === "changes" && !busy && !changes && <p className="workspace-muted">本会话暂无已完成回合的文件快照。</p>}
       {tab === "changes" && changes && <>
-        <div className="workspace-result-summary" aria-label="本轮结果摘要">
-          <p><strong>变更</strong> · {changes.files.length} 个文本文件{changes.partial ? " · 部分记录" : " · 限定范围内的快照"}</p>
-          <p><strong>验收</strong> · 尚未关联本轮文件指纹的独立验收记录</p>
-          <p><strong>下一步</strong> · {changes.partial ? "核对遗漏与差异，再运行验收" : "核对差异并运行验收"}</p>
-        </div>
+        <WorkspaceVerificationSummary changes={changes} />
         <details className="workspace-capture-scope" open={changes.partial || responseDetail === "detailed"}>
           <summary>快照范围{changes.partial ? " · 需要核对" : "与限制"}</summary><p className="workspace-muted">{changes.notice}</p>
         </details>

@@ -35,6 +35,8 @@ interface WebHostOptions {
   staticRoot?: string;
   token?: string;
   unsafeAllowNetwork?: boolean;
+  verificationDirectory?: string;
+  verificationControllerSha?: string;
 }
 
 function addressInUse(error: unknown): error is NodeJS.ErrnoException {
@@ -277,8 +279,11 @@ export async function startWebHost(options: WebHostOptions = {}) {
   await workspaces.load(options.workspace || process.cwd());
   const providers = new ProviderRegistry(workspaces.stateDirectory);
   await providers.load();
-  const files = new WorkspaceFiles(workspaces, options.stateDirectory
-    ? { attachmentDirectory: join(workspaces.stateDirectory, "attachments") } : {});
+  if (Boolean(options.verificationDirectory) !== Boolean(options.verificationControllerSha)) throw new Error("Verification requires both a receipt directory and trusted controller SHA");
+  const files = new WorkspaceFiles(workspaces, {
+    ...(options.stateDirectory ? { attachmentDirectory: join(workspaces.stateDirectory, "attachments") } : {}),
+    ...(options.verificationDirectory ? { verification: { directory: options.verificationDirectory, controllerSha: options.verificationControllerSha! } } : {}),
+  });
   await files.recoverPending();
   const turnFiles = new TurnFiles(files);
   const ownedDaemonEnvironment = options.stateDirectory ? {
@@ -621,6 +626,8 @@ function parseArguments(arguments_: string[]): WebHostOptions {
     if (argument === "--host") options.host = arguments_[++index];
     else if (argument === "--port") options.port = Number(arguments_[++index]);
     else if (argument === "--workspace") options.workspace = arguments_[++index];
+    else if (argument === "--verification-directory") options.verificationDirectory = arguments_[++index];
+    else if (argument === "--verification-controller-sha") options.verificationControllerSha = arguments_[++index];
     else if (argument === "--unsafe-allow-network") options.unsafeAllowNetwork = true;
     else throw new Error(`Unknown Web Host argument: ${argument}`);
   }

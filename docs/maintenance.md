@@ -54,6 +54,14 @@ node maintenance/run.mjs verify --state /absolute/private/maintenance-state --id
 
 然后用 `accept --id TASK_ID --revision N --review /absolute/review.json` 记录人工接受。候选 head、工作区内容、index 或当前 `main` base 改变时，接受会被拒绝。该命令不合入或推送；CLI 本身的操作权限是信任边界，JSON 字段不是身份认证。
 
+## 交付到 Web 的只读验收回执
+
+Web 可在已有合同候选工作区内进行普通交互编码；同一 daemon 的写入者仍受 workspace lease 约束。
+停止写入者后，继续使用独立可信控制器的 `verify`，成功后才用 `maintenance/export-web-receipt.mjs`
+导出本轮回执。导出器不会实现、验收、接受、推送或合入任何候选，也不能改变保存的控制器和验收材料。
+Web 宿主固定私有回执目录与可信控制器 SHA，在读取时对账完整源码；未核实结果保持 UNKNOWN / NOT_RUN。
+参数、文件范围和信任边界见 [独立验收回执](workspace-files.md#独立验收回执)。
+
 ## 故障与恢复
 
 状态按 `queued → scoped → implementing → verifying → review_ready → accepted` 演进；失败、阻断、取消和未知结果分别保存。每条事件包含序号、前项哈希和 fencing token，证据写入并 fsync 后才推进状态。文件锁不按超时强抢，只能显式恢复已确认死亡的本机 PID。

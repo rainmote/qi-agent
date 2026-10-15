@@ -30,6 +30,36 @@ Web 输入框现在提供「添加附件」「文件与变更」和「引用文�
 
 最多对比 200 个文本文件、总计 4 MiB，单文件 256 KiB；忽略 `.git`、隐藏/敏感文件、构建目录与 Git 忽略文件。中断、读取限额、无法完整遍历和启动恢复标记为部分记录。启动时最多恢复 32 份未完成快照，截止到恢复时，明确提示代理可能仍运行。diff 为有界文本 before/after 比较，不提供 Git worktree 管理或任意文件回滚。
 
+## 独立验收回执
+
+普通 Web 编码可以使用维护合同已准备的独立候选工作区。daemon 的 workspace-write lease 保持一个 root
+写入者；停止该 worker 后，由候选外、固定提交的可信维护控制器执行 `verify`。它已有基线、有效 red、
+只读源码副本、独立验收器、容器限额和完整源码快照绑定。Web 不执行测试命令，也不以 `remote/run-result`
+或会话文字作为验收。任意普通目录仍须先准备合同候选；这里没有自动创建工作区或自动触发验收。
+
+新回执导出器只读取已存在的 `review_ready`。提供原可信控制器路径与精确 SHA；导出器校验其 checkout
+干净、任务材料/日志完整、所有必需检查通过，以及当前候选完整文件集合、原始字节和可执行位仍匹配已验收
+Git tree。中断、skip、取消、超时或未知执行证据不能导出 PASS。回执按工作区绝对路径与本轮 `turnId`
+绑定；重复身份拒绝覆盖，未知写入结果先核对已有文件。
+
+```sh
+node maintenance/export-web-receipt.mjs --state /absolute/private/state --id TASK_ID \
+  --controller /absolute/reviewed-controller --controller-sha EXACT_REVIEWED_SHA \
+  --turn-id TURN_ID_FROM_CHANGES --output-directory /absolute/private/web-verification
+npm run web:start -- --verification-directory /absolute/private/web-verification \
+  --verification-controller-sha EXACT_REVIEWED_SHA
+```
+
+输出目录必须位于候选和可信控制器外；Web 只从宿主启动参数选择的私有目录读取回执，RPC 不能提交回执
+或更换可信控制器。每次读取本轮变更，Web 重新核对完整 tracked / nonignored 源码（含隐藏与二进制文件）和
+本轮 after 内容。文件增删、内容/权限变化、控制器不匹配、损坏/不完整材料显示「验收结果未确认」；缺失
+回执保持「尚未关联」。部分变更快照不显示通过。通过后提示审查已验证快照，接受、合入和发布仍是独立动作。
+
+完整文件扫描限 4096 个文件、单文件 4 MiB、合计 64 MiB，超过限制不产生 PASS。它拒绝源码/回执符号链接，
+并复核读取身份与整次文件集合；不声称防御同一宿主用户持续恶意改写所有状态或 Git 元数据。回执目录权限和
+候选执行沙箱是信任边界，单独的 40 位 SHA 字符串不是签名或身份认证。此候选导出器及接入需独立审查后使用，
+不会修改或激活保存的可信控制器规则。
+
 ## 验证
 
 `workspace-files.test.ts`、`workspace-http.test.ts`、`turn-files.test.ts` 覆盖路径、跨工作区引用、私有存储、上传限额、HTML 响应头、真实 HTTP、回合完成早于接纳、跨会话同编号和恢复语义。`daemon-operations.test.ts` 使用隔离的真实 daemon 与离线模型 fixture 验证真实完成编号及订阅释放；不调用真实模型。`attachments_test.clj` 验证 durable 记录仍为 ID、模型边界才解析正文。
