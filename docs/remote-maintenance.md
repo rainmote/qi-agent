@@ -10,7 +10,9 @@
 2. 解压至新的独立目录；只接受上述固定文件，不覆盖旧证据。
 3. 核对 manifest 的 `source_sha`、`image`、`platform`，以及压缩镜像的 `archive.sha256` 和 `archive.bytes`。
 4. `docker image load --input /absolute/bundle/qi-toolchain.tar.gz`，随后 `docker image inspect IMAGE_ID` 确认相同不可变 ID 和 `linux/arm64`。
-5. 从同一提交准备完整 Git 仓库，包含验收所需历史基线。源 checkout 必须干净。
+5. 从同一提交准备完整 Git 仓库，包含验收所需基线。源 checkout 必须干净。当前基线为 `5bc2acb72d8141d01d5e31f81bb539e8c4ed6149`，保存在 `fixtures/compaction-sqlite-fixed` 分支；离线传递可用 `git bundle create source.bundle main fixtures/compaction-sqlite-fixed`。
+
+此基线是明确标记的离线 fixture：以历史 `c40b3eb` 为父提交，只回移 `29aa3ce` 的 Cargo.toml、Cargo.lock、automation.rs 和 sqlite_wal.rs，消除历史 SQLite 连接死锁，保留 compaction 的目标缺陷。旧基线失败和新基线证据分别保存；不是悄悄替换旧提交的依赖，也不是模型能力题。基线仍必须通过完整测试，再由独立验收产生有效 red。
 
 导出使用 [Docker save](https://docs.docker.com/reference/cli/docker/image/save/)，不会发布到镜像仓库。artifact 过期后可重跑 CI；新构建生成自己的镜像和回执，不能借用旧镜像的通过结论。
 
@@ -29,7 +31,7 @@
 sh "$ROOT/repo/maintenance/host-controller.sh" "$ROOT" "$SOURCE" "$IMAGE" broker-smoke "$ROOT/evidence/broker"
 sh "$ROOT/repo/maintenance/host-controller.sh" "$ROOT" "$SOURCE" "$IMAGE" worker-smoke "$ROOT/evidence/worker"
 sh "$ROOT/repo/maintenance/host-controller.sh" "$ROOT" "$SOURCE" "$IMAGE" container-smoke
-sh "$ROOT/repo/maintenance/host-controller.sh" "$ROOT" "$SOURCE" "$IMAGE" qi-smoke c40b3eb181f2156e5fbf796835847b692b47da3f "$ROOT/evidence/qi"
+sh "$ROOT/repo/maintenance/host-controller.sh" "$ROOT" "$SOURCE" "$IMAGE" qi-smoke 5bc2acb72d8141d01d5e31f81bb539e8c4ed6149 "$ROOT/evidence/qi"
 ```
 
 可信控制器上限为 0.5 核、384 MiB；同一时刻只有一个测试容器，默认上限为 2 核、2 GiB。`--memory-swap` 等于 `--memory`，禁止测试额外占用宿主 swap，依据 [Docker 资源约束](https://docs.docker.com/engine/containers/resource_constraints/)。完整 smoke 显式保存资源配置；其他 smoke 使用同样的默认 2 核、2 GiB 上限。

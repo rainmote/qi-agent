@@ -26,7 +26,7 @@ jobs:
         with:
           node-version: 22.12.0
       - name: Build pinned toolchain and offline dependencies
-        run: node maintenance/build-image.mjs "$RUNNER_TEMP/qi-image.json" c40b3eb181f2156e5fbf796835847b692b47da3f
+        run: node maintenance/build-image.mjs "$RUNNER_TEMP/qi-image.json" 5bc2acb72d8141d01d5e31f81bb539e8c4ed6149
       - name: Disconnected worker reaches only the budgeted fake provider
         run: |
           export QI_MAINTENANCE_IMAGE="$(node -p 'require(process.env.RUNNER_TEMP + "/qi-image.json").image')"
@@ -40,7 +40,7 @@ jobs:
           QI_OUTPUT: ${{ runner.temp }}/qi-container-evidence
         run: |
           export QI_MAINTENANCE_IMAGE="$(node -p 'require(process.env.RUNNER_TEMP + "/qi-image.json").image')"
-          node maintenance/qi-smoke.mjs c40b3eb181f2156e5fbf796835847b692b47da3f "$QI_OUTPUT"
+          node maintenance/qi-smoke.mjs 5bc2acb72d8141d01d5e31f81bb539e8c4ed6149 "$QI_OUTPUT"
       - name: Export the verified ARM64 toolchain for a remote runtime
         run: node maintenance/export-image.mjs "$RUNNER_TEMP" "$RUNNER_TEMP/qi-toolchain"
       - name: Retain the portable toolchain for one day
