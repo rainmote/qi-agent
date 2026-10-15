@@ -21,12 +21,30 @@ a complete billing ledger for compaction and failed requests. Recovered orphan
 runs have unknown usage and step counts. Legacy logs without run envelopes
 remain readable and are not assigned invented outcomes.
 
-`request-usage` adds a separate logical-request summary: known input/output
+`request-usage` is explicitly `scope: session-local` with `request-scope: logical-requests`: known input/output
 tokens, request count, unknown request count, and token completeness. It includes
 compaction and failed requests by request ID, and never substitutes zero for an
 unknown invoice. Main/compaction events carry native/root run IDs; summary
 fragments also carry a compaction ID and chunk index. Manual compaction without
 an active run receives an independent operation ID.
+
+`root-request-usage` is a separate `root-tree` subtotal. Each native run persists
+`usage/tree-run` facts in its owning root session; child requests write
+`usage/child-request` before dispatch and after settlement to that same index.
+Provider admission is also recorded before launch and linked to the child's
+native execution run and host-bound child agent identity on completion. The index stores identities, status and usage,
+not child prompts or outputs. It uses the parent log's durable sequence and never
+scans unrelated session directories. Replayed starts cannot replace terminal facts;
+request IDs with source session IDs deduplicate repeated delivery. Reloading the
+parent log reconstructs the same totals.
+
+Coverage lists expected/observed sessions, pending native children and unknown
+provider runs. Pending, legacy-unindexed or opaque external-provider coverage cannot
+claim complete token usage, even when the known request subtotal is complete.
+Independent manual compaction has its own operation identity and is excluded.
+Parent-index persistence failure refuses the child's next provider dispatch; an
+already sent request with a missing settlement stays unknown. Neither subtotal is
+an invoice: complete cost remains null and accounting-complete remains false.
 
 Optional runtime `max-model-requests` and `max-wall-ms` cover all logical calls
 through `qi.generation`, including retries, summary fragments and inherited child

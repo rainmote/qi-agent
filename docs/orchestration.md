@@ -120,6 +120,14 @@ worker 重启把已领取任务转为 `needs_review`。父会话必须提供核�
 | `team.mailbox` | 无 | 实际调用成员的消息 |
 | `team.ack` | `message_ids` | 已确认 id |
 
+## 任务树用量边界
+
+原生父子 run 保留各自的 `request-usage` 会话小计，父结果另给 `root-request-usage`。子会话在原根会话
+日志持久写入最小请求索引；只按真实 root-run 身份聚合，不扫描用户目录、不把两个小计再相加收费。
+登记但未结束的子 run、未结算请求、不能关联原生执行身份的外部 provider 都使任务树完整性为 false。
+外部 CLI 的自报 usage 不被推断为本地逻辑请求账本。独立人工压缩不猜测归属；完整费用继续为 null。
+索引依赖原来的会话写入与取消边界，不增加子代理权限或自动重放。详见 [任务树记账](runtime-integrity.md)。
+
 ## 离线验证
 
 ### 可选外部 CLI 契约 PoC

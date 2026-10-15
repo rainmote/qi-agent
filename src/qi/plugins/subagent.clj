@@ -1,6 +1,7 @@
 (ns qi.plugins.subagent
   "Provider-neutral subagent registry and run lifecycle."
   (:require [qi.kernel :as kernel]
+            [qi.generation :as generation]
             [qi.run-outcome :as outcome]
             [qi.secure-files :as secure]
             [clojure.edn :as edn]
@@ -25,9 +26,13 @@
 (defn- record-run! [ctx store phase result]
   (when-let [append! (:append! store)]
     (let [event (append! (str "subagent/run/" (name phase))
-                         (select-keys result [:id :run-id :execution-run-id :provider :depth
+                         (select-keys result [:id :run-id :root-run-id :execution-run-id :provider :depth
                                               :status :stop-reason :reason :error :usage :steps :verification]))]
-      (kernel/emit! ctx :session/event event))))
+      (kernel/emit! ctx :session/event event)
+      (when (= :end phase)
+        (generation/record-provider! ctx
+          (assoc result :root-run-id (or (:root-run-id result) (:root-run-id generation/*run*)))
+          (:status result))))))
 
 (defn- roster-path [ctx]
   (let [store (kernel/service ctx :session/store)
@@ -239,6 +244,9 @@
                      agent-id (or (:agent-id request) (:id request)
                                   (str "agent-" (random-uuid)))
                      started-at (System/currentTimeMillis)
+                     run-id (str (random-uuid))
+                     root-run-id (:root-run-id generation/*run*)
+                     _ (generation/record-provider! ctx {:id agent-id :run-id run-id :root-run-id root-run-id :provider provider-id} :started)
                      handle ((:start provider)
                              (assoc request :id agent-id
                                             :agent-id agent-id
@@ -250,10 +258,9 @@
                    (throw (ex-info "Subagent provider returned an invalid handle"
                                    {:provider provider-id :agent-id agent-id})))
                  (let [completion (promise)
-                       run-id (str (random-uuid))
                        job {:id agent-id
                             :agent_id agent-id
-                            :run-id run-id
+                            :run-id run-id :root-run-id root-run-id
                             :label (or (:label request) (:prompt request))
                             :provider provider-id
                             :depth (:depth request)

@@ -771,16 +771,23 @@
   [ctx config active admission-lock prompt options queue state listeners]
   (let [token (or (:cancel-token options) (cancellation/create-token))
         run-id (str (random-uuid))
+        budget (generation/run-budget run-id config)
+        root-run-id (:root-run-id budget)
         progress (atom {:steps 0 :usage {}})
         ended? (atom false)
         end! (fn [result]
-               (when (compare-and-set! ended? false true)
-                 (let [terminal (assoc (select-keys result
-                                                    [:status :stop-reason :reason :error
-                                                     :usage :request-usage :steps :verification :code :no-progress])
-                                       :run-id run-id)]
-                   (record! ctx "agent/run/end" terminal)
-                   (publish! ctx listeners :agent.run/end terminal))))]
+               (if (compare-and-set! ended? false true)
+                 (do
+                   (generation/record-tree-run! ctx run-id root-run-id (:status result))
+                   (let [result (assoc result :root-run-id root-run-id
+                                       :root-request-usage (generation/root-request-summary ctx root-run-id))
+                         terminal (select-keys result
+                                                [:run-id :root-run-id :status :stop-reason :reason :error
+                                                 :usage :request-usage :root-request-usage :steps :verification :code :no-progress])]
+                     (record! ctx "agent/run/end" terminal)
+                     (publish! ctx listeners :agent.run/end terminal)
+                     result))
+                 result))]
     (cancellation/throw-if-cancelled! token)
     (locking admission-lock
       (when-not (compare-and-set! active nil {:token token :run-id run-id
@@ -789,33 +796,34 @@
     (set-phase! ctx state listeners :model {:run-id run-id :attempt 0
                                            :last-result nil :last-error nil :request-budget nil})
     (try
-      (record! ctx "agent/run/start" {:run-id run-id})
+      (record! ctx "agent/run/start" {:run-id run-id :root-run-id root-run-id})
+      (generation/record-tree-run! ctx run-id root-run-id :started)
       (let [result (outcome/normalize
-                    (assoc (binding [generation/*run* (generation/run-budget run-id config)]
+                    (assoc (binding [generation/*run* budget]
                              (run-agent-body! ctx config active admission-lock prompt
                                               options token queue state listeners progress))
                            :run-id run-id :status :completed
-                           :request-usage (generation/request-summary ctx run-id)))]
-        (end! result)
+                           :request-usage (generation/request-summary ctx run-id)))
+            result (end! result)]
         (set-phase! ctx state listeners :idle
                     {:run-id nil :attempt nil :last-result result :last-outcome result})
         result)
       (catch Throwable cause
         (let [terminal (merge @progress (outcome/from-error cause)
-                              {:run-id run-id :request-usage (generation/request-summary ctx run-id)})
-              error (ex-info (ex-message cause) (merge (ex-data cause) terminal) cause)]
+                              {:run-id run-id :request-usage (generation/request-summary ctx run-id)})]
           (close-admission! ctx active admission-lock queue listeners
-                            (if (:cancelled (ex-data error)) :aborted :error))
-          (if (:cancelled (ex-data error))
+                            (if (:cancelled (ex-data cause)) :aborted :error))
+          (if (:cancelled (ex-data cause))
             (do
               (record! ctx "agent/aborted" {:run-id run-id})
               (publish! ctx listeners :agent/aborted {:run-id run-id}))
             (record! ctx "agent/error"
-                     {:run-id run-id :message (ex-message error)}))
-          (end! terminal)
-          (set-phase! ctx state listeners :idle
-                      {:run-id nil :attempt nil :last-error (ex-message error) :last-outcome terminal})
-          (throw error)))
+                     {:run-id run-id :message (ex-message cause)}))
+          (let [terminal (end! terminal)
+                error (ex-info (ex-message cause) (merge (ex-data cause) terminal) cause)]
+            (set-phase! ctx state listeners :idle
+                        {:run-id nil :attempt nil :last-error (ex-message error) :last-outcome terminal})
+            (throw error))))
       (finally
         (locking admission-lock
           (reset! active nil))))))
