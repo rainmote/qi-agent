@@ -10,7 +10,7 @@
 
 命令均为 argv 数组。验收容器断网、非 root、只读根目录，能力集清空，不挂载宿主凭据或 Docker socket。源码只读挂载后复制到临时构建目录，新增可信验收只读挂载到 `/acceptance`，候选无法修改它。测试通过依赖退出状态和预声明 TAP 测试名；这不是对任意恶意运行时或内核攻击的安全证明。
 
-每次检查使用新容器，产物不跨检查共享。镜像须包含该任务的工具和离线依赖；`maintenance/image/Dockerfile` 提供 Rust、Babashka、Node 和 Chromium 的固定工具链配方，启动时从只读缓存初始化工作目录。镜像构建成功与完整容器验收分别记录，缺少环境的检查会阻断，不能标成不适用。
+每次检查使用新容器，产物不跨检查共享。镜像须包含该任务的工具和离线依赖；`maintenance/image/Dockerfile` 提供 Rust、Babashka、Node 和 Chromium 的固定工具链配方，启动时从只读缓存初始化工作目录。镜像构建成功与完整容器验收分别记录，缺少环境的检查会阻断，不能标成不适用。空间受限时可按 [远程宿主验证](remote-maintenance.md) 将 CI 导出的固定镜像加载到飞牛等 ARM64 宿主。
 
 `node maintenance/build-image.mjs /absolute/image.json [EXACT_BASELINE_SHA]` 从干净提交构建镜像。历史基线与当前源码的 Cargo 锁文件不同时，显式提供基线 SHA，将两套依赖预取到镜像；构建回执同时记录 source_sha 和 baseline_sha。历史基线仍按原锁文件执行，不用当前依赖覆盖旧证据。两者的 npm 锁文件必须相同，否则构建会拒绝，需要分别制作精确依赖镜像。
 

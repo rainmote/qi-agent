@@ -5,7 +5,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
-import { git, immutableImage, snapshot, containerCommand } from './lib/execution.mjs';
+import { git, immutableImage, snapshot, containerCommand, resourceLimits } from './lib/execution.mjs';
 import { lockStore, durableWrite, encode } from './lib/store.mjs';
 import { prepare, implement } from './lib/controller.mjs';
 
@@ -13,6 +13,8 @@ const controller = fileURLToPath(new URL('..', import.meta.url));
 const [base, output] = process.argv.slice(2);
 if (!/^[a-f0-9]{40}$/.test(base ?? '') || !path.isAbsolute(output ?? '')) throw new Error('Usage: QI_MAINTENANCE_IMAGE=sha256:... node maintenance/qi-smoke.mjs EXACT_BASE_SHA ABS_NEW_OUTPUT');
 const image = immutableImage(process.env.QI_MAINTENANCE_IMAGE);
+const resources = resourceLimits(process.env.QI_MAINTENANCE_RESOURCES ? JSON.parse(process.env.QI_MAINTENANCE_RESOURCES)
+  : { cpus: 4, memory_mb: 6144, work_mb: 6144, tmp_mb: 1024, pids: 1024 });
 await fs.mkdir(output); // Preserve earlier evidence.
 const verifier = path.join(output, 'verifier'); await fs.mkdir(verifier);
 const program = `(require '[qi.plugin :as p] '[qi.kernel :as k] '[cheshire.core :as json])
@@ -39,7 +41,7 @@ const profile = path.join(output, 'agent.edn'); await fs.writeFile(profile, '{:p
 const catalog = JSON.parse(await fs.readFile(new URL('checks.json', import.meta.url)));
 const task = { schema_version: 1, task_id: 'qi-compaction-container', split: 'dev', kind: 'bug', base_sha: base, image,
   goal: 'Preserve run and chunk identities in compaction request accounting.', profile_path: profile, verifier_dir: verifier,
-  resources: { cpus: 4, memory_mb: 6144, work_mb: 6144, tmp_mb: 1024, pids: 1024 },
+  resources,
   allowed_files: ['src/qi/generation.clj', 'src/qi/plugins/context_manager.clj'],
   checks: [...catalog.checks, ...catalog.web_checks],
   acceptance: { file: 'acceptance.test.mjs', tests: ['compaction requests preserve run and chunk identity'] } };

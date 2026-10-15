@@ -91,7 +91,7 @@ export async function containerCommand({ image, argv, workspace, readonly = true
   // No shell evaluation of argv. The fixed wrapper only creates an ephemeral build tree.
   const args = ['run', '--rm', '--name', name, '--init', '--read-only', '--cap-drop=ALL', '--security-opt=no-new-privileges',
     '--label', 'qi.maintenance.owner=' + owner,
-    '--pids-limit=' + limits.pids, '--memory=' + limits.memory_mb + 'm', '--cpus=' + limits.cpus,
+    '--pids-limit=' + limits.pids, '--memory=' + limits.memory_mb + 'm', '--memory-swap=' + limits.memory_mb + 'm', '--cpus=' + limits.cpus,
     `--user=${process.getuid?.() || 1000}:${process.getgid?.() || 1000}`, '--network', network ? 'bridge' : 'none',
     '--tmpfs', '/tmp:rw,exec,mode=1777,size=' + limits.tmp_mb + 'm', '--env', 'HOME=/tmp/qi-home', '--env', 'NO_COLOR=1'];
   if (readonly) args.push('--mount', `type=bind,src=${workspace},dst=/inputs,readonly`, '--tmpfs', '/work:rw,exec,mode=1777,size=' + limits.work_mb + 'm');
