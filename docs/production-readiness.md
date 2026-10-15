@@ -9,14 +9,39 @@
 - macOS 的 `bash`/REPL 使用 Seatbelt 禁网并限制写入工作区；Linux 没有安全 provider 时会
   fail closed，不注册进程执行能力。需要在 Linux 开启 shell 时，应把 execution world 放入
   容器或受限远程执行环境，不能仅设置 `:sandbox :none` 后称为隔离。
-- `qi.plugins.openai-responses` 是默认生产 adapter；`qi.plugins.chatgpt` 依赖内部订阅
-  协议并标记为 experimental，不应作为无人值守生产默认值。
+- 显式选择 `production` preset 时，`qi.plugins.openai-responses` 是唯一模型 adapter；
+  未提供 `OPENAI_API_KEY` 时在发送请求前返回 `code: missing-credentials`，不回退订阅认证。
+  当前交互入口 `agent.edn`、Standard、Creator 仍默认选择 experimental 的 `:chatgpt`，
+  不能把交互默认值称为生产 API 默认值。它们的配置不因新增 preset 自动切换。
 - Web Host 默认拒绝非回环地址。`--unsafe-allow-network` 只用于已有认证和 TLS 的反向代理；
   此模式接受与 `Host` 或代理 `X-Forwarded-Host` 严格匹配的 HTTPS Origin，并把鉴权 cookie
   标记为 `Secure`，但不提供租户隔离、RBAC 或审计身份。
 - 插件与 agent 进程同权限。生产 profile 只应加载经过代码审计并固定版本的插件。
 
 ## 上线前检查
+
+### 显式生产只读基线
+
+在 daemon 的会话模式中选择「生产只读模式」，或用
+`bb qi-agent --config presets/production/agent.edn --list` 离线检查装配。
+实际发起请求时需显式配置官方 API 密钥；本维护实验只检查缺失凭据失败和离线 fixture，
+没有真实模型成绩。模型名称沿用仓库已有固定配置，部署者应选择自己有权限的模型。
+
+该 preset 默认拒绝 write/edit/bash；即使项目已信任也不会因此解除 deny 策略。
+它没有装配个人订阅认证、用户 provider settings、动态插件、外部 CLI 或子代理。
+这是受审查的只读生产基线，不是已获准自主写入或定时执行的配置；需要编码交付时，应另行
+审查专用候选 profile、外层隔离、工作区 lease 与独立验收，不能仅关闭审批就声称无人值守就绪。
+
+`effective_limits` 工具返回当前 profile 的步数、并发、逻辑请求和墙钟配置及其作用范围。
+production 的配置为 32 步、4 工具并发、64 逻辑请求、35 分钟下一请求准入期限；
+每请求输出上限 16384。单次不合作调用不受运行墙钟硬中断，内存/PID 限额未由 worker 强制执行。
+daemon 的 worker 并发和 CPU RLIMIT 在本 worker 中不能观测时返回 null；
+CLI 直启不能借用 daemon 的配额保证。输出区分 profile 默认值与每 run 的步数覆盖，
+不把声明的上限或外部容器配额视作已观测的进程保护。
+
+本 preset 不会自动验证普通 coding 补丁。运行结束仍是 `verification: not-run`，
+独立验证、人工接受、合入和发布分别处理。Linux 的 `:sandbox :auto` 继续 fail closed；
+缺少安全 provider 时没有进程能力。
 
 运行时最低版本由 README 声明；Rust 最低版本为 1.88，与 `Cargo.toml` 的 `rust-version`
 一致。CI 固定 Node 22.12 和 Babashka 1.13.219，在 Linux、macOS 运行 Rust、Clojure 和 Web

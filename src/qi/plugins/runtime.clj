@@ -900,6 +900,10 @@
             :abort! abort!
             :state (fn [] @state)
             :system-prompt #(system-prompt ctx config)
+            :limits (fn [] {:max-steps (or (:max-steps config) 256)
+                            :max-parallel-tools (or (:max-parallel-tools config) 4)
+                            :max-model-requests (:max-model-requests config)
+                            :max-wall-ms (:max-wall-ms config)})
             :subscribe!
             (fn [listener]
               (when-not (fn? listener)
