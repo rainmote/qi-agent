@@ -95,6 +95,15 @@ QI_MAINTENANCE_OUTPUT=/absolute/new-evidence-directory npm run test:maintenance:
 
 ## 有游标的复盘
 
+`report-telemetry.mjs` 只读取显式提供的 session-root，不扫描整个用户目录。新输出的
+`sources` 包含路径、时间覆盖、事件数量/类别和来源指纹，不包含消息正文、工具参数或密钥。
+`source_status` 分别报告 missing_source、no_events、unclassified、classified 或 incomplete；
+生产组同时携带 session/run 样本数，N=0 的错误率和费用仍为 null。session/source 只影响
+其后的事件，跨午夜和恢复不能将旧数据重新归类。
+
+`qi-agent doctor` 的 `telemetry_sources` 提供 supervisor 已登记的会话文件与状态目录路径；
+它不读取会话正文、不推测其他磁盘/机器覆盖，也不会创建任务或调度。
+
 ```sh
 node maintenance/run.mjs review-window --state /absolute/private/maintenance-state \
   --repo /absolute/qi-agent --start EXACT_START_SHA --end EXACT_END_SHA --limit 50 --output /absolute/window.json

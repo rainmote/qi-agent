@@ -15,6 +15,7 @@
             [qi.run-outcome-test]
             [qi.context-integrity-test]
             [qi.generation-test]
+            [qi.provenance-test]
             [qi.remote-snapshot-test]
             [qi.remote-interaction-cancel-test]
             [qi.computer-use-test]
@@ -4250,7 +4251,7 @@
 
 (defn -main []
   (let [{:keys [fail error]}
-        (run-tests 'qi.test-runner 'qi.run-outcome-test 'qi.context-integrity-test 'qi.generation-test
+        (run-tests 'qi.test-runner 'qi.run-outcome-test 'qi.context-integrity-test 'qi.generation-test 'qi.provenance-test
                    'qi.web-test 'qi.presets-test
                    'qi.runtime-inspect-test 'qi.runtime-lab-test
                    'qi.session-title-test 'qi.runtime-recovery-test

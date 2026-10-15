@@ -1,5 +1,19 @@
 # Run outcomes and context integrity
 
+Actual CLI entries (including daemon-backed workers) stamp new session events
+with `sample_kind`, `source_sha`, `profile_sha256` and `session_id`. A mock profile
+is fixture traffic; CI is labelled ci. `QI_AGENT_SAMPLE_KIND` may explicitly mark
+fixture/ci/unclassified traffic; it cannot turn a mock profile into production.
+Direct plugin boots without entry provenance remain unclassified. These labels
+are provenance conventions, not an authentication or billing guarantee.
+
+The source SHA is emitted only for a clean source checkout; modified tracked
+files, untracked source/plugins and unavailable Git evidence keep it null. The
+profile fingerprint covers the effective entry configuration and provider/mode
+overrides, without persisting its text or credentials. Every resumed entry adds
+a `session/source` marker; earlier records retain their original classification.
+This does not retroactively label historical tests as production.
+
 Every admitted native run has a `run-id`, a durable `agent/run/start`, and one
 `agent/run/end`. The existing live `agent.run/end` notification carries the same
 terminal fields. Child registry runs have separate `subagent/run/start` and

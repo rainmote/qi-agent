@@ -19,14 +19,14 @@ export function aggregate(sessions, { from, to, timezone, sample = "unclassified
   const groups = Object.fromEntries(kinds.map(kind => [kind, {
     admitted: new Set(), starts: new Set(), ends: new Map(), terminal: new Map(), requests: new Map(),
     compactions: new Map(), checkpoints: new Set(), queue: { added: new Set(), consumed: new Set(), discarded: new Set() },
-    retryEvents: new Set(), cancelEvents: new Set(), missing_run_ids: 0, legacy_errors: 0, events: 0,
+    retryEvents: new Set(), cancelEvents: new Set(), sessions: new Set(), missing_run_ids: 0, legacy_errors: 0, events: 0,
   }]));
   let invalid_timestamps = 0;
   const seen = new Set();
   for (const session of sessions) {
     const sessionStart = session.events.find(event => event.type === "session/start");
     const sessionId = sessionStart?.data?.session_id ?? session.file;
-    const fallback = sampleKind(sessionStart?.data, sample);
+    let fallback = sample;
     for (const [index, event] of session.events.entries()) {
       const instant = Date.parse(event.at);
       if (!Number.isFinite(instant)) { invalid_timestamps++; continue; }
@@ -35,6 +35,9 @@ export function aggregate(sessions, { from, to, timezone, sample = "unclassified
       if (seen.has(key)) continue;
       seen.add(key);
       const data = event.data ?? {};
+      // Resume markers apply forward only. A new process must not relabel old
+      // session history or borrow a previous process's source fingerprint.
+      if (["session/start", "session/source"].includes(event.type)) fallback = sampleKind(data, sample);
       const group = groups[sampleKind(data, fallback)];
       const run = runId(data);
       const runKey = run ? `${sessionId}:${run}` : null;
@@ -49,6 +52,7 @@ export function aggregate(sessions, { from, to, timezone, sample = "unclassified
       }
       if (!inside) continue;
       group.events++;
+      group.sessions.add(sessionId);
       if (["agent/run/start", "agent/run/end", "usage/request"].includes(event.type) && !runKey) group.missing_run_ids++;
       if (event.type === "agent/error" && !runKey) group.legacy_errors++;
       if (event.type === "usage/request") {
@@ -81,7 +85,7 @@ export function aggregate(sessions, { from, to, timezone, sample = "unclassified
       const admitted = group.admitted.size, terminal = group.terminal.size;
       return [kind, {
         status: admitted || terminal ? "samples" : "no_samples", events: group.events,
-        admitted, terminal, statuses,
+        admitted, terminal, statuses, sample_count: { sessions: group.sessions.size, admitted_runs: admitted, terminal_runs: terminal },
         orphan_terminal: [...group.terminal.keys()].filter(id => !group.starts.has(id)).length,
         unfinished_admitted: [...group.admitted].filter(id => !group.ends.has(id)).length,
         terminal_coverage: admitted ? [...group.admitted].filter(id => group.ends.has(id)).length / admitted : null,
@@ -104,6 +108,25 @@ export function aggregate(sessions, { from, to, timezone, sample = "unclassified
       }];
     })),
   };
+}
+
+export function sourceManifest(sessions, { from, to }) {
+  const start = Date.parse(from), end = Date.parse(to);
+  return sessions.map(({ file, events }) => {
+    const timestamps = events.map(row => Date.parse(row.at)).filter(Number.isFinite);
+    const windowEvents = events.filter(row => Date.parse(row.at) >= start && Date.parse(row.at) < end);
+    return { path: file, events: events.length, window_events: windowEvents.length,
+      first_at: timestamps.length ? new Date(timestamps.reduce((a, b) => Math.min(a, b))).toISOString() : null,
+      last_at: timestamps.length ? new Date(timestamps.reduce((a, b) => Math.max(a, b))).toISOString() : null,
+      event_counts: Object.fromEntries([...new Set(windowEvents.map(row => row.type))].sort()
+        .map(type => [type, windowEvents.filter(row => row.type === type).length])),
+      source_records: events.filter(row => ["session/start", "session/source"].includes(row.type)).map(row => ({
+        at: row.at, sample_kind: sampleKind(row.data, 'unclassified'),
+        source_sha: /^[a-f0-9]{40}$/.test(row.data.source_sha) ? row.data.source_sha : null,
+        profile_sha256: /^[a-f0-9]{64}$/.test(row.data.profile_sha256) ? row.data.profile_sha256 : null,
+      })),
+    };
+  });
 }
 
 export function readSessions(roots) {
@@ -158,9 +181,12 @@ export function main(argv) {
     throw new Error("Required: --from/--to ISO timestamps with offsets, --timezone, --session-root (repeatable); optional --sample-kind production|fixture|ci|unclassified");
   const { sessions, ...coverage } = readSessions(options.roots);
   const report = aggregate(sessions, options);
+  const sources = sourceManifest(sessions, options);
   const incomplete = coverage.parse_errors.length || coverage.missing_sources.length || coverage.read_errors.length || coverage.skipped_symlinks.length || report.invalid_timestamps;
   return { ...report, status: incomplete ? "incomplete" : Object.values(report.groups).some(group => group.status === "samples") ? "samples" : "no_samples",
-    session_files: sessions.length, ...coverage };
+    source_status: coverage.missing_sources.length ? 'missing_source' : incomplete ? 'incomplete' :
+      !sources.some(source => source.window_events) ? 'no_events' : report.groups.unclassified.events ? 'unclassified' : 'classified',
+    session_files: sessions.length, sources, ...coverage };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

@@ -3,11 +3,49 @@ import test from "node:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { aggregate, main } from "../report-telemetry.mjs";
+import { aggregate, main, sourceManifest } from "../report-telemetry.mjs";
 
 const options = { from: "2026-10-14T00:00:00+08:00", to: "2026-10-15T00:00:00+08:00", timezone: "Asia/Singapore" };
 const event = (id, type, data = {}, at = "2026-10-14T01:00:00+08:00") => ({ id, type, data, at });
 const summarize = events => aggregate([{ file: "fixture.jsonl", events }], { ...options, sample: "fixture" }).groups.fixture;
+
+test("resumed provenance never relabels older events across midnight", () => {
+  const sessions = [{ file: 'legacy.jsonl', events: [
+    event('old-session', 'session/start', { session_id: 's' }, '2026-10-13T23:59:00+08:00'),
+    event('old', 'agent/run/start', { 'run-id': 'old' }, '2026-10-13T23:59:59+08:00'),
+    event('old-end', 'agent/run/end', { 'run-id': 'old', status: 'completed' }, options.from),
+    event('source', 'session/source', { session_id: 's', sample_kind: 'fixture', profile_sha256: 'a'.repeat(64), source_sha: null }),
+    event('new', 'agent/run/start', { 'run-id': 'new' }),
+    event('new-end', 'agent/run/end', { 'run-id': 'new', status: 'failed' }),
+    event('next-day', 'agent/run/start', { 'run-id': 'future' }, options.to),
+  ] }];
+  const report = aggregate(sessions, options);
+  assert.equal(report.groups.unclassified.terminal, 1);
+  assert.equal(report.groups.unclassified.orphan_terminal, 0);
+  assert.equal(report.groups.fixture.admitted, 1);
+  assert.equal(report.groups.fixture.terminal, 1);
+  assert.equal(report.groups.production.sample_count.admitted_runs, 0);
+  assert.equal(report.groups.production.failure_rate, null);
+});
+
+test("source manifests export metadata and distinguish missing, empty and unclassified", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'qi-source-manifest-'));
+  const args = ['--from', options.from, '--to', options.to, '--timezone', options.timezone, '--session-root', directory];
+  try {
+    assert.equal(main(args).source_status, 'no_events');
+    const source = path.join(directory, 's.jsonl');
+    const events = [event('start', 'session/start', { session_id: 's' }),
+      event('body', 'message', { message: { content: 'PRIVATE-MESSAGE-SENTINEL' }, api_key: 'PRIVATE-KEY-SENTINEL' })];
+    fs.writeFileSync(source, events.map(row => JSON.stringify(row)).join('\n'));
+    const report = main(args);
+    assert.equal(report.source_status, 'unclassified');
+    assert.equal(report.sources[0].window_events, 2);
+    assert.equal(report.sources[0].source_records[0].source_sha, null);
+    assert.ok(!JSON.stringify(report).includes('PRIVATE-'));
+    assert.equal(main([...args, '--session-root', path.join(directory, 'missing')]).source_status, 'missing_source');
+    assert.equal(sourceManifest([{ file: source, events: [] }], options)[0].first_at, null);
+  } finally { fs.rmSync(directory, { recursive: true }); }
+});
 
 test("session start alone gives no_samples and null rates, never production health", () => {
   const events = [event("session", "session/start", { session_id: "s" })];

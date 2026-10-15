@@ -5716,6 +5716,14 @@ fn doctor(runtime: &Runtime, fix: bool) -> Value {
     let workers_ok = values
         .iter()
         .all(|worker| worker.get("alive") == Some(&Value::Bool(true)));
+    let telemetry_sources = runtime.paths.telemetry_sources(
+        runtime
+            .agents
+            .lock()
+            .expect("agents mutex poisoned")
+            .values()
+            .map(|agent| agent.session_path.clone()),
+    );
     json!({
         "ok": workers_ok && database_integrity == "ok"
             && schema_revision == SCHEMA_REVISION,
@@ -5726,6 +5734,7 @@ fn doctor(runtime: &Runtime, fix: bool) -> Value {
         "socket": runtime.paths.public_socket,
         "database": runtime.paths.database,
         "database_backups": runtime.paths.state_dir.join("backups"),
+        "telemetry_sources": telemetry_sources,
         "workers": values,
         "idle_eviction": idle_eviction_status(runtime),
         "schedules": runtime.database.list_schedules(None).unwrap_or_default(),
