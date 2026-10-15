@@ -1,5 +1,5 @@
 (ns qi.plugins.subagent-external-cli
-  "Opt-in fake-CLI contract bridge. No real provider or personal auth discovery."
+  "Opt-in CLI bridge and fixed Codex protocol. No personal auth discovery."
   (:require [babashka.process :as process]
             [cheshire.core :as json]
             [clojure.java.io :as io]
@@ -23,6 +23,10 @@
     (.write writer (str (json/generate-string
                         {:type "start"
                          :options {:command (:command config)
+                                   :protocol (some-> (:protocol config) name)
+                                   :cliVersion (:cli-version config)
+                                   :cliSha256 (:cli-sha256 config)
+                                   :model (:model config)
                                    :workspaceRoot (:workspace-root config)
                                    :timeoutMs (or (:timeout-ms config) 30000)
                                    :maxOutputBytes (or (:max-output-bytes config) 262144)
@@ -47,7 +51,7 @@
 
 (def plugin
   {:id :subagent/external-cli
-   :description "Explicit external CLI JSONL PoC; no bundled production adapter."
+   :description "Explicit external CLI JSONL PoC with optional pinned Codex decoder."
    :requires #{:subagents/runtime}
    :start
    (fn [ctx config]
@@ -57,5 +61,6 @@
      (let [runtime (kernel/require-service ctx :subagents/runtime)]
        ((:register! runtime)
         {:id :external-cli :description "Opt-in external JSONL CLI"
-         :capabilities {:max-depth 1 :persona false :tool-filter false :output-schema false}
+         :capabilities {:max-depth 1 :persona false :tool-filter false :output-schema false :multi-turn false
+                        :protocol (or (:protocol config) :generic-jsonl-v1) :cli-version (:cli-version config)}
          :start (partial start! config)})))})

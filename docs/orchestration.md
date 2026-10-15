@@ -140,6 +140,31 @@ worker 重启把已领取任务转为 `needs_review`。父会话必须提供核�
 
 `node --test evals/tests/external-cli.test.mjs` 使用 fake executable 检查 JSONL、独立 cwd、环境隔离、有界日志、非零退出、缺失/重复终态、取消竞态和不响应 TERM 的子孙进程回收，并经 Babashka registry 验证调用契约。无模型调用。
 
+### 固定 Codex exec 协议离线回放
+
+可在同一桥接器显式选择 `:protocol :codex-exec-jsonl-v1`；当前版本合同只接受
+`:cli-version "0.157.1"`、`:cli-sha256`（绝对可执行文件的 SHA-256）、单元素
+`:command ["/absolute/codex"]` 及显式 `:model`。宿主先独立核对版本/帮助并冻结二进制；
+适配器在启动前检查该文件摘要。版本是宿主声明，不是适配器的语义互操作认证。
+不提供可直接启用的含认证示例，也不会选择模型或加载个人凭据。
+
+argv 固定为 non-interactive exec、JSONL、ephemeral、ignore-user-config、
+read-only sandbox 和无交互审批；提示词原样经 stdin，HOME/CODEX_HOME 指向同一个
+私有新目录。只读参数和 cwd 仍不等于外层进程/网络隔离。认证与真实试跑需要后续独立
+profile、明确预算和授权，本次没有执行真实 `codex exec`。
+
+按 [OpenAI Docs 非交互模式](https://learn.chatgpt.com/docs/non-interactive-mode)
+解码 thread/turn/item 事件，保留有界工具进度和未知原始事件类型。完成还须唯一有效终态
+及零退出码；中断、错误、重复/缺失终态和超时保守失败或未知，取消先于晚到完成。
+能力 descriptor 声明不支持多轮、persona、tool-filter、output-schema 或审批对话。
+usage_scope 为 external-turn-reported：cached_input_tokens 是 input_tokens 的子集，
+reasoning_output_tokens 也不再叠加到 output_tokens；它不是本地逻辑请求账本，完整费用仍 null。
+
+`evals/fixtures/codex-exec-0.157.1.documented.json` 是**文档格式构造的离线 fixture**，
+不是已观察真实 transcript。本机只在隔离 HOME 中检查了0.157.1版本和帮助；ID、工具命令、
+回答及 token 数均为合成值。`evals/tests/codex-cli.test.mjs` 与原通用 CLI 测试共同验证
+解码和生命周期；真实脱敏 transcript 与授权后的模型互操作实验仍为 NOT_RUN。
+
 `qi.orchestration-test` 覆盖计划批准/拒绝/取消/版本失效、执行前复检、工作流并发/依赖失败/结构化结果、任务 CAS 与身份隔离、邮箱以及 RPC schema。`qi.orchestration-recovery-test` 覆盖未知 provider 准入、worker dispose、恢复不重放、人工核对后局部续跑、直接 RPC 的计划限制与依赖取消一致性。
 
 `qi.planning-protocol-test` 启动独立 RPC worker 和临时真实会话文件，验证提交审批挂起时仍可读取状态/处理批准，以及连续六轮取消后会话日志可继续写入。`apps/web/tests/orchestration-browser.mjs` 在生产页面上使用固定 RPC 数据点击计划、DAG、依赖认领和邮箱流程，并检查 320/375/414/768/1440 宽度的内部及页面水平溢出；它已纳入 `test:web-browser:ci`。

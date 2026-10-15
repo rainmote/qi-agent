@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "cli_version": "0.157.1",
+  "transcript_origin": "documented-protocol-fixture",
+  "observed_live_transcript": false,
+  "source": "https://learn.chatgpt.com/docs/non-interactive-mode",
+  "source_observed_at": "2026-10-15",
+  "note": "Event shapes follow official documentation; IDs, commands, answer and usage are synthetic. Local version/help were observed in an isolated home. No real provider request/output was observed.",
+  "events": [
+    {
+      "type": "thread.started",
+      "thread_id": "documented-offline-thread"
+    },
+    {
+      "type": "turn.started"
+    },
+    {
+      "type": "item.started",
+      "item": {
+        "id": "read-1",
+        "type": "command_execution",
+        "command": "read offline fixture",
+        "status": "in_progress"
+      }
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "read-1",
+        "type": "command_execution",
+        "exit_code": 0,
+        "status": "completed"
+      }
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "answer-1",
+        "type": "agent_message",
+        "text": "offline bounded answer"
+      }
+    },
+    {
+      "type": "turn.completed",
+      "usage": {
+        "input_tokens": 100,
+        "cached_input_tokens": 40,
+        "output_tokens": 7,
+        "reasoning_output_tokens": 2
+      }
+    }
+  ]
+}
