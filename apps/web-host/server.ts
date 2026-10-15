@@ -303,6 +303,7 @@ export async function startWebHost(options: WebHostOptions = {}) {
   const candidateConfig = options.candidateConfigFile ? JSON.parse(await readFile(options.candidateConfigFile, "utf8")) as CodingCandidateConfig : options.candidateConfig;
   const candidates = candidateConfig ? new CodingCandidates(candidateConfig, workspaces, cwd => sessions.candidateWriters(cwd)) : undefined;
   await candidates?.initialize();
+  if (candidates) files.useCandidateVerification((workspace, changes) => candidates.forTurn(workspace, changes));
 
   const readiness = async () => {
     const workspaceRoots = workspaces.list().map((workspace) => workspace.path);

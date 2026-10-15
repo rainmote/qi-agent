@@ -128,7 +128,7 @@ test("independent verification gates writers, deduplicates jobs, survives refres
     await writeFile(join(record.cwd, "src/value.mjs"), "export const value=2;\n");
     const current = (await f.manager.status(record.candidate_id)).source_fingerprint!;
     const input = { source_fingerprint: current, command_id: "verification-command-1" };
-    assert.equal((await f.manager.verify(record.candidate_id, input)).status, "VERIFYING"); await started;
+    assert.equal((await f.manager.verify(record.candidate_id, input, "turn-one")).status, "VERIFYING"); await started;
     assert.equal((await f.manager.verify(record.candidate_id, input)).status, "VERIFYING");
     assert.equal(calls, 1);
     await assert.rejects(() => f.manager.claim(record.candidate_workspace_id, "writer"), /writes are fenced/);
@@ -137,12 +137,18 @@ test("independent verification gates writers, deduplicates jobs, survives refres
     const verdict = await f.manager.verification(record.candidate_id);
     assert.equal(verdict.status, "PASS", JSON.stringify(verdict)); assert.equal(verdict.checks.length, 2);
     assert.equal(verdict.source_fingerprint, current); assert.equal(verdict.bindings?.controller_sha, f.config.controller_sha);
+    const changes = { turnId: "turn-one", partial: false, files: [{ path: "src/value.mjs", status: "modified", after: "export const value=2;\n" }] };
+    assert.equal((await f.manager.forTurn(record.candidate_workspace_id, changes))?.status, "PASS");
+    assert.equal((await f.manager.forTurn(record.candidate_workspace_id, { ...changes, turnId: "another-turn" }))?.status, "NOT_RUN");
+    assert.equal((await f.manager.forTurn(record.candidate_workspace_id, { ...changes, partial: true }))?.status, "UNKNOWN");
+    assert.equal((await f.manager.forTurn(record.candidate_workspace_id, { ...changes, files: [{ ...changes.files[0], after: "different capture" }] }))?.status, "UNKNOWN");
     const detail = await f.manager.checkDetails(record.candidate_id, "acceptance") as any;
     assert.equal(detail.exit_code, 0); assert.ok(Array.isArray(detail.argv)); assert.ok(!Object.hasOwn(detail, "stdout"));
     const restarted = new CodingCandidates(f.config, f.workspaces, f.inspect, async () => { throw new Error("must not replay"); });
     await restarted.initialize(); assert.equal((await restarted.verify(record.candidate_id, input)).status, "PASS");
     await writeFile(join(record.cwd, "src/value.mjs"), "export const value=3;\n");
     assert.equal((await restarted.verification(record.candidate_id)).status, "STALE");
+    assert.equal((await restarted.forTurn(record.candidate_workspace_id, changes))?.status, "STALE");
     await assert.rejects(() => restarted.verify(record.candidate_id, input), /Source fingerprint changed/);
   } finally { release(); await f.close(); }
 });

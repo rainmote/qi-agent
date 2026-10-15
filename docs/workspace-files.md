@@ -92,6 +92,11 @@ npm run web:start -- --verification-directory /absolute/private/web-verification
 
 ### coding-candidate 的独立 verifier API
 
+启用候选入口后，本轮变更摘要会读取该候选、turn ID 和完整源码指纹对应的 verifier 回执，显示未运行、
+验收中、通过、失败、过期或未知。执行终态与验收分开保存；completed 不会点亮验收。失败检查可打开认证后的
+检查记录；验收中每秒刷新，切换工作区/会话或关闭面板会取消旧请求。无关回合不借用旧回执，部分 diff、after
+内容不符、源码再变更或损坏材料均不能显示通过。旧独立回执目录的三态接入仍可使用。
+
 先停止候选的 resident writer，并读取候选 `status` 中的完整 `source_fingerprint`。
 `POST /api/candidates/ID/verify {source_fingerprint, command_id}` 先保存验收意图，再调用原宿主选定的
 固定外部控制器；HTTP 202 返回已接纳状态。profile、验收器、镜像和 argv 来自冻结合同，浏览器不能替换。

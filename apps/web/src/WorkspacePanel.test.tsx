@@ -31,3 +31,17 @@ test("verification summary distinguishes independent PASS from absent and unconf
   assert.doesNotMatch(partial, /独立验收通过/);
   assert.match(passed, /独立验收通过 · 1 项检查/); assert.match(passed, /合入与发布仍需明确授权/);
 });
+
+test("verification states keep execution separate and expose only authenticated check links", () => {
+  const base = { turnId: "fixture-turn", files: [], partial: false, execution: { status: "completed" as const } };
+  for (const [status, label] of [["VERIFYING", "正在独立验收"], ["FAIL", "独立验收未通过"], ["STALE", "验收已过期"], ["UNKNOWN", "验收结果未确认"], ["NOT_RUN", "尚未关联"]] as const) {
+    const html = renderToStaticMarkup(<WorkspaceVerificationSummary changes={{ ...base, verification: { status } }} />);
+    assert.match(html, /执行已完成/); assert.ok(html.includes(label)); assert.doesNotMatch(html, /独立验收通过/);
+    assert.match(html, /aria-live="polite"/);
+  }
+  const link = "/api/candidates/coding-" + "a".repeat(32) + "/checks/acceptance";
+  const html = renderToStaticMarkup(<WorkspaceVerificationSummary changes={{ ...base, verification: { status: "FAIL", checks: [
+    { id: "acceptance", status: "FAIL", detailsUrl: link }, { id: "unsafe", status: "FAIL", detailsUrl: "javascript:alert(1)" },
+  ] } }} />);
+  assert.ok(html.includes(`href="${link}"`)); assert.doesNotMatch(html, /javascript:/); assert.match(html, /<details open/);
+});

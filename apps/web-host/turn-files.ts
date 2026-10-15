@@ -1,6 +1,6 @@
 import type { AgentWorker } from "./worker.js";
 import type { HostEvent } from "./types.js";
-import type { WorkspaceFiles } from "./workspace-files.js";
+import type { WorkspaceFiles, TurnExecution } from "./workspace-files.js";
 import { createHash } from "node:crypto";
 
 export const snapshotTurnId = (sessionId: string, commandId: string): string =>
@@ -22,18 +22,22 @@ export class TurnFiles {
     let requestId: string | undefined;
     const early = new Map<string, HostEvent>();
     const cleanup = () => { worker.off("event", onEvent); worker.off("exit", onExit); worker.off("reset", onExit); release?.(); this.active.delete(key); };
-    const finish = (aborted: boolean): Promise<void> => finished ||= (async () => {
-      try { await started; await this.files.finishTurn(workspaceId, turnId, { aborted }); await this.files.recordSessionTurn(workspaceId, sessionId, turnId); }
+    const finish = (aborted: boolean, execution?: TurnExecution): Promise<void> => finished ||= (async () => {
+      try { await started; await this.files.finishTurn(workspaceId, turnId, { aborted, execution }); await this.files.recordSessionTurn(workspaceId, sessionId, turnId); }
       finally { cleanup(); }
     })();
     const onEvent = (event: HostEvent) => {
       if (event.event !== "remote/run-result" || typeof event.data?.request_id !== "string") return;
       if (!requestId) { if (early.size >= 128) early.delete(early.keys().next().value!); early.set(event.data.request_id, event); return; }
       if (event.data.request_id !== requestId) return;
-      const result = event.data.result as { aborted?: boolean } | undefined;
-      void finish(event.data.ok !== true || result?.aborted === true).catch(() => undefined);
+      const result = event.data.result as { aborted?: boolean; status?: string; reason?: string } | undefined;
+      const error = event.data.error as { data?: { status?: string; reason?: string } } | undefined;
+      const terminal = result || error?.data;
+      const execution = terminal?.status && ["completed", "failed", "cancelled", "uncertain"].includes(terminal.status)
+        ? { status: terminal.status as TurnExecution["status"], reason: terminal.reason } : undefined;
+      void finish(event.data.ok !== true || result?.aborted === true, execution).catch(() => undefined);
     };
-    const onExit = () => { void finish(true).catch(() => undefined); };
+    const onExit = () => { void finish(true, { status: "uncertain", reason: "worker-outcome-unconfirmed" }).catch(() => undefined); };
     this.active.set(key, { ready: () => started, admit: result => {
       const admission = result as { request_id?: unknown } | undefined;
       if (typeof admission?.request_id !== "string") { void finish(true).catch(() => undefined); return; }

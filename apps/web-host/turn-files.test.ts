@@ -27,3 +27,20 @@ test("identical command IDs in different sessions have independent snapshots and
   assert.deepEqual(recorded, ["session-a", "session-b"]); assert.equal(new Set(finished).size, 2);
   await tracker.close();
 });
+
+test("turn snapshots preserve actual execution outcomes without asserting acceptance", async () => {
+  for (const status of ["completed", "failed", "cancelled", "uncertain"] as const) {
+    const options: any[] = [];
+    const files = { beginTurn: async () => true, finishTurn: async (_workspace: string, _turn: string, value: unknown) => { options.push(value); },
+      recordSessionTurn: async () => {}, discardTurn: async () => {} } as unknown as WorkspaceFiles;
+    const worker = Object.assign(new EventEmitter(), { subscribeClient: () => () => {} }) as unknown as AgentWorker;
+    const tracker = new TurnFiles(files);
+    await tracker.begin(worker, "workspace", "session", "command-1");
+    tracker.admit("workspace", "session", "command-1", { request_id: "request-1" });
+    const event = { event: "remote/run-result", data: { request_id: "request-1", ok: status === "completed", result: { status, reason: status } } };
+    worker.emit("event", event); worker.emit("event", event);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(options.length, 1); assert.equal(options[0].execution.status, status); assert.equal(options[0].verification, undefined);
+    await tracker.close();
+  }
+});

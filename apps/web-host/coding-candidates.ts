@@ -6,6 +6,7 @@ import { isAbsolute, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { verificationGit, workspaceManifest } from "../shared/workspace-verification.mjs";
 import { candidateVerdict, sourceFingerprint, type CandidateVerification } from "./candidate-verdict.js";
+import type { WorkspaceVerification } from "../shared/workspace-verification.mjs";
 import { ensurePrivateDirectory, writePrivateFileAtomically } from "./storage.js";
 import { workspaceId, type WorkspaceRegistry } from "./workspaces.js";
 
@@ -343,4 +344,26 @@ export class CodingCandidates {
   }
 
   async waitForVerification(id: string): Promise<void> { await this.jobs.get(id); }
+
+  async forTurn(workspace: string, changes: { turnId: string; partial: boolean; files: Array<{ path: string; status: string; after: string }> }): Promise<WorkspaceVerification | undefined> {
+    let owner;
+    try { owner = await readJSON(join(this.directory, `workspace-${workspace}.json`)); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; return { status: "UNKNOWN", reason: "candidate-binding-unconfirmed" }; }
+    try {
+      const record = await this.read(owner.candidate_id), verdict = await this.verification(record.candidate_id);
+      const base = { candidateId: record.candidate_id, sourceFingerprint: verdict.source_fingerprint };
+      if (record.candidate_workspace_id !== workspace) throw new Error("Candidate workspace mismatch");
+      if (!record.verification || verdict.turn_id !== changes.turnId) return { ...base, status: "NOT_RUN", reason: "different-turn" };
+      if (changes.partial) return { ...base, status: "UNKNOWN", reason: "partial-turn-capture" };
+      if (verdict.status === "PASS") {
+        const source = await workspaceManifest(record.cwd), byFile = new Map(source.map(file => [file.file, file]));
+        if (sourceFingerprint(source) !== verdict.source_fingerprint || changes.files.some(file =>
+          file.status === "deleted" ? byFile.has(file.path) : byFile.get(file.path)?.sha256 !== hash(file.after))) {
+          return { ...base, status: "UNKNOWN", reason: "turn-source-mismatch" };
+        }
+      }
+      return { ...base, status: verdict.status, reason: verdict.reason, candidateSha: verdict.candidate_sha,
+        checks: verdict.checks.map(check => ({ id: check.id, status: check.status, detailsUrl: check.details_url })) };
+    } catch { return { status: "UNKNOWN", reason: "candidate-binding-unconfirmed" }; }
+  }
 }

@@ -23,10 +23,21 @@ export function sandboxedHtml(text: string): string {
 
 export function WorkspaceVerificationSummary({ changes }: { changes: ChangeSet }) {
   const passed = !changes.partial && changes.verification?.status === "PASS" && !!changes.verification.checks?.length && changes.verification.checks.every(check => check.status === "PASS");
-  return <div className="workspace-result-summary" aria-label="本轮结果摘要">
-          <p><strong>变更</strong> · {changes.files.length} 个文本文件{changes.partial ? " · 部分记录" : " · 限定范围内的快照"}</p>
-          <p><strong>验收</strong> · {passed ? `独立验收通过 · ${changes.verification?.checks?.length || 0} 项检查` : changes.verification?.status === "UNKNOWN" ? "验收结果未确认，文件或验收材料需要核对" : "尚未关联本轮文件指纹的独立验收记录"}</p>
-          <p><strong>下一步</strong> · {passed ? "审查已验证快照；合入与发布仍需明确授权" : changes.partial ? "核对遗漏与差异，再运行验收" : "核对差异并运行验收"}</p>
+  const status = passed ? "PASS" : changes.verification?.status === "PASS" ? "UNKNOWN" : changes.verification?.status || "NOT_RUN";
+  const labels = { NOT_RUN: "尚未关联本轮文件指纹的独立验收记录", VERIFYING: "正在独立验收，结果尚未确定",
+    PASS: `独立验收通过 · ${changes.verification?.checks?.length || 0} 项检查`, FAIL: "独立验收未通过，请查看失败检查",
+    STALE: "验收已过期，源码已变化", UNKNOWN: "验收结果未确认，文件或验收材料需要核对" };
+  const execution = changes.execution && { completed: "执行已完成", failed: "执行失败", cancelled: "执行已取消", uncertain: "执行结果未确认" }[changes.execution.status];
+  return <div className="workspace-result-summary" aria-label="本轮结果摘要" role="status" aria-live="polite" aria-atomic="true">
+          <p><strong>变更</strong> · {changes.files.length} 个文本文件{changes.partial ? " · 部分记录" : " · 限定范围内的快照"}{execution ? ` · ${execution}` : ""}</p>
+          <p><strong>验收</strong> · {labels[status]}</p>
+          <p><strong>下一步</strong> · {passed ? "审查已验证快照；合入与发布仍需明确授权" : status === "VERIFYING" ? "等待独立验收完成，可继续阅读差异" : status === "FAIL" ? "查看失败检查，修复后再验收" : status === "STALE" ? "核对新差异，建立新候选再验收" : changes.partial ? "核对遗漏与差异，再运行验收" : "核对差异并运行验收"}</p>
+          {!!changes.verification?.checks?.length && <details open={status === "FAIL" || status === "UNKNOWN"}>
+            <summary>检查详情 · {changes.verification.checks.length} 项</summary>
+            <ul>{changes.verification.checks.map(check => <li key={check.id}>{check.id} · {check.status}
+              {check.detailsUrl && /^\/api\/candidates\/coding-[a-f0-9]{32}\/checks\/[A-Za-z0-9_-]{1,100}$/.test(check.detailsUrl)
+                && <> · <a href={check.detailsUrl} target="_blank" rel="noreferrer noopener">查看检查记录</a></>}</li>)}</ul>
+          </details>}
   </div>;
 
 }
@@ -60,6 +71,11 @@ export function WorkspacePanel({ workspaceId, sessionId, api, onReference, onClo
     return () => { clearTimeout(timer); controller.abort(); };
   }, [workspaceId, sessionId, path, query, tab, revision, api]);
   useEffect(() => () => view.current?.abort(), []);
+  useEffect(() => {
+    if (tab !== "changes" || changes?.verification?.status !== "VERIFYING") return;
+    const timer = setTimeout(() => setRevision(value => value + 1), 1000);
+    return () => clearTimeout(timer);
+  }, [tab, changes]);
   const openFile = async (file: string) => {
     view.current?.abort(); const controller = new AbortController(); view.current = controller;
     setBusy(true); setError(""); setPreview(null);
