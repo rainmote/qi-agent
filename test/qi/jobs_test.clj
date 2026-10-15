@@ -4,6 +4,7 @@
             [qi.kernel :as kernel]
             [qi.plugin :as plugin]
             [babashka.fs :as fs]
+            [babashka.process :as process]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]))
 
@@ -288,6 +289,45 @@
         (is (< (/ (- (System/nanoTime) started) 1000000) 1500))
         (is (await-stopped? (parse-long (str/trim (slurp (str (fs/path directory "child.pid"))))))))
       (finally (kernel/dispose-all! ctx) (fs/delete-tree directory)))))
+
+(deftest world-timeout-reclaims-children-missed-between-descendant-polls
+  (let [directory (fs/create-temp-dir {:prefix "qi-jobs-unseen-child-"})
+        ctx (plugin/boot! {:plugins [{:ns 'qi.plugins.execution-world
+                                     :config {:root (str directory) :sandbox :none
+                                              :timeout-ms 200}}]})
+        pid (atom nil)]
+    (try
+      (with-redefs-fn {(ns-resolve 'qi.plugins.execution-world 'remember-descendants!) (fn [& _] nil)}
+        #(is (thrown-with-msg? clojure.lang.ExceptionInfo #"timed out"
+                              ((:spawn! (kernel/require-service ctx :execution/world))
+                               {:command "sleep 20 & echo $! > child.pid; sleep 0.03"}))))
+      (reset! pid (parse-long (str/trim (slurp (str (fs/path directory "child.pid"))))))
+      (is (await-stopped? @pid))
+      (finally
+        (when @pid @(process/process ["/bin/kill" "-KILL" (str @pid)] {:out :string :err :string}))
+        (kernel/dispose-all! ctx) (fs/delete-tree directory)))))
+
+(deftest world-process-group-stops-after-its-babashka-parent-is-killed
+  (let [directory (fs/create-temp-dir {:prefix "qi-jobs-parent-death-"})
+        pid (atom nil)
+        code (str "(require '[qi.plugin :as p] '[qi.kernel :as k])"
+                  "(let [c (p/boot! {:plugins [{:ns 'qi.plugins.execution-world :config {:root "
+                  (pr-str (str directory)) " :sandbox :none :timeout-ms 30000}}]})]"
+                  "((:spawn! (k/require-service c :execution/world)) {:command \"sleep 20 & echo $! > child.pid; wait\"}))")
+        parent (process/process ["bb" "--classpath" "src:plugins" "-e" code]
+                                {:out :string :err :string})]
+    (try
+      (loop [n 0]
+        (when (and (< n 200) (not (fs/exists? (fs/path directory "child.pid"))))
+          (Thread/sleep 10) (recur (inc n))))
+      (reset! pid (parse-long (str/trim (slurp (str (fs/path directory "child.pid"))))))
+      (is (alive? @pid))
+      @(process/process ["/bin/kill" "-KILL" (str (.pid (:proc parent)))] {:out :string :err :string})
+      (is (await-stopped? @pid))
+      (finally
+        (when (.isAlive (:proc parent)) (process/destroy-tree parent))
+        (when @pid @(process/process ["/bin/kill" "-KILL" (str @pid)] {:out :string :err :string}))
+        (fs/delete-tree directory)))))
 
 (deftest background-bash-cannot-bypass-the-runtime-trust-and-approval-gates
   (doseq [[trusted? approval expected-starts] [[false :allow 0] [true :deny 0] [true :allow 1]]]

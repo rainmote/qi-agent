@@ -253,7 +253,7 @@ fn preset_list_exposes_safe_display_metadata_for_mode_selection() {
             .iter()
             .map(|preset| preset.get("id").and_then(Value::as_str).unwrap())
             .collect::<Vec<_>>(),
-        vec!["standard", "creator"]
+        vec!["standard", "creator", "production"]
     );
     assert_eq!(
         presets[0].get("name").and_then(Value::as_str),

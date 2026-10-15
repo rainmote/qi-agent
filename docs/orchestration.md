@@ -122,6 +122,16 @@ worker 重启把已领取任务转为 `needs_review`。父会话必须提供核�
 
 ## 离线验证
 
+### 可选外部 CLI 契约 PoC
+
+`qi.plugins.subagent-external-cli` 可向现有 registry 注册 `:external-cli`，默认 profile 不装配它。配置必须显式提供 `:enabled true`、专用 `:workspace-root` 和以绝对可执行文件开头的 `:command` argv；可选 `:node` 指定 Node 路径。每次运行建立独立 work/home 目录，只向 CLI 传入 PATH、HOME、TMPDIR，不继承个人认证、环境密钥或用户启动文件。请求正文通过 stdin 发送，不拼入 shell。
+
+这是 POSIX 离线契约实验。CLI 从 stdin 接收 `{type:"start",prompt,run_id}`，stdout 输出 JSONL `progress` 或唯一 `result`（status、output、可选 usage）。只有有效终态和零退出码共同成立才可 completed；缺失终态、超时分别记 uncertain。interrupt/stop 先固定取消结果，再终止整个进程组，迟到的 completed 不能覆盖它；输出和 stderr 尾部有上限。verification 固定 not-run，accounting_complete=false、total_cost_usd=null，外部声明不构成独立验收。
+
+该实验没有把工作目录隔离当作操作系统沙箱。仅在专用外层隔离环境启用；它不宣称支持真实 Codex/Claude 协议、审批或费用。真实接入还须固定 CLI 版本、独立 profile 与显式实验授权；现有默认只读子代理保持原有装配。
+
+`node --test evals/tests/external-cli.test.mjs` 使用 fake executable 检查 JSONL、独立 cwd、环境隔离、有界日志、非零退出、缺失/重复终态、取消竞态和不响应 TERM 的子孙进程回收，并经 Babashka registry 验证调用契约。无模型调用。
+
 `qi.orchestration-test` 覆盖计划批准/拒绝/取消/版本失效、执行前复检、工作流并发/依赖失败/结构化结果、任务 CAS 与身份隔离、邮箱以及 RPC schema。`qi.orchestration-recovery-test` 覆盖未知 provider 准入、worker dispose、恢复不重放、人工核对后局部续跑、直接 RPC 的计划限制与依赖取消一致性。
 
 `qi.planning-protocol-test` 启动独立 RPC worker 和临时真实会话文件，验证提交审批挂起时仍可读取状态/处理批准，以及连续六轮取消后会话日志可继续写入。`apps/web/tests/orchestration-browser.mjs` 在生产页面上使用固定 RPC 数据点击计划、DAG、依赖认领和邮箱流程，并检查 320/375/414/768/1440 宽度的内部及页面水平溢出；它已纳入 `test:web-browser:ci`。

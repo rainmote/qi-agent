@@ -78,6 +78,13 @@ QI_MAINTENANCE_OUTPUT=/absolute/new-evidence-directory npm run test:maintenance:
 
 容器 smoke 运行合成缺陷的 nop / oracle、只读挂载和超时清理，oracle 应到 review_ready，nop 不得通过。另有 qi-smoke 全项目演练和 broker-smoke 断网代理演练。它们均不是模型成绩；无人值守资格另要求匹配执行材料的真实 dev/heldout 试跑，完整 Harbor 横向比较仍按 `evals/harbor/README.md` 独立执行。
 
+`qi-smoke.mjs EXACT_BASE_SHA ABS_NEW_OUTPUT [EXACT_ORACLE_SHA]` 的已知参考实现
+默认固定在 `a0b74ad310aa0e0978f747369c41315560aa6dd3`，只取两份压缩请求归属相关
+源码，并在回执中保存 `oracle_sha` 和逐文件 SHA-256。可显式指定另一个完整提交；
+缺失对象或文件立即失败，不回退到 HEAD。需要完整 Git 历史或明确保留参考提交的对象。
+参考实现与控制器、当前应用源码分别记录，避免后续生命周期事件等无关变化被整文件带入
+历史基线，破坏原有测试。当前源码仍独立运行完整测试；离线 oracle 通过不能代替其验收。
+
 ## 有游标的复盘
 
 ```sh
