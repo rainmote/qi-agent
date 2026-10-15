@@ -37,6 +37,27 @@ deadline. Its dedicated profile uses 64 requests and 35 minutes for implementati
 See [unattended maintenance](unattended-maintenance.md) for host-enforced cost
 reservation and the distinction between a configured price ceiling and billing.
 
+The Rust resident worker proxy additionally supports the explicit host environment
+`QI_AGENT_RUN_WALL_MS` (positive integer milliseconds, unset by default). It starts
+a monotonic timer on each observed native `agent/run/start`; duplicate starts do
+not extend it and matching ends disarm it. Expiry kills the owned Babashka process
+group even when a model or tool ignores cancellation. The earliest root/child
+expiry retires the shared worker tree. Private socket authentication cannot block
+the timer, and output from an older generation cannot arm or complete a new run.
+Invalid settings stop the proxy before it starts a worker.
+
+Before signalling, the proxy writes a private `<descriptor>.watchdog.json` receipt
+(with the `.json` extension replaced), then records the signal result, run IDs,
+generation, limit and `uncertain` / `not-run`. Failure to persist diagnostics is
+logged and does not prevent termination. Normal recovery closes interrupted
+native runs as `uncertain/restored` and does not replay them. The exit notification
+also carries `hard-wall-timeout`. This limits local execution, not remote billing
+or remote side effects already dispatched. It covers native runs observed by the
+Rust proxy, not direct `bb` calls or arbitrary detached processes that escape the
+worker process group; tool-group guards and outer container/PID limits remain
+separate. Host scheduling and storage delays can add latency to enforcement.
+
+
 The default loop stops three consecutive identical read-tool batches with
 `failed/no-progress`; `no-progress` retains the result fingerprint and last three
 call IDs. Arguments and canonical result values are normalized independently of

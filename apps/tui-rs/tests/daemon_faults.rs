@@ -2000,7 +2000,16 @@ fn stop_dead_worker_does_not_hydrate_and_releases_uncertain_lease() {
 
 #[test]
 fn killed_proxy_recovers_without_a_second_writer_or_daemon_restart() {
-    let harness = Harness::start();
+    assert_proxy_recovery(&[]);
+}
+
+#[test]
+fn killed_watchdog_proxy_retires_its_separate_child_group_before_replacement() {
+    assert_proxy_recovery(&[("QI_AGENT_RUN_WALL_MS", "60000")]);
+}
+
+fn assert_proxy_recovery(environment: &[(&str, &str)]) {
+    let harness = Harness::start_with_env("examples/tui-mock.edn", environment);
     let mut client = TestClient::connect(&harness.socket, "proxy-crash-client").unwrap();
     let created = client
         .call(
@@ -2085,10 +2094,11 @@ fn killed_proxy_recovers_without_a_second_writer_or_daemon_restart() {
             }
         }
     }
-    let _cleanup = GroupCleanup(proxy);
+    let group = if environment.is_empty() { proxy } else { child };
+    let _cleanup = GroupCleanup(group);
     let spawned = client.call(Some(&agent_id),"repl.eval",json!({"code":"(.pid (.start (ProcessBuilder. (into-array String [\"/bin/sleep\" \"60\"]))))"}),Some("spawn-orphan-tool")).unwrap();
     let tool_pid = spawned["value"].as_str().unwrap().parse::<i32>().unwrap();
-    assert_eq!(unsafe { libc::getpgid(tool_pid) }, proxy);
+    assert_eq!(unsafe { libc::getpgid(tool_pid) }, group);
     unsafe {
         assert_eq!(libc::kill(proxy, libc::SIGKILL), 0);
         assert_eq!(libc::kill(child, libc::SIGKILL), 0);
