@@ -69,6 +69,14 @@ owner-only（目录 `0700`、普通文件 `0600`），符号链接状态文件�
 命令超时、取消或输出越界会先终止整棵后代进程树。工具输出先写入受保护的临时 spool，只有
 需要完整输出时才生成持久文件；启动时只清理符合 qi-agent UUID 命名规则的旧输出。
 
+本地 shell 通过 `/usr/bin/perl` 的 POSIX `setsid` 在独立进程组启动，清理先向整个组发 TERM，
+再发 KILL；另保留 ProcessHandle 跟踪以清理可观测的后代。这样即使 shell 在两次轮询之间
+退出，持有输出管道的普通子进程也不会遗漏。需要可执行的 `/usr/bin/perl`（POSIX 模块）和
+`/bin/kill`、`/bin/ps`；缺少启动器时不注册进程工具，直接进程调用也失败。
+独立组中的可信 guard 持续核对原 Babashka 父进程身份，父进程被杀死后回收该组；
+它不会因退出 worker 原进程组而绕过 daemon 停止后的清理。用户程序主动脱离进程组并
+隐藏后代仍需外层容器/PID 命名空间清理，不能把该机制当成任意恶意程序的 OS 沙箱。
+
 ## 数据库升级、备份与恢复
 
 Supervisor 使用 `PRAGMA user_version` 管理 schema。启动时先做 quick check；已有数据库版本
