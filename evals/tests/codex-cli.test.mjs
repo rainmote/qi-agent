@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto';
 import { startExternalRun } from '../../src/qi/external_cli.mjs';
 import { codexDecoder } from '../../src/qi/external_cli_codex.mjs';
 const fixture = JSON.parse(await readFile(new URL('../fixtures/codex-exec-0.157.1.documented.json', import.meta.url)));
+const observed = JSON.parse(await readFile(new URL('../fixtures/codex-exec-0.157.1.observed-failure.json', import.meta.url)));
 async function fake(t, events, body = '') {
   const root = await mkdtemp(path.join(tmpdir(), 'qi-codex-replay-'));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -60,6 +61,41 @@ test('failed, interrupted, missing, duplicate and nonzero streams cannot become 
     const f = await fake(t, events, body), r = await (await startExternalRun(f.options)).result;
     assert.equal(r.status, status, JSON.stringify(r)); assert.equal(r.reason, reason);
   }
+});
+
+test('observed provider rejection keeps its cause through nonzero process exit', async t => {
+  assert.equal(observed.observed_live_transcript, true);
+  assert.match(observed.raw_artifact_sha256, /^[a-f0-9]{64}$/u);
+  for (const strip of [false, true]) {
+    const events = observed.events.filter(e => !strip || e.item?.type !== 'error');
+    const f = await fake(t, events, 'emit();process.exitCode=1;');
+    const r = await (await startExternalRun(f.options)).result;
+    assert.equal(r.status, 'failed'); assert.equal(r.reason, 'codex-model-unavailable');
+    assert.match(r.detail, /not supported/); assert.equal(r.exit_code, 1);
+    assert.equal(r.diagnostics.length, strip ? 1 : 2);
+    assert.deepEqual(r.usage, {}); assert.equal(r.total_cost_usd, null);
+  }
+});
+
+test('diagnostics are bounded, pre-turn allowance is narrow, and errors cannot turn into success', () => {
+  const d = codexDecoder(); d.accept(observed.events[0]);
+  for (let i = 0; i < 100; i++) d.accept({ type: 'item.completed', item: { id: 'e'+i, type: 'error', message: 'x'.repeat(4096) } });
+  assert.equal(d.metadata().diagnostics.length, 32);
+  assert.equal(d.metadata().diagnostics[0].message.length, 2048);
+  assert.equal(d.finish(), undefined);
+  for (const event of [
+    { type: 'item.started', item: { id:'e',type:'error',message:'bad' } },
+    { type: 'item.completed', item: { id:'a',type:'agent_message',text:'bad' } },
+    { type: 'item.completed', item: { id:'e',type:'error' } }
+  ]) { const p=codexDecoder(); p.accept(observed.events[0]); assert.throws(()=>p.accept(event)); }
+  const unresolved=codexDecoder(); fixture.events.slice(0,-1).forEach(unresolved.accept);
+  unresolved.accept({type:'error',message:'request failed'});
+  assert.throws(()=>unresolved.accept(fixture.events.at(-1)));
+  assert.equal(unresolved.finish().reason,'codex-error');
+  const failed=codexDecoder(); observed.events.forEach(failed.accept);
+  assert.throws(()=>failed.accept(observed.events.at(-1)));
+  const negative=codexDecoder(); fixture.events.slice(0,2).forEach(negative.accept);
+  assert.throws(()=>negative.accept({type:'turn.failed',usage:{input_tokens:-1}}));
 });
 
 test('unknown raw types and progress stay bounded without inventing a terminal', () => {

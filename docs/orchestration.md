@@ -165,6 +165,13 @@ reasoning_output_tokens 也不再叠加到 output_tokens；它不是本地逻辑
 回答及 token 数均为合成值。`evals/tests/codex-cli.test.mjs` 与原通用 CLI 测试共同验证
 解码和生命周期；真实脱敏 transcript 与授权后的模型互操作实验仍为 NOT_RUN。
 
+另有 `codex-exec-0.157.1.observed-failure.json`，来自 2026-10-16 已观察到的
+provider 拒绝日志；metadata 固定原始 artifact 的 SHA-256，仅替换 thread ID。
+它证明失败序列的兼容性，不证明当前模型可用性或成功互操作。只允许已开始 thread 的
+turn 前 `item.completed(error)` 诊断；顶层 error 暂存，由 turn.failed 收口并保留最多
+2048 字符原因。仅有 error 的 EOF 记失败；无 error、无终态仍未知。已知失败在非零退出时
+保留原因，成功终态遇到非零退出仍失败；取消、重复终态、畸形诊断和非法 usage 的围栏继续生效。
+
 `qi.orchestration-test` 覆盖计划批准/拒绝/取消/版本失效、执行前复检、工作流并发/依赖失败/结构化结果、任务 CAS 与身份隔离、邮箱以及 RPC schema。`qi.orchestration-recovery-test` 覆盖未知 provider 准入、worker dispose、恢复不重放、人工核对后局部续跑、直接 RPC 的计划限制与依赖取消一致性。
 
 `qi.planning-protocol-test` 启动独立 RPC worker 和临时真实会话文件，验证提交审批挂起时仍可读取状态/处理批准，以及连续六轮取消后会话日志可继续写入。`apps/web/tests/orchestration-browser.mjs` 在生产页面上使用固定 RPC 数据点击计划、DAG、依赖认领和邮箱流程，并检查 320/375/414/768/1440 宽度的内部及页面水平溢出；它已纳入 `test:web-browser:ci`。

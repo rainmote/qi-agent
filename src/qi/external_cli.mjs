@@ -91,10 +91,11 @@ export async function startExternalRun(options, request = {}) {
     child.on('exit', code => { exitCode = code; });
     child.on('close', () => {
       if (pending) parseLine(pending);
+      if (codex && !forced) terminal = codex.finish();
       closed = true; clearTimeout(deadline); clearTimeout(cleanupTimer);
       signalGroup('SIGKILL'); // Includes grandchildren whose parent already exited.
       const value = forced ?? (launchError ? { status: 'failed', reason: 'launch-error' } :
-        exitCode !== 0 ? { status: 'failed', reason: 'process-exit' } :
+        exitCode !== 0 ? (codex && terminal?.status === 'failed' ? terminal : { status: 'failed', reason: 'process-exit' }) :
         terminal ?? { status: 'uncertain', reason: 'missing-terminal' });
       const usage = {};
       for (const key of codex ? ['input_tokens', 'output_tokens', 'cached_input_tokens', 'reasoning_output_tokens'] : ['input_tokens', 'output_tokens']) {
@@ -102,6 +103,7 @@ export async function startExternalRun(options, request = {}) {
         if (Number.isSafeInteger(number) && number >= 0) usage[key] = number;
       }
       resolve({ status: value.status, reason: value.reason ?? value.status,
+        ...(value.detail ? { detail: value.detail } : {}),
         output: forced ? '' : terminal?.output ?? '', verification: 'not-run',
         accounting_complete: false, total_cost_usd: null, usage,
         exit_code: exitCode ?? null, launch_error: launchError ?? null,
