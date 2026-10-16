@@ -43,7 +43,10 @@ export async function checkCodex(command = 'codex', run = runProcess) {
 export function decodeCodex(execution) {
   if (execution.cancelled) return { status: 'cancelled', reason: 'operator-paused' };
   if (execution.timed_out || execution.output_limited || execution.error || execution.signal) return { status: 'uncertain', reason: 'codex-execution-incomplete' };
-  let thread = false, started = false, terminal, answer = false;
+  let thread = false, started = false, terminal, answer = false, providerError;
+  const failure = detail => ({ status: 'failed',
+    reason: /model is not supported|model.*not (?:available|supported)/i.test(detail ?? '') ? 'codex-model-unavailable' : 'codex-turn-failed',
+    detail: typeof detail === 'string' ? detail.slice(0, 4096) : null });
   try {
     for (const line of execution.stdout.split('\n').filter(line => line.trim())) {
       const event = JSON.parse(line);
@@ -55,10 +58,12 @@ export function decodeCodex(execution) {
         if (!thread || started) throw new Error('Invalid turn');
         started = true;
       } else if (event.type.startsWith('item.')) {
-        if (!started || !event.item || typeof event.item.id !== 'string' || typeof event.item.type !== 'string') throw new Error('Invalid item');
+        if (!thread || !event.item || typeof event.item.id !== 'string' || typeof event.item.type !== 'string') throw new Error('Invalid item');
+        // 0.157.1 emits metadata warnings before turn.started. They are diagnostic items.
+        if (!started && !(event.type === 'item.completed' && event.item.type === 'error')) throw new Error('Item before turn');
         if (event.type === 'item.completed' && event.item.type === 'agent_message' && typeof event.item.text === 'string' && event.item.text.trim()) answer = true;
       } else if (event.type === 'turn.completed') {
-        if (!started || !answer) throw new Error('No completed answer');
+        if (!started || !answer || providerError) throw new Error('No clean completed answer');
         const usage = {};
         for (const key of ['input_tokens', 'cached_input_tokens', 'output_tokens', 'reasoning_output_tokens']) {
           if (event.usage?.[key] === undefined) continue;
@@ -67,12 +72,18 @@ export function decodeCodex(execution) {
         }
         if (usage.cached_input_tokens > usage.input_tokens || usage.reasoning_output_tokens > usage.output_tokens) throw new Error('Invalid usage subset');
         terminal = { status: 'completed', reason: 'codex-turn-completed', usage };
-      } else if (event.type === 'turn.failed' || event.type === 'error') terminal = { status: 'failed', reason: 'codex-turn-failed' };
+      } else if (event.type === 'error') {
+        // The observed stream emits error followed by turn.failed for one rejection.
+        providerError = typeof event.message === 'string' ? event.message : 'Codex reported an error';
+      } else if (event.type === 'turn.failed') {
+        if (!started) throw new Error('Failure before turn');
+        terminal = failure(event.error?.message ?? providerError);
+      }
       else throw new Error('Unreviewed Codex event type');
     }
   } catch { return { status: 'uncertain', reason: 'invalid-codex-jsonl' }; }
-  if (!terminal) return { status: 'uncertain', reason: 'missing-codex-terminal' };
-  if (execution.exit_code !== 0) return { status: 'failed', reason: 'codex-process-failed' };
+  if (!terminal) return providerError ? failure(providerError) : { status: 'uncertain', reason: 'missing-codex-terminal' };
+  if (execution.exit_code !== 0 && terminal.status === 'completed') return { status: 'failed', reason: 'codex-process-failed' };
   return terminal;
 }
 
@@ -165,7 +176,7 @@ export async function codexLoop({ root, id, lock, config = defaults, execute, wr
       usage: { scope: 'codex-turn-reported', tokens: outcome.usage ?? null, accounting_complete: false, total_cost_usd: null } });
     await lock.append('action/result', { task_id: id, action_id: actionId, result: 'confirmed', evidence: artifact });
     if (await paused(root)) outcome.status = 'cancelled';
-    if (outcome.status !== 'completed') return transition(root, lock, id, state.revision, outcome.status, { reason: outcome.reason });
+    if (outcome.status !== 'completed') return transition(root, lock, id, state.revision, outcome.status, { reason: outcome.reason, detail: outcome.detail ?? null });
     state = await verify({ root, id, lock, execute });
     if (state.status !== 'failed' || state.reason !== 'verification-failed' || state.attempts >= maxAttempts) return state;
     // Retry only known verification failures; never repeat an unknown or failed model request.

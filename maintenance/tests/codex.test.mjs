@@ -75,6 +75,17 @@ test('success text and zero exit cannot replace a valid completed turn', () => {
   assert.equal(decodeCodex(completed()).usage.input_tokens, 100, 'cached tokens are not added again');
 });
 
+test('observed CLI model rejection before and after turn start is a known failure with no fallback', () => {
+  const message = "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.";
+  const observed = [records[0],
+    { type: 'item.completed', item: { id: 'item_0', type: 'error', message: 'Model metadata not found; using fallback metadata.' } },
+    records[1], { type: 'error', message }, { type: 'turn.failed', error: { message } }];
+  const result = decodeCodex({ ...completed(observed), exit_code: 1 });
+  assert.equal(result.status, 'failed'); assert.equal(result.reason, 'codex-model-unavailable');
+  assert.match(result.detail, /not supported/);
+  assert.notEqual(decodeCodex(completed([records[0], records[1], { type: 'error', message }, records[2], records[3]])).status, 'completed');
+});
+
 test('independent red/green checks drive one repair and create a review candidate without changing main', async t => {
   const f = await fixture(t); await f.init();
   const prompts = [];

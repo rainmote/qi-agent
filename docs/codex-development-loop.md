@@ -23,7 +23,7 @@ node maintenance/codex.mjs plan --state /absolute/private/codex-state --id TASK_
 node maintenance/codex.mjs run --state /absolute/private/codex-state --id TASK_ID
 ```
 
-`doctor` 和 `plan` 不调用模型。`run` 使用订阅额度；不要求 OpenAI API key，不继承 API key 环境变量，不复制认证文件。它忽略用户 `config.toml`，明确指定模型、effort、ChatGPT 认证和 `workspace-write` 沙箱；shell 网络访问关闭，不申请全盘写权限。它保留 Codex 本身的登录管理与操作系统沙箱行为。
+`doctor` 和 `plan` 不调用模型；`doctor` 只确认版本和登录，模型权限仍以真实请求为准。`run` 使用订阅额度；不要求 OpenAI API key，不继承 API key 环境变量，不复制认证文件。它忽略用户 `config.toml`，明确指定模型、effort、ChatGPT 认证和 `workspace-write` 沙箱；shell 网络访问关闭，不申请全盘写权限。它保留 Codex 本身的登录管理与操作系统沙箱行为。
 
 验收日志以诊断数据传回下一次实现，不能改写允许文件、验收器或任务合同。候选不得存在额外 `.codex` 启动配置，不能交付新的 AGENTS 指令。每次模型结束都同时检查进程结果与 JSONL 终态，模型声称成功不等于测试通过。成功返回 `review_ready`、候选 SHA 和独立验收证据。
 
@@ -43,6 +43,8 @@ node maintenance/run.mjs status --state /absolute/private/codex-state --id TASK_
 当前使用宿主 Codex 沙箱写候选、Docker 执行独立验收，属于受监督开发。Codex 的宿主可读范围与原来的断网 qi worker 不同，不能将其作为原无人值守系统的隔离或费用资格。测试通过后继续人工审查；本入口不接受、合入、推送或发布候选。
 
 `node --test maintenance/tests/codex.test.mjs` 覆盖真实本地子进程、独立 red/green、验收失败反馈、三次上限、无进展、暂停、超时、未知终态及中断意图。测试中的模型返回是 fixture；真实订阅和真实 Docker 试跑另行记录，不能用 fixture 声称模型效果。
+
+小型端到端检查使用 `maintenance/codex-smoke.mjs --offline ABS_NEW_OUTPUT`；将 `--offline` 改为 `--live` 会调用一次真实订阅 Codex。两者都要求 `QI_MAINTENANCE_IMAGE` 指定包含 Node 的固定 Docker 镜像，创建独立加法缺陷仓库，执行真实 red/green 后保存报告。该探针共五分钟，至多三分钟用于模型，实现尝试上限为一次。它只验证接线，不代替 qi-agent 完整工具链验收或真实质量评测。模型不可用返回 `codex-model-unavailable`，保留服务端诊断，不回退到其他模型或 API。
 
 新增入口为功能扩展，不替换已有缺陷行为，因此不要求在旧版上以缺失模块造成假 red；行为闭环本身在独立 fixture 中验证有效的旧实现断言失败和新实现通过。
 
