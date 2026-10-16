@@ -52,7 +52,7 @@ try {
     },
   };
   // A single live invocation is sufficient for transport verification; this is not a model benchmark.
-  const result = await codexLoop({ root, id: task.task_id, lock, config: { ...defaults, max_attempts: 1 }, ...simulated });
+  const result = await codexLoop({ root, id: task.task_id, lock, command: process.env.QI_CODEX_EXECUTABLE || 'codex', config: { ...defaults, max_attempts: 1 }, ...simulated });
   const events = await readJournal(root);
   const usage = events.filter(event => event.type === 'implementation/result').map(event => event.data.usage);
   const report = { status: result.status === 'review_ready' ? 'PASS' : 'FAIL', mode: live ? 'live-chatgpt-subscription-with-docker' : 'offline-writer-with-docker',

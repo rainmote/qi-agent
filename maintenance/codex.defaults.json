@@ -3,6 +3,7 @@
   "model": "gpt-6.1-sol",
   "reasoning_effort": "xhigh",
   "authentication": "chatgpt",
+  "cli_version": "0.162.0-alpha.17.2",
   "mode": "supervised",
   "max_attempts": 3
 }

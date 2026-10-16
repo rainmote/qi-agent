@@ -16,7 +16,7 @@ const TRANSITIONS = {
   queued: ['scoped', 'blocked', 'uncertain', 'cancelled'], scoped: ['implementing', 'verifying', 'blocked', 'uncertain', 'cancelled'],
   implementing: ['verifying', 'failed', 'blocked', 'uncertain', 'cancelled'],
   verifying: ['review_ready', 'implementing', 'failed', 'blocked', 'uncertain', 'cancelled'],
-  review_ready: ['accepted', 'trial_passed', 'blocked', 'uncertain', 'cancelled'],
+  review_ready: ['accepted', 'trial_passed', 'blocked', 'uncertain', 'cancelled', 'scoped'],
   failed: ['scoped'],
 };
 

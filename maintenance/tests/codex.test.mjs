@@ -8,6 +8,8 @@ import { lockStore, readJournal } from '../lib/store.mjs';
 import { prepare, loadTask } from '../lib/controller.mjs';
 import { git } from '../lib/execution.mjs';
 import { runProcess } from '../../evals/lib/core.mjs';
+import { reviewCandidate, parseReview } from '../lib/codex-review.mjs';
+import { draftPlan, recordDraft, validateDraftReceipt, validateDestination } from '../lib/draft-pr.mjs';
 
 const policy = JSON.parse(await fs.readFile(new URL('../policy.json', import.meta.url)));
 const records = [
@@ -23,6 +25,7 @@ async function fixture(t) {
   const repo = path.join(directory, 'repo'), root = path.join(directory, 'state'), verifier = path.join(directory, 'verifier');
   await fs.mkdir(path.join(repo, 'src'), { recursive: true }); await fs.mkdir(verifier);
   await fs.writeFile(path.join(repo, 'src/value.mjs'), 'export const value = 1;\n');
+  await fs.writeFile(path.join(repo, 'src/note.mjs'), 'export const note = "baseline";\n');
   git(repo, 'init', '-b', 'main'); git(repo, 'add', '.');
   git(repo, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'baseline');
   const base = git(repo, 'rev-parse', 'HEAD');
@@ -61,9 +64,87 @@ test('Codex defaults pin the requested model and effort without API credentials 
 });
 
 test('doctor rejects changed CLI versions and API logins without invoking a model', async () => {
-  for (const [version, login] of [['codex-cli 0.158.0', 'Logged in using ChatGPT'], ['codex-cli 0.157.1', 'Logged in using an API key']]) {
+  for (const [version, login] of [['codex-cli 0.157.1', 'Logged in using ChatGPT'], [`codex-cli ${defaults.cli_version}`, 'Logged in using an API key']]) {
     await assert.rejects(checkCodex('fixture', async (_command, args) => ({ exit_code: 0, stdout: args[0] === '--version' ? version : login, stderr: '' })), /required/);
   }
+});
+
+test('the reviewed CLI version admits ChatGPT authentication without substituting the requested model', async () => {
+  const seen=[];
+  const identity=await checkCodex('fixture', async (_command,args) => {seen.push(args[0]);return {exit_code:0,stdout:args[0]==='--version'?`codex-cli ${defaults.cli_version}`:'Logged in using ChatGPT',stderr:''};});
+  assert.equal(identity.authentication,'chatgpt'); assert.deepEqual(seen,['--version','login']);
+  assert.equal(defaults.model,'gpt-6.1-sol');
+});
+
+test('independent review requests a bounded repair, then a draft handoff is idempotent and SHA-bound', async t => {
+  const f=await fixture(t); await f.init(); git(f.repo,'remote','add','origin','git@github.com:rainmote/qi-agent.git');
+  let writes=0,reviews=0;
+  const result=await codexLoop({...f,command:'/reviewed/codex', writer:async options=>{
+    assert.equal(options.command,'/reviewed/codex');writes++;
+    if(writes===2)assert.match(options.prompt,/Use an explicit numeric expression/);
+    await fs.writeFile(path.join(options.workspace,'src/value.mjs'),writes===1?'export const value = 2;\n':'export const value = 1 + 1;\n');return completed();
+  },reviewCandidate: options=>reviewCandidate({...options,doctor:f.doctor,reviewer:async call=>{
+    reviews++;assert.ok(call.argv.includes('read-only'));assert.equal(call.argv.includes('workspace-write'),false);
+    const {state}=await loadTask(f.root,f.id);
+    const report={head_sha:state.candidate_sha,decision:reviews===1?'changes_required':'approve',summary:'Independent fixture review',findings:reviews===1?[{priority:'P2',file:'src/value.mjs',line:1,message:'Use an explicit numeric expression'}]:[]};
+    return completed([...records.slice(0,2),{...records[2],item:{...records[2].item,text:JSON.stringify(report)}},records[3]]);
+  }})});
+  assert.equal(result.status,'review_ready');assert.equal(writes,2);assert.equal(reviews,2);
+  const plan=await draftPlan({...f,repository:'rainmote/qi-agent'});
+  assert.equal(plan.status,'ready'); assert.equal(plan.draft,true);
+  assert.equal(plan.push_argv.at(-2),'git@github.com:rainmote/qi-agent.git');
+  git(f.repo,'config','--add','remote.origin.pushurl','git@github.com:rainmote/qi-agent.git');
+  git(f.repo,'config','--add','remote.origin.pushurl','git@github.com:other/repo.git');
+  await assert.rejects(draftPlan({...f,repository:'rainmote/qi-agent'}),/Exactly one/);
+  git(f.repo,'config','--unset-all','remote.origin.pushurl');
+  assert.equal((await draftPlan({...f,repository:'rainmote/qi-agent'})).status,'reconcile');
+  const receipt={repository:plan.repository,head:plan.head,base:plan.base,head_sha:plan.head_sha,base_sha:plan.base_sha,draft:true,state:'open',number:7,url:'https://github.com/rainmote/qi-agent/pull/7'};
+  assert.throws(()=>validateDraftReceipt(plan,{...receipt,head_sha:f.base}),/receipt/);
+  assert.throws(()=>validateDraftReceipt(plan,{...receipt,draft:false}),/receipt/);
+  assert.equal((await recordDraft({...f,receipt})).url,receipt.url);
+  assert.equal((await draftPlan({...f,repository:'rainmote/qi-agent'})).status,'created');
+  assert.equal((await recordDraft({...f,receipt})).url,receipt.url);
+  assert.equal((await readJournal(f.root)).filter(e=>e.type==='candidate/pr-created').length,1);
+  await fs.appendFile(path.join(result.workspace,'src/value.mjs'),'// changed\n');
+  await assert.rejects(draftPlan({...f,repository:'rainmote/qi-agent'}),/contents changed/);
+});
+
+test('review repairs can restore a previously staged file to baseline', async t => {
+  const f=await fixture(t);f.task.allowed_files.push('src/note.mjs');await f.init();
+  let writes=0,reviews=0;
+  const result=await codexLoop({...f,writer:async call=>{
+    writes++;await fs.writeFile(path.join(call.workspace,'src/value.mjs'),'export const value = 2;\n');
+    await fs.writeFile(path.join(call.workspace,'src/note.mjs'),writes===1?'export const note = "changed";\n':'export const note = "baseline";\n');return completed();
+  },reviewCandidate:options=>reviewCandidate({...options,doctor:f.doctor,reviewer:async()=>{
+    reviews++;const {state}=await loadTask(f.root,f.id);
+    const report={head_sha:state.candidate_sha,decision:reviews===1?'changes_required':'approve',summary:'Review repair',findings:reviews===1?[{priority:'P2',file:'src/note.mjs',line:1,message:'Restore unrelated note change'}]:[]};
+    return completed([...records.slice(0,2),{...records[2],item:{...records[2].item,text:JSON.stringify(report)}},records[3]]);
+  }})});
+  assert.equal(result.status,'review_ready');assert.equal(reviews,2);
+  assert.deepEqual(result.manifest.map(entry=>entry.file),['src/value.mjs']);
+});
+
+test('known reviewer cancellation and a late pause never become approval or uncertainty', async t => {
+  for(const mode of ['cancelled','late-pause']){
+    const f=await fixture(t);await f.init();
+    const result=await codexLoop({...f,writer:async call=>{await fs.writeFile(path.join(call.workspace,'src/value.mjs'),'export const value = 2;\n');return completed();},
+      reviewCandidate:options=>reviewCandidate({...options,doctor:f.doctor,reviewer:async()=>{
+        if(mode==='late-pause')await fs.writeFile(path.join(f.root,'pause.json'),'{}');
+        return {...completed(),cancelled:mode==='cancelled'};
+      }})});
+    assert.equal(result.status,'cancelled');assert.equal(result.reason,'operator-paused');
+    assert.equal((await readJournal(f.root)).some(event=>event.type==='candidate/reviewed'),false);
+  }
+});
+
+test('review uncertainty and unsupported destinations cannot produce a publication request', async t=>{
+  const f=await fixture(t);await f.init();
+  const result=await codexLoop({...f,writer:async call=>{await fs.writeFile(path.join(call.workspace,'src/value.mjs'),'export const value = 2;\n');return completed();},
+    reviewCandidate:options=>reviewCandidate({...options,doctor:f.doctor,reviewer:async()=>completed(records.slice(0,-1))})});
+  assert.equal(result.status,'uncertain');
+  await assert.rejects(draftPlan({...f,repository:'rainmote/qi-agent'}),/verified candidate/);
+  assert.throws(()=>validateDestination('rainmote/qi-agent','git@github.com:other/repo.git'),/remote/);
+  assert.throws(()=>parseReview(JSON.stringify({head_sha:f.base,decision:'approve',summary:'OK',findings:[]}),{candidate_sha:'f'.repeat(40)},f.task),/review/);
 });
 
 test('success text and zero exit cannot replace a valid completed turn', () => {
