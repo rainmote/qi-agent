@@ -10,7 +10,8 @@
 必须固定 model/effort、输入／输出字节上限、请求数 120、总墙钟和 max_retries=0；它是本实验
 transport 的实际配置，不冒充完整标准 Agent profile。CONFIG 还绑定 profile 文件哈希、固定镜像、
 只读 runtime 和共享的宿主预算 state-root，以及现有 broker 所要求的模型、上下文／输出 token 上限、
-任务／每日费用和有效计价上界。授权逐项绑定模型、profile、预算、输入、runtime 与镜像；JSON 是
+任务／每日费用和有效计价上界。共享预算目录必须预先建立；授权逐项绑定其 canonical state-root、
+模型、profile、预算、输入、runtime 与镜像，不能换目录复用授权重置累计限额。JSON 是
 可信宿主的审查回执，不是身份认证。任何一项缺失都不得 dispatch。
 
 worker 运行在断网、非 root、只读根目录容器，数据只复制 model-inputs；另外只读挂载上述四文件
@@ -21,7 +22,8 @@ broker 固定输出 cap、禁服务端会话／远程工具与自动截断，并
 
 暂停文件 `NEW_OUTPUT/pause.json` 或宿主取消会停止自有执行；超时、缺失终态、响应丢失、未知费用
 保留 UNKNOWN 和原调用意图，不自动重试。多个实验应复用同一宿主预算 state-root；新输出目录不是
-重置预算的方式。输出保留逐请求结果、原生事件、预算账本和原始执行回执。完成执行仍需在独立侧
+重置预算的方式。当前 run 的预留请求数与整个任务的累计数分别保留。
+输出保留逐请求结果、原生事件、预算账本和原始执行回执。完成执行仍需在独立侧
 用既有 `assembleRecall/grade` 规则评分；真实语义召回与完整账单未核对时保持 null。
 
 测试使用 fake provider 和真实本机生成／broker 接线，不读取个人认证、不构成真实模型成绩。
