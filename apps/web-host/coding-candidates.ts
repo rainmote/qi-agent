@@ -254,6 +254,9 @@ export class CodingCandidates {
       const record = await this.read(owner.candidate_id);
       if (record.candidate_workspace_id !== candidateWorkspace) throw new Error("Candidate workspace binding changed");
       if (record.status !== "ready") throw new Error("Candidate is not writable; reconcile its state");
+      const trusted = await this.trusted();
+      if (typeof trusted.api.assertTaskRepositoryAdmission !== "function") throw new Error("Reviewed controller lacks shared repository admission");
+      await trusted.api.assertTaskRepositoryAdmission(record.state_root, record.candidate_id);
       if (this.jobs.has(record.candidate_id) || (record.verification && !record.verification.ended_at)) throw new Error("Verification is running or unknown; candidate writes are fenced");
       if (record.writer_session && record.writer_session !== sessionId) throw new Error("Candidate already belongs to another writer session");
       record.writer_session = sessionId; await this.save(record);
