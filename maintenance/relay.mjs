@@ -26,8 +26,10 @@ const server = http.createServer(async (req, res) => {
       await new Promise((r) => setTimeout(r, 50));
     }
     if (!response) throw new Error('Broker did not settle the request');
-    res.writeHead(response.status, { 'content-type': 'application/json' }).end(JSON.stringify(response.body));
+    // Finish asynchronous cleanup before acknowledging completion. Otherwise a
+    // client's next sequential round can arrive while this request is still busy.
     await fs.unlink(reply);
+    res.writeHead(response.status, { 'content-type': 'application/json' }).end(JSON.stringify(response.body));
   } catch { if (!res.headersSent) res.writeHead(503, { 'content-type': 'application/json' }); res.end('{"error":{"message":"Maintenance broker unavailable"}}'); }
   finally { busy = false; }
 });
