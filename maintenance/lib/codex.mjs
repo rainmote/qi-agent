@@ -4,7 +4,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { randomUUID, createHash } from 'node:crypto';
 import { runProcess } from '../../evals/lib/core.mjs';
-import { loadTask, preflight, transition, verify, TERMINAL } from './controller.mjs';
+import { loadTask, preflight, transition, verify, TERMINAL, assertTaskRepositoryAdmission } from './controller.mjs';
 import { encode, putArtifact, readArtifact } from './store.mjs';
 import { git } from './execution.mjs';
 
@@ -142,6 +142,7 @@ async function failureFeedback(root, state) {
 
 export async function codexLoop({ root, id, lock, config = defaults, execute, writer = runCodex, doctor = checkCodex, command = 'codex', reviewCandidate }) {
   let { state, task, policy, events } = await loadTask(root, id);
+  await assertTaskRepositoryAdmission(root, id);
   const argv = codexArgs(state.workspace, config);
   if (state.status !== 'scoped' || state.attempts !== 0) throw new Error('Start Codex on a newly prepared task; interrupted runs require reconciliation');
   if (policy.max_cost_usd !== null) throw new Error('ChatGPT subscription usage cannot enforce an API dollar budget');

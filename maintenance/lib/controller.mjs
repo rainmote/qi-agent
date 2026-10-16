@@ -8,6 +8,8 @@ import { assessTap } from '../../evals/lib/grading.mjs';
 import { usageLedger, mayAttempt } from './ledger.mjs';
 import { validateBudget, budgetSnapshot } from './budget.mjs';
 import { startBroker } from './broker.mjs';
+import { inspectEnvironment } from './environment.mjs';
+import { admitRepository, assertRepositoryAdmission, releaseRepositoryAdmission } from './repository-admission.mjs';
 
 const catalog = JSON.parse(await fs.readFile(new URL('../checks.json', import.meta.url)));
 
@@ -32,7 +34,23 @@ export async function transition(root, lock, id, expectedRevision, status, data 
   const current = taskState(await readJournal(root), id);
   if (!current || current.revision !== expectedRevision) throw new Error('Task revision conflict');
   if (!TRANSITIONS[current.status]?.includes(status)) throw new Error(`Illegal transition ${current.status} -> ${status}`);
+  if (status === 'scoped' && ['failed', 'review_ready'].includes(current.status) && current.repository_admission) {
+    const task = JSON.parse(await readArtifact(root, current.contract));
+    const admission = await admitRepository({ repo: current.repository, root, task, contractHash: current.contract_hash, reopen: true });
+    data = { ...data, repository_admission: admission };
+  }
   await lock.append('task/transition', { ...data, task_id: id, status });
+  if (current.repository_admission && status !== 'uncertain' && (TERMINAL.has(status) || status === 'review_ready')) {
+    const events = await readJournal(root);
+    const unresolved = events.some(e => e.type === 'action/intent' && e.data.task_id === id &&
+      !events.some(done => done.type === 'action/result' && done.data.action_id === e.data.action_id));
+    const released = events.some(e => e.type === 'task/admission-released' &&
+      e.data.receipt?.owner_token === current.repository_admission.owner_token);
+    if (!unresolved && !released) {
+      const receipt = await releaseRepositoryAdmission(current.repository_admission);
+      await lock.append('task/admission-released', { task_id: id, receipt });
+    }
+  }
   return taskState(await readJournal(root), id);
 }
 
@@ -104,6 +122,12 @@ export async function prepare({ repo, root, controller, task, policy, lock }) {
     throw new Error('Unresolved external action; reconcile before admitting a new task');
   }
   if (activeIds.some((id) => !TERMINAL.has(taskState(events, id).status))) throw new Error('Pilot permits one active task and one writer');
+  const admission = await admitRepository({ repo, root, task, contractHash: digest(encode(task)) });
+  if (admission.reused) {
+    const original = taskState(await readJournal(admission.state_root), admission.task_id);
+    if (!original) throw new Error('Repository admission intent has no confirmed task; reconcile before retrying');
+    return { ...original, canonical_state_root: admission.state_root };
+  }
   const controllerSHA = commitSHA(git(controller, 'rev-parse', 'HEAD'));
   if (git(controller, 'status', '--porcelain', '--untracked-files=all')) throw new Error('Controller checkout must be clean and pinned');
   const contract = await putArtifact(root, encode(task));
@@ -112,7 +136,7 @@ export async function prepare({ repo, root, controller, task, policy, lock }) {
   const workspace = path.join(root, 'workspaces', task.task_id);
   await lock.append('task/created', { task_id: task.task_id, status: 'queued', base_sha: task.base_sha,
     repository: repo, controller_sha: controllerSHA, contract, policy: policyArtifact, contract_hash: digest(encode(task)),
-    material, workspace, started_at: Date.now(), attempts: 0 });
+    material, workspace, repository_admission: admission, started_at: Date.now(), attempts: 0 });
   // Interrupted creation remains queued and must be reconciled, never silently replayed.
   await snapshot(repo, task.base_sha, path.join(material, 'base'));
   if (task.kind !== 'docs' && await fs.stat(path.join(material, 'base/src/qi/plugins/runtime.clj')).then(() => true, () => false)) {
@@ -149,6 +173,14 @@ export async function loadTask(root, id) {
   return { state, task, policy, events };
 }
 
+export async function assertTaskRepositoryAdmission(root, id) {
+  const {state} = await loadTask(root, id);
+  const receipt = await assertRepositoryAdmission(state.repository_admission);
+  if (receipt.state_root !== await fs.realpath(root) || receipt.task_id !== id || receipt.base_sha !== state.base_sha ||
+      receipt.contract_hash !== state.contract_hash) throw new Error('Repository admission task binding changed');
+  return receipt;
+}
+
 const succeeded = (result) => result.exit_code === 0 && !result.error && !result.signal && !result.timed_out && !result.output_limited;
 const operatorPaused = (root) => fs.stat(path.join(root, 'pause.json')).then(() => true, (e) => { if (e.code === 'ENOENT') return false; throw e; });
 
@@ -156,14 +188,46 @@ async function executeCheck({ root, lock, state, task, check, workspace, phase, 
   if (await operatorPaused(root)) return { id: check.id, phase, status: 'CANCELLED', reason: 'operator-paused' };
   const remaining = deadline - Date.now();
   if (remaining <= 0) return { id: check.id, phase, status: 'NOT_RUN', reason: 'wall-budget' };
+  if (execute === containerCommand) {
+    try {
+      const receipt = await inspectEnvironment({ image: task.image, resources: task.resources, deadline });
+      await lock.append('environment/probe', { task_id: task.task_id, receipt: await putArtifact(root, encode(receipt)) });
+      if (state.environment_fingerprint && state.environment_fingerprint !== receipt.fingerprint) throw new Error('environment-unavailable: baseline environment changed');
+    } catch (error) {
+      if (error.receipt) await lock.append('environment/probe', { task_id: task.task_id, receipt: await putArtifact(root, encode(error.receipt)) });
+      throw error;
+    }
+  }
+  const executionRemaining = deadline - Date.now();
+  if (executionRemaining <= 0) return { id: check.id, phase, status: 'NOT_RUN', reason: 'wall-budget' };
   const started = new Date().toISOString();
   const name = 'qi-maint-check-' + randomUUID();
   const owner = randomUUID();
   await lock.append('check/start', { task_id: task.task_id, check_id: check.id, phase, container: name, container_owner: owner });
-  const result = await execute({ image: task.image, argv: check.argv, workspace, readonly: true,
+  let result;
+  try { result = await execute({ image: task.image, argv: check.argv, workspace, readonly: true,
     mounts: [{ source: path.join(state.material, 'verifier'), target: '/acceptance' }],
-    timeoutMs: Math.min(remaining, check.timeout_seconds * 1000), name, owner, resources: task.resources,
-    shouldStop: () => operatorPaused(root) });
+    timeoutMs: Math.min(executionRemaining, check.timeout_seconds * 1000), name, owner, resources: task.resources,
+    shouldStop: () => operatorPaused(root) }); }
+  catch (error) {
+    if (execute === containerCommand) await inspectEnvironment({ image: task.image, resources: task.resources, deadline,
+      owners: [{ container: name, container_owner: owner }], failure: error.message }).catch(async fault => {
+        if (fault.receipt) await lock.append('environment/probe', { task_id: task.task_id, receipt: await putArtifact(root, encode(fault.receipt)) });
+        throw fault;
+      });
+    throw error;
+  }
+  if (execute === containerCommand) {
+    try {
+      const receipt = await inspectEnvironment({ image: task.image, resources: task.resources, deadline,
+        owners: [{ container: name, container_owner: owner }] });
+      await lock.append('environment/probe', { task_id: task.task_id, receipt: await putArtifact(root, encode(receipt)) });
+      if (state.environment_fingerprint && state.environment_fingerprint !== receipt.fingerprint) throw new Error('environment-unavailable: baseline environment changed');
+    } catch (error) {
+      if (error.receipt) await lock.append('environment/probe', { task_id: task.task_id, receipt: await putArtifact(root, encode(error.receipt)) });
+      throw error;
+    }
+  }
   const output = await putArtifact(root, encode(result));
   const tap = check.tests ? assessTap(result.stdout, check.tests) : null;
   const paused = await operatorPaused(root);
@@ -197,10 +261,23 @@ async function candidateTree(state, task, root) {
   return { directory, files, manifest, tree, fingerprint: digest(encode(manifest)), patch: await putArtifact(root, patch + '\n') };
 }
 
-export async function preflight({ root, id, lock, execute = containerCommand }) {
+export async function preflight({ root, id, lock, execute = containerCommand,
+  environment = execute === containerCommand ? inspectEnvironment : null }) {
   let { state, task, policy } = await loadTask(root, id);
-  if (state.preflight_passed) return state;
+  await assertTaskRepositoryAdmission(root, id);
   const deadline = state.started_at + policy.wall_seconds * 1000;
+  if (environment) {
+    try {
+      const receipt = await environment({ image: task.image, resources: task.resources, deadline });
+      await lock.append('environment/probe', { task_id: id, receipt: await putArtifact(root, encode(receipt)) });
+      if (state.environment_fingerprint && state.environment_fingerprint !== receipt.fingerprint) throw new Error('environment-unavailable: baseline environment changed');
+      state.environment_fingerprint = receipt.fingerprint;
+    } catch (error) {
+      if (error.receipt) await lock.append('environment/probe', { task_id: id, receipt: await putArtifact(root, encode(error.receipt)) });
+      return transition(root, lock, id, state.revision, 'uncertain', { reason: error.message, checks: state.checks ?? [] });
+    }
+  }
+  if (state.preflight_passed) return state;
   const checks = [];
   const check = async (spec, workspace, phase) => {
     const result = await executeCheck({ root, lock, state, task, check: spec, workspace, phase, deadline, execute });
@@ -228,7 +305,8 @@ export async function preflight({ root, id, lock, execute = containerCommand }) 
         return transition(root, lock, id, state.revision, 'blocked', { reason: 'invalid-red-evidence', checks });
       }
     }
-    await lock.append('task/preflight', { task_id: id, preflight_passed: true, checks });
+    await lock.append('task/preflight', { task_id: id, preflight_passed: true, checks,
+      ...(state.environment_fingerprint ? { environment_fingerprint: state.environment_fingerprint } : {}) });
     return taskState(await readJournal(root), id);
   } catch (error) {
     return transition(root, lock, id, state.revision, 'uncertain', { reason: error.message, checks });

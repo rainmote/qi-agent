@@ -6,6 +6,18 @@
 
 ## 控制器与候选
 
+跨入口接纳使用 canonical Git common-dir 的仓库身份，记录在该 common-dir 下的
+`qi-maintenance-admission/`，不在候选源码或各自 state 中。任务 base、finding/task ID 和合同哈希
+共同确定意图；回执记录 token、创建进程 PID/启动时间、host 与 canonical state-root。
+不同 state 或 worktree 别名不能同时接纳两个任务。相同意图返回原任务及 `canonical_state_root`，
+调用者应继续读取那个状态目录；不能在新目录重建原任务。合同不同不会误复用。
+
+prepare 先持久化接纳意图再创建任务；中途失联而没有 task/created 的意图保持阻断。
+Web 写入 claim、Codex run 与真实 preflight 都复核同一回执。未知执行或未闭合动作保留接纳，
+不因 PID 消失或 TTL 超时自动抢占。已知终态且没有未对账动作时释放，保留原意图的历史去重记录；
+显式 retry 仍服从旧预算并取得新 token。此身份是宿主任务接纳，创建进程的退出不等于任务被取消。
+它不替代 daemon workspace lease 或 OS 权限隔离；需独立审查部署后才影响新任务。
+
 控制器从干净、固定提交的 checkout 运行，状态目录必须位于该 checkout 与目标仓库之外。`prepare` 保存合同、策略、源码、profile、验收器的哈希，创建独立 detached worktree；已有开发工作区可以有未提交修改，控制器不会重置它。
 
 候选只能交付合同列出的普通文件。规则、控制器、权限、测试、CI 和发布链属于受保护路径，需另行人工实现和审查。第一版不自动删除文件，不启动子 Agent。专用父 runtime 强制 32 步、关闭逻辑重试；预留的只读子步骤限制为 8，尚未启用子任务。
@@ -65,6 +77,18 @@ Web 宿主固定私有回执目录与可信控制器 SHA，在读取时对账完
 参数、文件范围和信任边界见 [独立验收回执](workspace-files.md#独立验收回执)。
 
 ## 故障与恢复
+
+新的环境闸门在真实 Docker preflight 和每项检查前后运行有界只读探针。探针各最多五秒，
+同时服从原任务期限；记录 endpoint 摘要、engine/version/kernel、虚拟化名称、镜像 ID、
+宿主资源及容器资源限制、起止时间与输出哈希。虚拟化软件独立版本无法由 Docker 确认时为 null。
+私有回执只读取所需字段，不收集容器环境变量或认证。环境变化使已有 baseline 指纹失效。
+
+宿主 `~/.qi-agent/maintenance-environments/` 的故障记录跨 state 目录共享；引擎不可达或
+自有容器清理结果未知时停止接纳。成功的普通探针不会清除隔离状态。已审查控制器可显式执行
+`node maintenance/doctor.mjs --environment-only --reconcile-environment --image EXACT_DIGEST`，
+先核对保存的每个容器 owner／身份和停止状态，再通过全部探针解除隔离。未知身份继续阻断，
+不按 TTL 抢锁、不自动重放任务、不重启／升级 VM，也不删除容器。该控制器变更需独立审查后部署；
+候选验收仍使用原可信控制器，不自动启用候选的新闸门。
 
 状态按 `queued → scoped → implementing → verifying → review_ready → accepted` 演进；失败、阻断、取消和未知结果分别保存。每条事件包含序号、前项哈希和 fencing token，证据写入并 fsync 后才推进状态。文件锁不按超时强抢，只能显式恢复已确认死亡的本机 PID。
 
