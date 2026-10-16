@@ -230,8 +230,13 @@ export function ContextMeter({ status }: { status: ContextStatus }) {
   const popover = useComposerPopover(open, close, false);
   const panelId = useId();
   const percent = Math.max(0, Math.min(100, Math.round(status.percent || 0)));
+  const usageDescription = Number.isFinite(status.used_tokens) && status.used_tokens >= 0
+    && Number.isFinite(status.context_window) && status.context_window > 0
+    ? `${status.used_tokens.toLocaleString("zh-CN", { maximumFractionDigits: 0 })} / ${status.context_window.toLocaleString("zh-CN", { maximumFractionDigits: 0 })} tokens`
+    : "上下文用量未知";
   return <div className="composer-control context-control" ref={popover.root}>
     <button ref={popover.trigger} type="button" className="context-trigger" aria-label={`上下文已用 ${percent}%`}
+      aria-description={usageDescription}
       aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? panelId : undefined}
       onClick={() => setOpen((value) => !value)}>
       <svg viewBox="0 0 24 24" aria-hidden="true">
