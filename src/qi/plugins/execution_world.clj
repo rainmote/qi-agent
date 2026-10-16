@@ -310,6 +310,24 @@
       (when (.isAlive handle)
         (.destroyForcibly handle)))))
 
+(defn- track-descendants-during-startup! [process tracked]
+  ;; Pump/future setup can be descheduled while a short-lived parent exits.
+  ;; Start discovery independently before that setup so its children remain
+  ;; owned by this invocation even after they are reparented.
+  (let [thread (Thread.
+                (fn []
+                  (try
+                    (loop []
+                      (remember-descendants! process tracked)
+                      (when (.isAlive process)
+                        (Thread/sleep 5)
+                        (recur)))
+                    (catch InterruptedException _))))]
+    (.setName thread (str "qi-process-descendants-" (.pid process)))
+    (.setDaemon thread true)
+    (.start thread)
+    thread))
+
 (defn- remaining-ms [deadline]
   (max 0 (long (Math/ceil (/ (- deadline (System/nanoTime)) 1000000.0)))))
 
@@ -320,8 +338,8 @@
     (remember-descendants! process tracked)
     (let [remaining (remaining-ms deadline)]
       (cond
-        (not (.isAlive process)) true
         (zero? remaining) false
+        (not (.isAlive process)) true
         (.waitFor process (min 20 remaining) TimeUnit/MILLISECONDS) true
         :else (recur)))))
 
@@ -385,6 +403,7 @@
                         (try (fs/delete-if-exists path) (catch Throwable _)))
                       (throw error)))
           tracked (atom {})
+          tracker (track-descendants-during-startup! process tracked)
           terminate! #(terminate-process-tree! process tracked)
           dispose-cancel (cancellation/on-cancel!
                           cancel-token
@@ -413,7 +432,7 @@
               (when-let [limit @overflow]
                 (throw (ex-info "Command output exceeded the configured disk limit"
                                 (assoc limit :command command))))
-              (when-not (and completed? drained?)
+              (when-not (and completed? drained? (pos? (remaining-ms deadline)))
                 (throw (ex-info "Command timed out"
                                 {:timeout-ms effective-timeout :command command})))
               (cancellation/throw-if-cancelled! cancel-token)
@@ -435,6 +454,8 @@
                  :duration-ms (long (/ (- (System/nanoTime) started) 1000000))})))
           (finally
             (dispose-cancel)
+            (.interrupt tracker)
+            (try (.join tracker 100) (catch InterruptedException _))
             ;; Future interruption and stream/callback failures also own cleanup;
             ;; cancellation is not the only way a process can leave this scope.
             (terminate!)

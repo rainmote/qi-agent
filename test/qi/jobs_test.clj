@@ -3,6 +3,7 @@
             [qi.jobs :as jobs]
             [qi.kernel :as kernel]
             [qi.plugin :as plugin]
+            [qi.plugins.execution-world :as execution-world]
             [babashka.fs :as fs]
             [babashka.process :as process]
             [clojure.string :as str]
@@ -273,7 +274,7 @@
         (is (empty? (fs/glob (fs/path directory ".qi-agent/tool-output") "*.tmp" {:hidden true}))))
       (finally (kernel/dispose-all! ctx) (fs/delete-tree directory)))))
 
-(deftest world-timeout-includes-inherited-output-pipes
+(defn- check-inherited-output-pipe-cleanup []
   (let [directory (fs/create-temp-dir {:prefix "qi-jobs-pipes-"})
         ctx (plugin/boot! {:plugins [{:ns 'qi.plugins.execution-world
                                      :config {:root (str directory) :sandbox :none
@@ -328,6 +329,19 @@
         (when (.isAlive (:proc parent)) (process/destroy-tree parent))
         (when @pid @(process/process ["/bin/kill" "-KILL" (str @pid)] {:out :string :err :string}))
         (fs/delete-tree directory)))))
+(deftest world-timeout-includes-inherited-output-pipes
+  (check-inherited-output-pipe-cleanup))
+
+(deftest world-tracks-children-while-output-pumps-are-starting
+  ;; Output-pump setup can be descheduled after the child shell starts. Keep
+  ;; the existing timeout and cleanup assertions; reproduce that scheduling
+  ;; gap deterministically rather than hoping a busy CI runner triggers it.
+  (let [pump-var #'execution-world/pump!
+        original @pump-var]
+    (with-redefs-fn {pump-var (fn [& args]
+                              (Thread/sleep 150)
+                              (apply original args))}
+      check-inherited-output-pipe-cleanup)))
 
 (deftest background-bash-cannot-bypass-the-runtime-trust-and-approval-gates
   (doseq [[trusted? approval expected-starts] [[false :allow 0] [true :deny 0] [true :allow 1]]]

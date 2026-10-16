@@ -8,6 +8,7 @@ import { ApprovalPanel, FullAccessDialog, SettingsDialog, WorkspaceDialog } from
 import { Icon } from "./icons";
 import { applyHostEvent, fromSnapshot, type Projection } from "./projection";
 import { Timeline } from "./Timeline";
+import { RunOverview } from "./RunOverview";
 import { Trajectory } from "./Trajectory";
 import { WorkspacePanel } from "./WorkspacePanel";
 import { ComposerAttachments, ComposerReferences, type AttachmentRef } from "./ComposerAttachments";
@@ -197,9 +198,9 @@ export function App() {
       : (a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
   }, [allSessions, search, sortBy]);
   const runSummary = useMemo(() => {
-    const { turns, steps, calls, durationMs } = projection?.summary || { turns: 0, steps: 0, calls: 0, durationMs: 0 };
-    const timing = durationMs > 0 ? ` · 工具调用 ${(durationMs / 1_000).toFixed(1)}s` : "";
-    return `${turns} 轮 · ${steps} 步 | ${calls} 次工具调用${timing} | ${projection?.events.length || 0} 条轨迹`;
+    const durationMs = projection?.summary.durationMs || 0;
+    const timing = durationMs > 0 ? `工具累计耗时 ${(durationMs / 1_000).toFixed(1)}s · ` : "";
+    return `${timing}${projection?.events.length || 0} 条轨迹`;
   }, [projection?.summary, projection?.events.length]);
 
   const flashNotice = useCallback((message: string, timeout = 4_000) => {
@@ -838,7 +839,7 @@ export function App() {
       </div>
       </ComposerAttachments>
     </div>
-    <div className={`composer-hint ${phase !== "idle" || stopping ? "has-run" : ""}`}><span role="status">{stopping ? "正在停止，请等待运行结束…" : projection?.interactions.length ? "先确认上方操作 · 可继续编辑草稿" : phase !== "idle" ? `${phaseLabel(phase)}${phase === "compacting" && projection?.state.compaction ? ` ${projection.state.compaction["completed-chunks"]}/${projection.state.compaction["total-chunks"]}` : ""} · Enter 排队发送` : "Enter 发送 · Shift + Enter 换行"}</span>
+    <div className={`composer-hint ${phase !== "idle" || stopping ? "has-run" : ""}`}><span>{stopping ? "请等待运行结束…" : projection?.interactions.length ? "先确认上方操作 · 可继续编辑草稿" : phase !== "idle" ? "Enter 排队发送 · Shift + Enter 换行" : "Enter 发送 · Shift + Enter 换行"}</span>
       {phase !== "idle" && !projection?.interactions.length && composer.trim() && <button type="button" className="steer-button" disabled={busy || uploading || stopping || !!pendingOperation} onClick={() => void send("steer")}>下一步引导</button>}
     </div>
     {stopError && !projection?.interactions.length && <p className="composer-error" role="alert">{stopError} <button type="button" onClick={() => void stopRun()}>重试停止</button></p>}
@@ -939,6 +940,12 @@ export function App() {
               aria-expanded={detailsOpen} onClick={() => setDetailsOpen((value) => !value)}><Icon name="panel" /></button>
           </div>
         </header>
+        <RunOverview phase={pendingOperation ? `${stopping ? "正在停止" : phaseLabel(phase)} · 操作结果待核对`
+          : stopping ? "stopping" : phase === "compacting" && projection?.state.compaction
+            ? `${phaseLabel(phase)} ${projection.state.compaction["completed-chunks"]}/${projection.state.compaction["total-chunks"]}` : phase}
+          turns={projection?.summary.turns ?? 0} steps={projection?.summary.steps ?? 0}
+          calls={projection?.summary.calls ?? 0} waitingCount={projection?.interactions.length ?? 0}
+          context={contextStatus} />
         <div className={`timeline ${conversationView === "trajectory" ? "trajectory-mode" : ""}`} ref={timeline} tabIndex={0} aria-label="会话内容">
           {conversationView === "chat" && projection && <Timeline key={activeSession.id} projection={projection} scrollRef={timeline} pluginSlots={pluginSlots} />}
           {conversationView === "trajectory" && <Trajectory key={activeSession.id} events={projection?.events || []} />}
