@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "xhigh",
+  "authentication": "chatgpt",
+  "mode": "supervised",
+  "max_attempts": 3
+}

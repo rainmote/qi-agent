@@ -2,6 +2,8 @@
 
 入口为 `npm run maintenance -- --help`。支持人工发起的单任务候选、容器验收、人工接受、持久复盘和精确提交发布闸门；另有默认关闭的预授权无人值守队列、宿主费用代理和定时服务，配置与启用门槛见 [有界无人值守维护](unattended-maintenance.md)。候选仍需人工审查，不自动 push / merge / release，不声明 GASP 协议兼容。
 
+使用现有 ChatGPT 登录让 Codex 开发候选，见 [Codex 开发闭环](codex-development-loop.md)。该入口默认 `gpt-6.1-sol / xhigh`，复用本文验收器，在受监督的一次运行中最多实现三次；它不使用 API 费用代理或无人值守队列。
+
 ## 控制器与候选
 
 控制器从干净、固定提交的 checkout 运行，状态目录必须位于该 checkout 与目标仓库之外。`prepare` 保存合同、策略、源码、profile、验收器的哈希，创建独立 detached worktree；已有开发工作区可以有未提交修改，控制器不会重置它。
