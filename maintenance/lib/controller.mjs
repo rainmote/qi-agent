@@ -8,6 +8,7 @@ import { assessTap } from '../../evals/lib/grading.mjs';
 import { usageLedger, mayAttempt } from './ledger.mjs';
 import { validateBudget, budgetSnapshot } from './budget.mjs';
 import { startBroker } from './broker.mjs';
+import { inspectEnvironment } from './environment.mjs';
 
 const catalog = JSON.parse(await fs.readFile(new URL('../checks.json', import.meta.url)));
 
@@ -156,14 +157,46 @@ async function executeCheck({ root, lock, state, task, check, workspace, phase, 
   if (await operatorPaused(root)) return { id: check.id, phase, status: 'CANCELLED', reason: 'operator-paused' };
   const remaining = deadline - Date.now();
   if (remaining <= 0) return { id: check.id, phase, status: 'NOT_RUN', reason: 'wall-budget' };
+  if (execute === containerCommand) {
+    try {
+      const receipt = await inspectEnvironment({ image: task.image, resources: task.resources, deadline });
+      await lock.append('environment/probe', { task_id: task.task_id, receipt: await putArtifact(root, encode(receipt)) });
+      if (state.environment_fingerprint && state.environment_fingerprint !== receipt.fingerprint) throw new Error('environment-unavailable: baseline environment changed');
+    } catch (error) {
+      if (error.receipt) await lock.append('environment/probe', { task_id: task.task_id, receipt: await putArtifact(root, encode(error.receipt)) });
+      throw error;
+    }
+  }
+  const executionRemaining = deadline - Date.now();
+  if (executionRemaining <= 0) return { id: check.id, phase, status: 'NOT_RUN', reason: 'wall-budget' };
   const started = new Date().toISOString();
   const name = 'qi-maint-check-' + randomUUID();
   const owner = randomUUID();
   await lock.append('check/start', { task_id: task.task_id, check_id: check.id, phase, container: name, container_owner: owner });
-  const result = await execute({ image: task.image, argv: check.argv, workspace, readonly: true,
+  let result;
+  try { result = await execute({ image: task.image, argv: check.argv, workspace, readonly: true,
     mounts: [{ source: path.join(state.material, 'verifier'), target: '/acceptance' }],
-    timeoutMs: Math.min(remaining, check.timeout_seconds * 1000), name, owner, resources: task.resources,
-    shouldStop: () => operatorPaused(root) });
+    timeoutMs: Math.min(executionRemaining, check.timeout_seconds * 1000), name, owner, resources: task.resources,
+    shouldStop: () => operatorPaused(root) }); }
+  catch (error) {
+    if (execute === containerCommand) await inspectEnvironment({ image: task.image, resources: task.resources, deadline,
+      owners: [{ container: name, container_owner: owner }], failure: error.message }).catch(async fault => {
+        if (fault.receipt) await lock.append('environment/probe', { task_id: task.task_id, receipt: await putArtifact(root, encode(fault.receipt)) });
+        throw fault;
+      });
+    throw error;
+  }
+  if (execute === containerCommand) {
+    try {
+      const receipt = await inspectEnvironment({ image: task.image, resources: task.resources, deadline,
+        owners: [{ container: name, container_owner: owner }] });
+      await lock.append('environment/probe', { task_id: task.task_id, receipt: await putArtifact(root, encode(receipt)) });
+      if (state.environment_fingerprint && state.environment_fingerprint !== receipt.fingerprint) throw new Error('environment-unavailable: baseline environment changed');
+    } catch (error) {
+      if (error.receipt) await lock.append('environment/probe', { task_id: task.task_id, receipt: await putArtifact(root, encode(error.receipt)) });
+      throw error;
+    }
+  }
   const output = await putArtifact(root, encode(result));
   const tap = check.tests ? assessTap(result.stdout, check.tests) : null;
   const paused = await operatorPaused(root);
@@ -197,10 +230,22 @@ async function candidateTree(state, task, root) {
   return { directory, files, manifest, tree, fingerprint: digest(encode(manifest)), patch: await putArtifact(root, patch + '\n') };
 }
 
-export async function preflight({ root, id, lock, execute = containerCommand }) {
+export async function preflight({ root, id, lock, execute = containerCommand,
+  environment = execute === containerCommand ? inspectEnvironment : null }) {
   let { state, task, policy } = await loadTask(root, id);
-  if (state.preflight_passed) return state;
   const deadline = state.started_at + policy.wall_seconds * 1000;
+  if (environment) {
+    try {
+      const receipt = await environment({ image: task.image, resources: task.resources, deadline });
+      await lock.append('environment/probe', { task_id: id, receipt: await putArtifact(root, encode(receipt)) });
+      if (state.environment_fingerprint && state.environment_fingerprint !== receipt.fingerprint) throw new Error('environment-unavailable: baseline environment changed');
+      state.environment_fingerprint = receipt.fingerprint;
+    } catch (error) {
+      if (error.receipt) await lock.append('environment/probe', { task_id: id, receipt: await putArtifact(root, encode(error.receipt)) });
+      return transition(root, lock, id, state.revision, 'uncertain', { reason: error.message, checks: state.checks ?? [] });
+    }
+  }
+  if (state.preflight_passed) return state;
   const checks = [];
   const check = async (spec, workspace, phase) => {
     const result = await executeCheck({ root, lock, state, task, check: spec, workspace, phase, deadline, execute });
@@ -228,7 +273,8 @@ export async function preflight({ root, id, lock, execute = containerCommand }) 
         return transition(root, lock, id, state.revision, 'blocked', { reason: 'invalid-red-evidence', checks });
       }
     }
-    await lock.append('task/preflight', { task_id: id, preflight_passed: true, checks });
+    await lock.append('task/preflight', { task_id: id, preflight_passed: true, checks,
+      ...(state.environment_fingerprint ? { environment_fingerprint: state.environment_fingerprint } : {}) });
     return taskState(await readJournal(root), id);
   } catch (error) {
     return transition(root, lock, id, state.revision, 'uncertain', { reason: error.message, checks });

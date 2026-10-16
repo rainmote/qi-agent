@@ -66,6 +66,18 @@ Web 宿主固定私有回执目录与可信控制器 SHA，在读取时对账完
 
 ## 故障与恢复
 
+新的环境闸门在真实 Docker preflight 和每项检查前后运行有界只读探针。探针各最多五秒，
+同时服从原任务期限；记录 endpoint 摘要、engine/version/kernel、虚拟化名称、镜像 ID、
+宿主资源及容器资源限制、起止时间与输出哈希。虚拟化软件独立版本无法由 Docker 确认时为 null。
+私有回执只读取所需字段，不收集容器环境变量或认证。环境变化使已有 baseline 指纹失效。
+
+宿主 `~/.qi-agent/maintenance-environments/` 的故障记录跨 state 目录共享；引擎不可达或
+自有容器清理结果未知时停止接纳。成功的普通探针不会清除隔离状态。已审查控制器可显式执行
+`node maintenance/doctor.mjs --environment-only --reconcile-environment --image EXACT_DIGEST`，
+先核对保存的每个容器 owner／身份和停止状态，再通过全部探针解除隔离。未知身份继续阻断，
+不按 TTL 抢锁、不自动重放任务、不重启／升级 VM，也不删除容器。该控制器变更需独立审查后部署；
+候选验收仍使用原可信控制器，不自动启用候选的新闸门。
+
 状态按 `queued → scoped → implementing → verifying → review_ready → accepted` 演进；失败、阻断、取消和未知结果分别保存。每条事件包含序号、前项哈希和 fencing token，证据写入并 fsync 后才推进状态。文件锁不按超时强抢，只能显式恢复已确认死亡的本机 PID。
 
 `recover` 将中断的创建、已准备任务、实现、验收标为 uncertain，绝不自动重放。新执行器在运行前记录 Docker container 名和随机所有权标签；恢复时先核对标签，再按不可变 ID 停止遗留容器。旧记录没有所有权回执的容器仍需人工核对。正常命令超时会停止容器。尾部半条日志、哈希变化、证据丢失均阻断，原日志保留。
