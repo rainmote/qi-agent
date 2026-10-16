@@ -53,6 +53,11 @@ export interface ContextStatus {
   system_tokens: number;
   tool_tokens: number;
   message_tokens: number;
+  basis?: "last-request" | "next-request" | null;
+  reserve_tokens?: number | null;
+  input_limit?: number | null;
+  option_tokens?: number | null;
+  fits?: boolean | null;
 }
 
 export type ProviderProtocol = "openai-completions" | "openai-responses" | "anthropic-messages"
