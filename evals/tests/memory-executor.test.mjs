@@ -19,7 +19,8 @@ async function fixture(t){
   const budget={schema_version:1,model:profile.model,effort:profile.effort,task_usd:1,daily_usd:2,input_usd_per_million:1,output_usd_per_million:1,
     context_window_tokens:128000,max_output_tokens:2048,max_requests:120,price_valid_until:'2027-01-01T00:00:00Z',price_source:'https://example.invalid/offline-fixture-prices'};
   const config={profile_path,profile_sha256:digest(encode(profile)),budget,image:'sha256:'+'a'.repeat(64),runtime_directory,state_root:path.join(root,'budget')};
-  const authorization={kind:'blind-memory-model-experiment',approved:true,evidence:'offline fixture authorization, no real provider',model:profile.model,
+  await fs.mkdir(config.state_root);
+  const authorization={state_root:config.state_root,kind:'blind-memory-model-experiment',approved:true,evidence:'offline fixture authorization, no real provider',model:profile.model,
     profile_sha256:config.profile_sha256,budget_sha256:digest(encode(budget)),model_inputs_sha256:manifest.model_inputs_sha256,runtime_sha256:runtime.fingerprint,image:config.image};
   let calls=0;
   const brokerFactory=options=>startBroker({...options,credential:'offline-fixture',fetchImpl:async(_url,request)=>{
@@ -74,4 +75,10 @@ test('insufficient configured cost cap prevents even the first upstream call',as
   const result=await executeMemory({...f,config,authorization,output:path.join(f.root,'capped'),live:true,evidenceKind:'fixture'});
   assert.equal(result.status,'FAILED');assert.equal(result.broker_failure,'cost-budget');assert.equal(f.calls(),0);
   assert.equal(result.budget.requests,0);assert.equal(result.ledger.filter(r=>r.status==='NOT_RUN').length,119);
+});
+test('operator authorization cannot be replayed against a fresh budget state root',async t=>{
+  const f=await fixture(t),other=path.join(f.root,'other-budget');await fs.mkdir(other);let brokers=0;
+  await assert.rejects(executeMemory({...f,config:{...f.config,state_root:other},output:path.join(f.root,'bypass'),live:true,evidenceKind:'fixture',
+    brokerFactory:async()=>{brokers++;throw new Error('broker must not start');}}),/authorization binding state_root/);
+  assert.equal(brokers,0);
 });

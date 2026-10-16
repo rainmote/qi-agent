@@ -74,14 +74,15 @@ export async function executeMemory({ packageRoot, output, live=false, config, a
   assert.ok(config.budget.max_output_tokens>=2048,'planned output allowance missing');
   for(const row of plan.arms)for(const request of row.requests)assert.ok(Buffer.byteLength(JSON.stringify(request.request))<=profile.max_input_bytes,'planned input exceeds byte cap');
   const runtime=await fs.realpath(config.runtime_directory),runtime_sha256=await runtimeIdentity(runtime);
+  const stateRoot=await fs.realpath(config.state_root);
+  assert.ok((await fs.stat(stateRoot)).isDirectory(),'prepared shared budget state required');
   const budget_sha256=digest(encode(config.budget));
   const identity={model:profile.model,profile_sha256:config.profile_sha256,budget_sha256,
-    model_inputs_sha256:report.input_sha256,runtime_sha256,image:config.image};
+    model_inputs_sha256:report.input_sha256,runtime_sha256,image:config.image,state_root:stateRoot};
   assert.equal(authorization.kind,'blind-memory-model-experiment');assert.equal(authorization.approved,true);
   assert.ok(typeof authorization.evidence==='string'&&authorization.evidence.trim(),'operator evidence required');
   for(const [key,value] of Object.entries(identity))assert.equal(authorization[key],value,'authorization binding '+key);
   assert.ok(['model-experiment','fixture'].includes(evidenceKind));
-  await fs.mkdir(config.state_root,{recursive:true,mode:0o700});const stateRoot=await fs.realpath(config.state_root);
   assert.ok(!inside(stateRoot,packageRoot)&&!inside(stateRoot,runtime)&&!inside(path.resolve(output),packageRoot));
   if(signal?.aborted)throw new Error('cancelled before dispatch');
   await fs.mkdir(output,{mode:0o700});
@@ -124,13 +125,14 @@ export async function executeMemory({ packageRoot, output, live=false, config, a
     report.status=await stopped()?'CANCELLED':budget.uncertain.length?'UNKNOWN':
       execution.exit_code===0&&!execution.timed_out&&!execution.error&&!execution.signal&&!execution.output_limited&&
       terminal[0].status==='completed'&&report.ledger.every(r=>r.status==='completed')?'COMPLETED':'FAILED';
-    report.model_calls=evidenceKind==='model-experiment'?budget.requests:0;report.evidence_kind=evidenceKind;
+    report.evidence_kind=evidenceKind;
     if(report.status!=='UNKNOWN')await lock.append('experiment/result',{run_id:runId,task_id:taskId,status:report.status});
   } catch(error){report.status='UNKNOWN';report.error=error.message;report.intent_recorded=intent;}
   finally{await broker?.close();
-    try {report.budget=budgetSnapshot(await readJournal(stateRoot),taskId);}
+    try {const events=await readJournal(stateRoot);report.budget=budgetSnapshot(events,taskId);
+      report.logical_requests_this_run=events.filter(e=>e.type==='budget/reserved'&&e.data.run_id===runId).length;}
     catch(error){report.budget={status:'UNKNOWN',reason:error.message};report.status='UNKNOWN';}
-    report.model_calls=evidenceKind==='fixture'?0:report.budget.requests??null;
+    report.model_calls=evidenceKind==='fixture'?0:report.logical_requests_this_run??null;
     await lock.close();report.ended_at=new Date().toISOString();
     await durableWrite(path.join(output,'report.json'),encode(report));}
   return report;
