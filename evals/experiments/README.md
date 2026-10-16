@@ -1,5 +1,32 @@
 # 离线盲测准备
 
+## 默认 dry-run 的有界执行器
+
+`memory-executor.mjs dry-run PACKAGE NEW_OUTPUT` 只核对既有盲测包并输出 120 条 NOT_RUN，
+不读取 provider 凭据。`freeze-runtime NEW_RUNTIME` 固定最小执行材料：kernel、generation、
+无工具 worker 与 mailbox relay 四个文件，拒绝额外材料。它不装入完整仓库、题库或参考答案。
+
+实际执行是独立的 `execute PACKAGE NEW_OUTPUT CONFIG AUTHORIZATION`。专用 JSON profile
+必须固定 model/effort、输入／输出字节上限、请求数 120、总墙钟和 max_retries=0；它是本实验
+transport 的实际配置，不冒充完整标准 Agent profile。CONFIG 还绑定 profile 文件哈希、固定镜像、
+只读 runtime 和共享的宿主预算 state-root，以及现有 broker 所要求的模型、上下文／输出 token 上限、
+任务／每日费用和有效计价上界。授权逐项绑定模型、profile、预算、输入、runtime 与镜像；JSON 是
+可信宿主的审查回执，不是身份认证。任何一项缺失都不得 dispatch。
+
+worker 运行在断网、非 root、只读根目录容器，数据只复制 model-inputs；另外只读挂载上述四文件
+runtime、读写挂载无凭据 mailbox。答案和完整仓库留在 verifier 侧，模型没有工具或文件访问能力。
+每次真正通过 `qi.generation/generate!`，原生 UUID 经 relay 到宿主 broker，先持久预留整模型输入
+窗口与受限输出，再访问固定 provider。字节上限不是 tokenizer 测量；不把 chars/4 当硬 token 上限。
+broker 固定输出 cap、禁服务端会话／远程工具与自动截断，并对未知费用按全额预留保守结算、停止后续请求。
+
+暂停文件 `NEW_OUTPUT/pause.json` 或宿主取消会停止自有执行；超时、缺失终态、响应丢失、未知费用
+保留 UNKNOWN 和原调用意图，不自动重试。多个实验应复用同一宿主预算 state-root；新输出目录不是
+重置预算的方式。输出保留逐请求结果、原生事件、预算账本和原始执行回执。完成执行仍需在独立侧
+用既有 `assembleRecall/grade` 规则评分；真实语义召回与完整账单未核对时保持 null。
+
+测试使用 fake provider 和真实本机生成／broker 接线，不读取个人认证、不构成真实模型成绩。
+真实 120 请求实验仍要求另行明确模型、profile、预算和调用授权；本候选不会自行启用或运行它。
+
 ## 运行交互时延矩阵
 
 `bb --classpath src:plugins evals/experiments/interaction_latency.clj` 使用真实 runtime、队列、取消 token、
