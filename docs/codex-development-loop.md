@@ -54,6 +54,13 @@ node maintenance/run.mjs status --state /absolute/private/codex-state --id TASK_
 
 ## 范围与验证
 
+本入口与只读 subagent 的版本、认证、sandbox、事件及证据范围对照见
+[两种 Codex 用途的冻结兼容表](orchestration.md#两种用途的冻结兼容表2026-10-17)。
+共享的 `codex-compatibility.test.mjs` 同时回放已观察的 0.157.1 拒绝序列和经过脱敏的
+0.162.0-alpha.17.2 只读接入成功序列。历史成功探针没有保存 executable 哈希，字段保持 null；
+它不能替代未来显式二进制选择和精确版本检查。订阅成功不授予另一入口认证，
+离线解析兼容不等于真实取消／恢复已经验证。此增量未调用模型或读取登录状态。
+
 当前使用宿主 Codex 沙箱写候选、Docker 执行独立验收，属于受监督开发。Codex 的宿主可读范围与原来的断网 qi worker 不同，不能将其作为原无人值守系统的隔离或费用资格。测试通过后继续人工审查；本入口不接受、合入、推送或发布候选。
 
 `node --test maintenance/tests/codex.test.mjs` 覆盖真实本地子进程、独立 red/green、验收失败反馈、三次上限、无进展、暂停、超时、未知终态及中断意图。测试中的模型返回是 fixture；真实订阅和真实 Docker 试跑另行记录，不能用 fixture 声称模型效果。

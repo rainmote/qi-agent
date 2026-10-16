@@ -142,6 +142,20 @@ worker 重启把已领取任务转为 `needs_review`。父会话必须提供核�
 
 ### 固定 Codex exec 协议离线回放
 
+#### 两种用途的冻结兼容表（2026-10-17）
+
+| 用途 | CLI / 二进制绑定 | 认证与 sandbox | 控制和证据 |
+| --- | --- | --- | --- |
+| 外部只读 subagent | 0.157.1；每次 dispatch 必须提供绝对 executable 的 SHA-256，语料本身不选择生产二进制 | 新空 HOME/CODEX_HOME，无认证发现；read-only | start/wait/interrupt/stop；文档构造成功、已观察失败和离线进程控制；真实成功/中止/恢复 NOT_RUN |
+| 受监督维护 writer/reviewer | 0.162.0-alpha.17.2；显式绝对 `--codex` 的逐次 identity 保存哈希，历史小探针未记录哈希，保留 null | CLI 管理既有 ChatGPT 登录；writer workspace-write、reviewer read-only，shell 网络关闭 | 原期限和最多三次实现、pause/进程组终止/明确对账；已有只读接入成功，严格容器任务另有 baseline uncertain |
+
+机器清单在 `evals/fixtures/codex-compatibility.json`。两个入口只共享脱敏事件和规范化结果，
+不共享认证环境或发现代码。`codex-compatibility.test.mjs` 将历史失败和 alpha 版本只读成功
+回放给两个纯 decoder；这不允许 subagent 的进程入口改用 alpha 版本，也不补证它的真实成功。
+新成功 fixture 保留原 artifact 和启动 metadata 的哈希，thread ID／答复文字明确脱敏；
+缺失的历史 executable 哈希、真实中止与恢复仍未知，不重跑模型补造证据。
+事件说明依据 [OpenAI Docs 非交互协议](https://learn.chatgpt.com/docs/non-interactive-mode)。
+
 可在同一桥接器显式选择 `:protocol :codex-exec-jsonl-v1`；当前版本合同只接受
 `:cli-version "0.157.1"`、`:cli-sha256`（绝对可执行文件的 SHA-256）、单元素
 `:command ["/absolute/codex"]` 及显式 `:model`。宿主先独立核对版本/帮助并冻结二进制；
