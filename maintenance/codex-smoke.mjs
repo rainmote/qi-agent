@@ -14,7 +14,9 @@ if (!['--live', '--offline'].includes(mode) || !path.isAbsolute(output ?? '')) t
 const live = mode === '--live';
 const image = immutableImage(process.env.QI_MAINTENANCE_IMAGE);
 const controller = fileURLToPath(new URL('..', import.meta.url));
-const policy = JSON.parse(await fs.readFile(new URL('policy.json', import.meta.url)));
+// Short transport probe: at most three minutes for the writer, two for acceptance.
+const policy = { ...JSON.parse(await fs.readFile(new URL('policy.json', import.meta.url))),
+  wall_seconds: 300, verification_reserve_seconds: 120 };
 await fs.mkdir(output); // A new directory only; preserve earlier evidence.
 const repo = path.join(output, 'repo'), root = path.join(output, 'state'), verifier = path.join(output, 'verifier');
 await fs.mkdir(path.join(repo, 'src'), { recursive: true }); await fs.mkdir(verifier);
