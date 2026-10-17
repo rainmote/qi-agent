@@ -73,7 +73,13 @@
   ([entry envelope] (finish! entry envelope nil))
   ([entry envelope before-deliver]
    (loop []
-     (let [previous @(:state entry)]
+     (let [previous @(:state entry)
+           ;; Arbitrate at reply completion, not when the requesting thread
+           ;; resumes. A timely reply stays valid even if its caller wakes late.
+           expired? (and (:message envelope) (:deadline-ns entry)
+                         (>= (System/nanoTime) (:deadline-ns entry)))
+           envelope (if expired? {:timed-out true} envelope)
+           before-deliver (if expired? (:on-timeout entry) before-deliver)]
        (when-not (= :done (:phase previous))
          (if (compare-and-set! (:state entry) previous (assoc previous :phase :done))
            (do
@@ -232,20 +238,23 @@
                 (throw (ex-info "MCP request timeout must be a positive integer"
                                 {:mcp/config-error :timeout})))
               (let [id (swap! next-id inc)
-                    entry {:response (promise)
-                           :state (atom {:phase :queued :dispatched? false})}
+                    deadline (when-not pause-timeout-on-server-request
+                               (+ (System/nanoTime) (* timeout 1000000)))
                     context {:method method :request-id id}
+                    on-abort
+                    (fn [state]
+                      (swap! pending dissoc id)
+                      (when (and (= "tools/call" method) (:dispatched? state))
+                        ;; Close before waking the caller so a new tool cannot
+                        ;; race an unresolved external action.
+                        (stop! (ex-info "MCP tool outcome is unknown; connection closed"
+                                        (assoc context :uncertain true)))))
+                    entry {:response (promise)
+                           :deadline-ns deadline :on-timeout on-abort
+                           :state (atom {:phase :queued :dispatched? false})}
                     abort!
                     (fn [envelope]
-                      (finish!
-                       entry envelope
-                       (fn [state]
-                         (swap! pending dissoc id)
-                         (when (and (= "tools/call" method) (:dispatched? state))
-                           ;; Invalidate the connection before waking the
-                           ;; caller, which might immediately try another tool.
-                           (stop! (ex-info "MCP tool outcome is unknown; connection closed"
-                                           (assoc context :uncertain true)))))))]
+                      (finish! entry envelope on-abort))]
                 (swap! pending assoc id entry)
                 (let [dispose (cancellation/on-cancel!
                                cancel-token #(abort! {:cancelled true}))]
@@ -271,7 +280,11 @@
                                         (cond (not= ::pending value) value
                                               (<= left 0) ::timeout
                                               :else (recur left))))
-                                    (deref (:response entry) timeout ::timeout))
+                                    (deref (:response entry)
+                                           (max 0 (long (Math/ceil
+                                                         (/ (- deadline (System/nanoTime))
+                                                            1000000.0))))
+                                           ::timeout))
                           _ (when (= initial ::timeout) (abort! {:timed-out true}))
                           envelope (if (= initial ::timeout) @(:response entry) initial)
                           context (cond-> context
