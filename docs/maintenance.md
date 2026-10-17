@@ -104,8 +104,11 @@ Web 宿主固定私有回执目录与可信控制器 SHA，在读取时对账完
 ## 用量与真实评测边界
 
 日报可以重复传入 `--maintenance-events /absolute/state/events.jsonl`，也可以与
-`--session-root` 同时使用。维护源有独立 provenance／日志 SHA-256 和事件时间窗，按
-task/check/owner 去重，将 baseline uncertain、基础设施诊断、模型失败、候选验收失败、
+`--session-root` 同时使用。维护源有独立 provenance／日志 SHA-256 和事件时间窗。
+`strict_writer_starts` 仅按实际 `codex/process-start` 时间计数；启动失败或窗口内收到结果
+不会补算一次启动。`result_only_writer_attempts` 单列有结果而在可见历史中缺少启动记录的尝试，
+其启动是否发生及发生时间仍未知，不能并入已观察启动数。窗口前已有启动记录的结果也不算推断启动。
+维护事件继续按 task/check/owner 去重，将 baseline uncertain、基础设施诊断、模型失败、候选验收失败、
 未知清理、writer 接纳意图、已观察启动和 reviewer 启动分别计数，不进入原生生产 run 分母。
 只有接纳意图不能确认 writer 实际启动。其他受监督入口应显式提供自己的来源记录，
 不能从原生 session 没有事件推出没有真实模型调用。缺失来源、解析失败与未知费用继续保留。

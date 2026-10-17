@@ -175,8 +175,9 @@ export function aggregateMaintenance(sources, { from, to }) {
   const start=Date.parse(from),end=Date.parse(to);
   if(!Number.isFinite(start)||!Number.isFinite(end)||start>=end)throw new Error('Invalid maintenance telemetry window');
   const counts=Object.fromEntries(['baseline_uncertain','baseline_infrastructure_failure','model_failure',
-    'verification_failure','cleanup_unknown','writer_dispatch_intents','strict_writer_starts','reviewer_starts'].map(k=>[k,new Set()]));
-  const seen=new Set(),checks=new Map();let events=0,invalid_timestamps=0,missing_task_ids=0;
+    'verification_failure','cleanup_unknown','writer_dispatch_intents','strict_writer_starts','reviewer_starts',
+    'result_only_writer_attempts'].map(k=>[k,new Set()]));
+  const seen=new Set(),checks=new Map(),observedWriterStarts=new Set();let events=0,invalid_timestamps=0,missing_task_ids=0;
   const rows=sources.flatMap(source=>source.events.map(event=>({...event,file:source.file})))
     .sort((a,b)=>Date.parse(a.at)-Date.parse(b.at));
   for(const event of rows){
@@ -190,19 +191,20 @@ export function aggregateMaintenance(sources, { from, to }) {
     const key=[task,d.check_id??check?.check??'no-check',owner].join(':');
     const duplicate=[event.type,key,d.run_id??d.action_id??'',d.status??d.outcome?.status??'',d.phase??'',d.reason??''].join('|');
     if(seen.has(duplicate))continue;seen.add(duplicate);
+    const attempt=[task,d.run_id??d.action_id??'unknown-run'].join(':');
+    if(event.type==='codex/process-start'&&!d.action_id?.startsWith('review-'))observedWriterStarts.add(attempt);
     if(at<start)continue;events++;
     if(event.type==='task/transition'&&d.status==='uncertain'&&check?.phase==='baseline'){
       counts.baseline_uncertain.add(key);
       if(/container|environment|docker|inspect|runtime/i.test(d.reason??''))counts.baseline_infrastructure_failure.add(key);
     }
-    const attempt=[task,d.run_id??d.action_id??'unknown-run'].join(':');
     if(event.type==='task/transition'&&d.status==='implementing')counts.writer_dispatch_intents.add(attempt);
     if(event.type==='codex/process-start'){
       if(d.action_id?.startsWith('review-'))counts.reviewer_starts.add(attempt);
       else counts.strict_writer_starts.add(attempt);
     }
     if(event.type==='implementation/result'){
-      counts.strict_writer_starts.add(attempt);
+      counts.result_only_writer_attempts.add(attempt);
       if(d.outcome?.status==='failed')counts.model_failure.add(attempt);
     }
     if(event.type==='check/result'&&d.phase==='candidate'&&d.status!=='PASS')counts.verification_failure.add(key);
@@ -211,9 +213,10 @@ export function aggregateMaintenance(sources, { from, to }) {
       if(!['absent','removed','stopped','confirmed'].includes(status))counts.cleanup_unknown.add(key);
     }
   }
+  for(const attempt of observedWriterStarts)counts.result_only_writer_attempts.delete(attempt);
   return {scope:'maintenance-only',from,to,interval:'[from,to)',events,invalid_timestamps,missing_task_ids,
     ...Object.fromEntries(Object.entries(counts).map(([k,set])=>[k,set.size])),
-    note:'Maintenance stage outcomes are separate from native production runs. Writer dispatch intent alone does not confirm process start. Complete cost remains unknown.',
+    note:'Maintenance stage outcomes are separate from native production runs. Strict writer starts count only observed process-start times. Result-only attempts do not establish a start or its time. Complete cost remains unknown.',
     total_cost_usd:null};
 }
 
