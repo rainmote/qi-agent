@@ -50,16 +50,26 @@ export async function startExternalRun(options, request = {}) {
   });
   const started = performance.now();
   let stderr = Buffer.alloc(0), pending = '', total = 0, terminal, forced, closed = false;
-  let exitCode, launchError, cleanupTimer;
+  let exitCode, launchError, cleanupTimer, settlementTimer, deadline, resolveResult, settled = false;
+  const cleanupErrors = [];
+  const result = new Promise(resolve => { resolveResult = resolve; });
   const signalGroup = signal => {
     if (!child.pid) return;
-    try { process.kill(-child.pid, signal); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+    try { process.kill(-child.pid, signal); }
+    catch (error) {
+      if (error.code !== 'ESRCH') cleanupErrors.push({ signal, code: error.code ?? 'signal-error' });
+    }
   };
   const terminate = (status, reason) => {
-    if (closed || forced) return false;
+    if (closed || forced || settled) return false;
     forced = { status, reason }; // Wins over every later JSONL terminal.
     signalGroup('SIGTERM');
-    cleanupTimer = setTimeout(() => signalGroup('SIGKILL'), 200);
+    cleanupTimer = setTimeout(() => {
+      signalGroup('SIGKILL');
+      // A denied signal must not leave result pending forever. Retain the PID
+      // and uncertainty for reconciliation; this does not certify cleanup.
+      settlementTimer = setTimeout(() => settle(), 200);
+    }, 200);
     return true;
   };
   const parseLine = line => {
@@ -85,33 +95,48 @@ export async function startExternalRun(options, request = {}) {
   });
   child.stderr.on('data', chunk => { stderr = Buffer.concat([stderr, chunk]).subarray(-stderrBytes); });
   child.stdin.on('error', () => {}); // Early stdin closure is reconciled by exit and JSONL.
-  const deadline = setTimeout(() => terminate('uncertain', 'timeout'), timeoutMs);
-  const result = new Promise(resolve => {
-    child.on('error', error => { launchError = error.code ?? 'launch-error'; });
-    child.on('exit', code => { exitCode = code; });
-    child.on('close', () => {
-      if (pending) parseLine(pending);
-      if (codex && !forced) terminal = codex.finish();
-      closed = true; clearTimeout(deadline); clearTimeout(cleanupTimer);
-      signalGroup('SIGKILL'); // Includes grandchildren whose parent already exited.
-      const value = forced ?? (launchError ? { status: 'failed', reason: 'launch-error' } :
-        exitCode !== 0 ? (codex && terminal?.status === 'failed' ? terminal : { status: 'failed', reason: 'process-exit' }) :
-        terminal ?? { status: 'uncertain', reason: 'missing-terminal' });
-      const usage = {};
-      for (const key of codex ? ['input_tokens', 'output_tokens', 'cached_input_tokens', 'reasoning_output_tokens'] : ['input_tokens', 'output_tokens']) {
-        const number = terminal?.usage?.[key];
-        if (Number.isSafeInteger(number) && number >= 0) usage[key] = number;
-      }
-      resolve({ status: value.status, reason: value.reason ?? value.status,
-        ...(value.detail ? { detail: value.detail } : {}),
-        output: forced ? '' : terminal?.output ?? '', verification: 'not-run',
-        accounting_complete: false, total_cost_usd: null, usage,
-        exit_code: exitCode ?? null, launch_error: launchError ?? null,
-        stderr_tail: stderr.toString('utf8'), stdout_bytes: total,
-        ...(codex ? { ...codex.metadata(), cli_sha256: options.cliSha256,
-          cli_version_scope: 'host-declared-version-and-pinned-executable' } : {}),
-        elapsed_ms: Math.round(performance.now() - started), cwd, home });
-    });
+  const settle = () => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(deadline); clearTimeout(cleanupTimer); clearTimeout(settlementTimer);
+    const cleanupUncertain = cleanupErrors.length > 0 || !closed;
+    const value = cleanupUncertain
+      ? { status: 'uncertain', reason: forced?.reason === 'timeout' ? 'timeout' : 'cleanup-failed' }
+      : forced ?? (launchError ? { status: 'failed', reason: 'launch-error' } :
+      exitCode !== 0 ? (codex && terminal?.status === 'failed' ? terminal : { status: 'failed', reason: 'process-exit' }) :
+      terminal ?? { status: 'uncertain', reason: 'missing-terminal' });
+    const usage = {};
+    for (const key of codex ? ['input_tokens', 'output_tokens', 'cached_input_tokens', 'reasoning_output_tokens'] : ['input_tokens', 'output_tokens']) {
+      const number = terminal?.usage?.[key];
+      if (Number.isSafeInteger(number) && number >= 0) usage[key] = number;
+    }
+    resolveResult({ status: value.status, reason: value.reason ?? value.status,
+      ...(value.detail ? { detail: value.detail } : {}),
+      output: forced || cleanupUncertain ? '' : terminal?.output ?? '', verification: 'not-run',
+      accounting_complete: false, total_cost_usd: null, usage,
+      exit_code: exitCode ?? null, launch_error: launchError ?? null,
+      stderr_tail: stderr.toString('utf8'), stdout_bytes: total,
+      cleanup: { status: cleanupUncertain ? 'uncertain' : 'signalled', pid: child.pid ?? null,
+        process_closed: closed, errors: cleanupErrors.map(error => ({ ...error })),
+        requested_outcome: forced ?? null },
+      ...(codex ? { ...codex.metadata(), cli_sha256: options.cliSha256,
+        cli_version_scope: 'host-declared-version-and-pinned-executable' } : {}),
+      elapsed_ms: Math.round(performance.now() - started), cwd, home });
+    if (!closed) {
+      child.unref();
+      for (const stream of [child.stdin, child.stdout, child.stderr]) stream.unref?.();
+    }
+  };
+  deadline = setTimeout(() => terminate('uncertain', 'timeout'), timeoutMs);
+  child.on('error', error => { launchError = error.code ?? 'launch-error'; });
+  child.on('exit', code => { exitCode = code; });
+  child.on('close', () => {
+    if (settled) return;
+    if (pending) parseLine(pending);
+    if (codex && !forced) terminal = codex.finish();
+    closed = true;
+    signalGroup('SIGKILL'); // Includes grandchildren whose parent already exited.
+    settle();
   });
   child.stdin.end(codex ? request.prompt ?? '' :
     JSON.stringify({ type: 'start', prompt: request.prompt ?? '', run_id: request.run_id ?? null }) + '\n');
