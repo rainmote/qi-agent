@@ -86,7 +86,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | OPT-001 | 会话日志跨进程写入租约 | Clojure session | P0 | M | 中 | R | todo |
 | OPT-002 | Web 托管 provider 的密钥端点策略 | Web/provider | P0 | S | 低 | R | blocked |
-| OPT-003 | maintenance 付费直连的凭据隔离 | maintenance | P0 | M | 中 | C | todo |
+| OPT-003 | maintenance 付费直连的凭据隔离 | maintenance | P0 | M | 中 | C | in-progress |
 | OPT-004 | Rust daemon 分层与协议类型化 | Rust | P1 | L | 中 | C | todo |
 | OPT-005 | Rust 生命周期锁不跨越 RPC | Rust | P1 | M | 中 | C | todo |
 | OPT-006 | Web 快照刷新合并事件游标 | Web | P1 | S | 低 | C | todo |
@@ -755,5 +755,8 @@
   typecheck、Vite build、生产浏览器回归、Rust fmt/clippy/`cargo test --locked` 均退出 0。
 - 第一次 Rust 全套因旧 fixture 写出 0644 的 providers.json 失败；定位后仅把该 fixture 权限改为
   0600，再次全套通过。失败日志 `OPT-002-rust-full.log` 保留，不当作偶发失败删除。
+- 后续维护全套暴露 loopback worker 注册路径也需显式 placeholder key scope；已清除其 env 引用，
+  并通过 `OPT-002-maintenance-integration` 的 8 项真实离线 worker/broker 回归。原失败保留在
+  `OPT-003-baseline.log`，作为跨范围发现，未隐去。
 - 平台为本地 macOS；Linux 浏览器/可信镜像验收 NOT_RUN，镜像 digest 未提供；独立安全/测试审查
   NOT_RUN。因此暂列 blocked，未勾选 done，也未接受、合入或激活候选规则。
