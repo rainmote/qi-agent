@@ -1,5 +1,6 @@
 {
   "schema_version": 1,
+  "provider": "openai",
   "model": "REPLACE_WITH_ACCOUNT_SUPPORTED_MODEL",
   "effort": "medium",
   "task_usd": null,

@@ -4,6 +4,7 @@ import { digest, encode, readJournal, readArtifact, putArtifact, durableWrite } 
 import { git } from './execution.mjs';
 import { prepare, implement, hashTree, loadTask, taskState, TERMINAL, validateContract } from './controller.mjs';
 import { validateBudget, budgetSnapshot } from './budget.mjs';
+import { providerCredential } from './provider.mjs';
 
 export async function enqueue({ root, lock, controller, repo, task, policy, budget, approval }) {
   validateContract(task, policy); validateBudget(budget);
@@ -100,11 +101,11 @@ export async function tick({ root, lock, controller, config, now = new Date(), r
   const entry = events.find((e) => e.type === 'queue/enqueued' && !states.some((s) => s.task_id === e.data.task_id))?.data;
   if (!entry) return { status: 'empty', quiet: true };
   try {
-    if (!process.env.OPENAI_API_KEY && run === implement) throw new Error('Missing dedicated OPENAI_API_KEY');
     if (git(controller, 'status', '--porcelain') || git(controller, 'rev-parse', 'HEAD') !== entry.controller_sha ||
         config.controller_sha !== entry.controller_sha) throw new Error('Controller changed since authorization');
     const task = JSON.parse(await readArtifact(root, entry.contract));
     const budget = JSON.parse(await readArtifact(root, entry.budget)); validateBudget(budget);
+    if (run === implement) providerCredential(budget);
     const policy = JSON.parse(await readArtifact(root, entry.policy));
     const approval = JSON.parse(await readArtifact(root, entry.approval));
     if (Date.parse(approval.expires_at) <= now.getTime()) throw new Error('Task authorization expired');

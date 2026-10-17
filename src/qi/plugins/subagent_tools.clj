@@ -59,6 +59,7 @@
 
 (defn- list-tool [runtime]
   {:name "list_agents"
+   :progress-mode :poll
    :description "List running and completed background subagent tasks."
    :parameters {:type "object" :additionalProperties false}
    :execute (fn [_ _] {:agents ((:jobs runtime))
@@ -66,6 +67,7 @@
 
 (defn- wait-tool [runtime]
   {:name "wait_agent"
+   :progress-mode :poll
    :description "Wait for a background subagent and collect its result."
    :parameters {:type "object"
                 :required ["id"]

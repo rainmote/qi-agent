@@ -8,6 +8,7 @@
             [qi.sandbox :as sandbox]
             [qi.secure-files :as secure]
             [babashka.fs :as fs]
+            [babashka.process :as process]
             [clojure.java.io :as io]
             [clojure.string :as str])
   (:import [java.nio.file Files LinkOption Path]
@@ -283,8 +284,19 @@
                                (concat (vals known) handles)))))))
     (catch Throwable _)))
 
+(defn- process-groups-available? []
+  (and (fs/executable? "/usr/bin/perl") (fs/executable? "/bin/kill")
+       (fs/executable? "/bin/ps") (some? (io/resource "qi/process_guard.pl"))))
+
+(defn- signal-group! [child signal]
+  ;; The launcher creates this group before executing user code. Retaining the
+  ;; group identity also covers orphans missed between ProcessHandle polls.
+  @(process/process ["/bin/kill" signal "--" (str "-" (.pid child))]
+                    {:out :string :err :string}))
+
 (defn- terminate-process-tree! [process tracked]
   (remember-descendants! process tracked)
+  (signal-group! process "-TERM")
   (let [root (.toHandle process)
         handles (conj (vec (reverse (vals @tracked))) root)]
     (doseq [handle handles]
@@ -293,9 +305,28 @@
     (try
       (.waitFor process 200 TimeUnit/MILLISECONDS)
       (catch Throwable _))
+    (signal-group! process "-KILL")
     (doseq [handle handles]
       (when (.isAlive handle)
         (.destroyForcibly handle)))))
+
+(defn- track-descendants-during-startup! [process tracked]
+  ;; Pump/future setup can be descheduled while a short-lived parent exits.
+  ;; Start discovery independently before that setup so its children remain
+  ;; owned by this invocation even after they are reparented.
+  (let [thread (Thread.
+                (fn []
+                  (try
+                    (loop []
+                      (remember-descendants! process tracked)
+                      (when (.isAlive process)
+                        (Thread/sleep 5)
+                        (recur)))
+                    (catch InterruptedException _))))]
+    (.setName thread (str "qi-process-descendants-" (.pid process)))
+    (.setDaemon thread true)
+    (.start thread)
+    thread))
 
 (defn- remaining-ms [deadline]
   (max 0 (long (Math/ceil (/ (- deadline (System/nanoTime)) 1000000.0)))))
@@ -307,8 +338,8 @@
     (remember-descendants! process tracked)
     (let [remaining (remaining-ms deadline)]
       (cond
-        (not (.isAlive process)) true
         (zero? remaining) false
+        (not (.isAlive process)) true
         (.waitFor process (min 20 remaining) TimeUnit/MILLISECONDS) true
         :else (recur)))))
 
@@ -326,6 +357,10 @@
   ;; user startup files before executing the requested command, which leaks
   ;; unrelated configuration into results and conflicts with a workspace-only
   ;; sandbox (for example ~/.profile becomes a spurious permission error).
+  (when-not (process-groups-available?)
+    (throw (ex-info "POSIX process-group launcher is unavailable" {})))
+  (into ["/usr/bin/perl" (-> (io/resource "qi/process_guard.pl") io/file .getCanonicalPath)
+         "--parent" (str (.pid (java.lang.ProcessHandle/current))) "--"]
   (case sandbox
     :none ["/bin/sh" "-c" command]
     :seatbelt ["/usr/bin/sandbox-exec"
@@ -335,7 +370,7 @@
     :unavailable
     (throw (ex-info
             "Process execution is unavailable because no safe sandbox was found"
-            {:sandbox sandbox}))))
+            {:sandbox sandbox})))))
 
 (defn- spawn! [root output-root sandbox default-timeout max-timeout
                max-output max-output-file-chars max-output-files
@@ -368,6 +403,7 @@
                         (try (fs/delete-if-exists path) (catch Throwable _)))
                       (throw error)))
           tracked (atom {})
+          tracker (track-descendants-during-startup! process tracked)
           terminate! #(terminate-process-tree! process tracked)
           dispose-cancel (cancellation/on-cancel!
                           cancel-token
@@ -396,7 +432,7 @@
               (when-let [limit @overflow]
                 (throw (ex-info "Command output exceeded the configured disk limit"
                                 (assoc limit :command command))))
-              (when-not (and completed? drained?)
+              (when-not (and completed? drained? (pos? (remaining-ms deadline)))
                 (throw (ex-info "Command timed out"
                                 {:timeout-ms effective-timeout :command command})))
               (cancellation/throw-if-cancelled! cancel-token)
@@ -418,6 +454,8 @@
                  :duration-ms (long (/ (- (System/nanoTime) started) 1000000))})))
           (finally
             (dispose-cancel)
+            (.interrupt tracker)
+            (try (.join tracker 100) (catch InterruptedException _))
             ;; Future interruption and stream/callback failures also own cleanup;
             ;; cancellation is not the only way a process can leave this scope.
             (terminate!)
@@ -478,8 +516,10 @@
             :root (str workspace-root)
             :default-timeout-ms timeout-ms
             :max-timeout-ms max-timeout-ms
+            :process-group-enabled (boolean (process-groups-available?))
             :capabilities (cond-> #{:fs/read :fs/write}
-                            (not= :unavailable mode) (conj :process))
+                            (and (not= :unavailable mode)
+                                 (process-groups-available?)) (conj :process))
             :resolve! (fn [path] (str (existing-inside workspace-root path)))
             :resolve-write! (fn [path]
                               (str (writable-inside workspace-root path)))

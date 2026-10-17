@@ -2,6 +2,7 @@
   "Isolated in-process spawn/fork providers for the subagent runtime."
   (:require [qi.cancellation :as cancellation]
             [qi.kernel :as kernel]
+            [qi.generation :as generation]
             [qi.run-outcome :as outcome]
             [qi.plugin :as plugin]
             [qi.schema :as schema]
@@ -159,6 +160,7 @@
 (defn- install-event-bridge! [child parent agent-id]
   (when parent
     (let [bridge (kernel/plugin-context child :subagent/event-bridge)
+          _ (kernel/register-service! bridge :usage/root-target (assoc (generation/root-target parent) :child-agent-id agent-id))
           session (kernel/require-service child :agent/session)
           store (kernel/require-service child :session/store)
           session-id (:session-id store)

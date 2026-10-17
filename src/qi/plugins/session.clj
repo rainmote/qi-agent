@@ -4,6 +4,7 @@
             [qi.cancellation :as cancellation]
             [qi.context-summary :as summary]
             [qi.secure-files :as secure]
+            [qi.provenance :as provenance]
             [cheshire.core :as json]
             [clojure.java.io :as io]
             [clojure.string :as str])
@@ -169,7 +170,7 @@
    :description "Recoverable append-only session log with resume/fork/compaction."
    :provides #{:session/store}
    :start
-   (fn [ctx {:keys [path retain-messages max-summary-chars fsync?]
+   (fn [ctx {:keys [path retain-messages max-summary-chars fsync? provenance]
              :or {retain-messages 12 max-summary-chars 8000 fsync? true}}]
      (when-not (and (pos-int? retain-messages) (pos-int? max-summary-chars))
        (throw (ex-info "Session compaction limits must be positive integers"
@@ -193,6 +194,11 @@
                                    (get-in % [:data :session_id]))
                                 loaded-events)
                           (str (random-uuid)))
+           source (provenance/sanitized provenance)
+           with-source (fn [data]
+                         (if provenance
+                           (merge data source {:session_id session-id})
+                           data))
            notify! (fn [item]
                      (doseq [listener (vals @listeners)]
                        (try (listener item) (catch Throwable _)))
@@ -201,7 +207,7 @@
                      ([type data]
                       (locking lock
                         (let [parent-id (:id (last @events))
-                              item (event type data parent-id
+                              item (event type (with-source data) parent-id
                                           (inc (count @events)))]
                           (when path
                             (append-json-line! output item fsync?))
@@ -209,7 +215,7 @@
                           (notify! item))))
                      ([type data parent-id]
                       (locking lock
-                        (let [item (event type data parent-id
+                        (let [item (event type (with-source data) parent-id
                                           (inc (count @events)))]
                           (when path
                             (append-json-line! output item fsync?))
@@ -378,7 +384,9 @@
                             (append! "session/clear" {})
                             nil)}]
        (when-not (some #(= "session/start" (:type %)) loaded-events)
-         (append! "session/start" {:session_id session-id}))
+         (append! "session/start" (merge source {:session_id session-id})))
+       (when provenance
+         (append! "session/source" (merge source {:session_id session-id})))
        (kernel/register-service! ctx :session/store store)
        (fn []
          (when output

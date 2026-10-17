@@ -3,6 +3,14 @@
 只记录可追溯事故。`Seen` 按独立 incident_id 去重，日期按 Asia/Singapore 计算；重复复盘不增加出现次数。
 三个不同日期的独立事故可以提出规则升级，接受规则仍需审查。
 
+## snapshot-tar-epipe：成功解压也可能提前关闭管道
+
+- incident_id：QI-NAS-20261015-snapshot；occurred_at：2026-10-15。
+- 适用：macOS 上通过 Node spawnSync 向 BSD tar 传入 Git 归档。
+- 证据：CI run `38665564871` 的 macOS 维护测试因 `spawnSync tar EPIPE` 失败；`maintenance/tests/snapshot.test.mjs` 使用合法尾部零填充和真实 tar 稳定复现，tar 退出码为 0 但 Node 输入管道报告 EPIPE。
+- 正确做法：保留归档大小上限，将归档写入独立私有临时文件再解压，最终清理；不能忽略所有 EPIPE 或反复重跑消除失败记录。
+- Seen：1；状态：observed；未触发三日升级。
+
 ## terminal-outcome：结束不是成功
 
 - incident_id：QI-LOOP-000-outcome；occurred_at：2026-10-14。

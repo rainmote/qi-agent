@@ -1,6 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { Icon, type IconName } from "./icons";
 import type { ContextStatus, ModelEntry, PolicyStatus } from "./types";
+import { contextBudgetExplanation, contextTokenCount } from "./context-budget";
 
 const permissionMeta: Record<PolicyStatus["mode"], {
   label: string; description: string; icon: IconName;
@@ -230,8 +231,13 @@ export function ContextMeter({ status }: { status: ContextStatus }) {
   const popover = useComposerPopover(open, close, false);
   const panelId = useId();
   const percent = Math.max(0, Math.min(100, Math.round(status.percent || 0)));
+  const usageDescription = Number.isFinite(status.used_tokens) && status.used_tokens >= 0
+    && Number.isFinite(status.context_window) && status.context_window > 0
+    ? `${status.used_tokens.toLocaleString("zh-CN", { maximumFractionDigits: 0 })} / ${status.context_window.toLocaleString("zh-CN", { maximumFractionDigits: 0 })} tokens`
+    : "上下文用量未知";
   return <div className="composer-control context-control" ref={popover.root}>
     <button ref={popover.trigger} type="button" className="context-trigger" aria-label={`上下文已用 ${percent}%`}
+      aria-description={usageDescription}
       aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? panelId : undefined}
       onClick={() => setOpen((value) => !value)}>
       <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -248,8 +254,9 @@ export function ContextMeter({ status }: { status: ContextStatus }) {
         <span><i className="system" />系统指令<strong>{formatTokenCount(status.system_tokens)}</strong></span>
         <span><i className="tools" />工具定义<strong>{formatTokenCount(status.tool_tokens)}</strong></span>
         <span><i className="messages" />会话消息<strong>{formatTokenCount(status.message_tokens)}</strong></span>
+        <span>请求选项<strong>{contextTokenCount(status.option_tokens)}</strong></span>
       </div>
-      <p>根据当前模型可见内容估算，实际计费量可能略有差异。</p>
+      <p>{contextBudgetExplanation(status)}</p>
     </div>}
   </div>;
 }

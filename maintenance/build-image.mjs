@@ -4,7 +4,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { git } from './lib/execution.mjs';
+import { git, snapshot } from './lib/execution.mjs';
 import { durableWrite, encode } from './lib/store.mjs';
 
 const repo = fileURLToPath(new URL('..', import.meta.url));
@@ -17,13 +17,10 @@ if (git(repo, 'status', '--porcelain')) throw new Error('Commit the reviewed ima
 const sha = git(repo, 'rev-parse', 'HEAD');
 const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'qi-image-'));
 try {
-  const archive = execFileSync('git', ['-C', repo, 'archive', sha], { maxBuffer: 128 * 1024 * 1024 });
-  execFileSync('tar', ['-xf', '-', '-C', directory], { input: archive });
+  await snapshot(repo, sha, directory);
   if (baseline) {
     const seed = path.join(directory, '.qi-image-baseline');
-    await fs.mkdir(seed);
-    const source = execFileSync('git', ['-C', repo, 'archive', baseline, 'apps/tui-rs', 'package.json', 'package-lock.json'], { maxBuffer: 128 * 1024 * 1024 });
-    execFileSync('tar', ['-xf', '-', '-C', seed], { input: source });
+    await snapshot(repo, baseline, seed);
     if (!(await fs.readFile(path.join(seed, 'package-lock.json'))).equals(await fs.readFile(path.join(directory, 'package-lock.json')))) {
       throw new Error('Baseline npm lock differs; build a separate image with its exact Node dependencies');
     }

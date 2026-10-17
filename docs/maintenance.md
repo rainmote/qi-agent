@@ -2,7 +2,21 @@
 
 入口为 `npm run maintenance -- --help`。支持人工发起的单任务候选、容器验收、人工接受、持久复盘和精确提交发布闸门；另有默认关闭的预授权无人值守队列、宿主费用代理和定时服务，配置与启用门槛见 [有界无人值守维护](unattended-maintenance.md)。候选仍需人工审查，不自动 push / merge / release，不声明 GASP 协议兼容。
 
+使用现有 ChatGPT 登录让 Codex 开发候选，见 [Codex 开发闭环](codex-development-loop.md)。该入口默认 `gpt-6.1-sol / xhigh`，复用本文验收器，在受监督的一次运行中最多实现三次；它不使用 API 费用代理或无人值守队列。
+
 ## 控制器与候选
+
+跨入口接纳使用 canonical Git common-dir 的仓库身份，记录在该 common-dir 下的
+`qi-maintenance-admission/`，不在候选源码或各自 state 中。任务 base、finding/task ID 和合同哈希
+共同确定意图；回执记录 token、创建进程 PID/启动时间、host 与 canonical state-root。
+不同 state 或 worktree 别名不能同时接纳两个任务。相同意图返回原任务及 `canonical_state_root`，
+调用者应继续读取那个状态目录；不能在新目录重建原任务。合同不同不会误复用。
+
+prepare 先持久化接纳意图再创建任务；中途失联而没有 task/created 的意图保持阻断。
+Web 写入 claim、Codex run 与真实 preflight 都复核同一回执。未知执行或未闭合动作保留接纳，
+不因 PID 消失或 TTL 超时自动抢占。已知终态且没有未对账动作时释放，保留原意图的历史去重记录；
+显式 retry 仍服从旧预算并取得新 token。此身份是宿主任务接纳，创建进程的退出不等于任务被取消。
+它不替代 daemon workspace lease 或 OS 权限隔离；需独立审查部署后才影响新任务。
 
 控制器从干净、固定提交的 checkout 运行，状态目录必须位于该 checkout 与目标仓库之外。`prepare` 保存合同、策略、源码、profile、验收器的哈希，创建独立 detached worktree；已有开发工作区可以有未提交修改，控制器不会重置它。
 
@@ -10,7 +24,7 @@
 
 命令均为 argv 数组。验收容器断网、非 root、只读根目录，能力集清空，不挂载宿主凭据或 Docker socket。源码只读挂载后复制到临时构建目录，新增可信验收只读挂载到 `/acceptance`，候选无法修改它。测试通过依赖退出状态和预声明 TAP 测试名；这不是对任意恶意运行时或内核攻击的安全证明。
 
-每次检查使用新容器，产物不跨检查共享。镜像须包含该任务的工具和离线依赖；`maintenance/image/Dockerfile` 提供 Rust、Babashka、Node 和 Chromium 的固定工具链配方，启动时从只读缓存初始化工作目录。镜像构建成功与完整容器验收分别记录，缺少环境的检查会阻断，不能标成不适用。
+每次检查使用新容器，产物不跨检查共享。镜像须包含该任务的工具和离线依赖；`maintenance/image/Dockerfile` 提供 Rust、Babashka、Node 和 Chromium 的固定工具链配方，启动时从只读缓存初始化工作目录。镜像构建成功与完整容器验收分别记录，缺少环境的检查会阻断，不能标成不适用。空间受限时可按 [远程宿主验证](remote-maintenance.md) 将 CI 导出的固定镜像加载到飞牛等 ARM64 宿主。
 
 `node maintenance/build-image.mjs /absolute/image.json [EXACT_BASELINE_SHA]` 从干净提交构建镜像。历史基线与当前源码的 Cargo 锁文件不同时，显式提供基线 SHA，将两套依赖预取到镜像；构建回执同时记录 source_sha 和 baseline_sha。历史基线仍按原锁文件执行，不用当前依赖覆盖旧证据。两者的 npm 锁文件必须相同，否则构建会拒绝，需要分别制作精确依赖镜像。
 
@@ -54,7 +68,30 @@ node maintenance/run.mjs verify --state /absolute/private/maintenance-state --id
 
 然后用 `accept --id TASK_ID --revision N --review /absolute/review.json` 记录人工接受。候选 head、工作区内容、index 或当前 `main` base 改变时，接受会被拒绝。该命令不合入或推送；CLI 本身的操作权限是信任边界，JSON 字段不是身份认证。
 
+## 交付到 Web 的只读验收回执
+
+Web 可在已有合同候选工作区内进行普通交互编码；同一 daemon 的写入者仍受 workspace lease 约束。
+停止写入者后，继续使用独立可信控制器的 `verify`，成功后才用 `maintenance/export-web-receipt.mjs`
+导出本轮回执。导出器不会实现、验收、接受、推送或合入任何候选，也不能改变保存的控制器和验收材料。
+Web 宿主固定私有回执目录与可信控制器 SHA，在读取时对账完整源码；未核实结果保持 UNKNOWN / NOT_RUN。
+参数、文件范围和信任边界见 [独立验收回执](workspace-files.md#独立验收回执)。
+
 ## 故障与恢复
+
+新的环境闸门在真实 Docker preflight 和每项检查前后运行有界只读探针。探针各最多五秒，
+同时服从原任务期限；记录 endpoint 摘要、engine/version/kernel、虚拟化名称、镜像 ID、
+宿主资源及容器资源限制、起止时间与输出哈希。虚拟化软件独立版本无法由 Docker 确认时为 null。
+私有回执只读取所需字段，不收集容器环境变量或认证。环境变化使已有 baseline 指纹失效。
+
+宿主 `~/.qi-agent/maintenance-environments/` 的故障记录跨 state 目录共享；引擎不可达或
+自有容器清理结果未知时停止接纳。成功的普通探针不会清除隔离状态。已审查控制器可显式执行
+`node maintenance/doctor.mjs --environment-only --reconcile-environment --image EXACT_DIGEST`，
+每个容器在启动前保存原 endpoint 摘要、engine ID 与固定路由；执行和清理使用该路由，
+引擎身份变化时拒绝执行或清理。对账须选回原端点和引擎，先核对每个 owner／身份和停止状态，
+再通过全部探针解除隔离。切换引擎后的“No such container”不能清除旧隔离；缺少原引擎绑定的
+旧所有权回执仍需人工核对。未知身份继续阻断，
+不按 TTL 抢锁、不自动重放任务、不重启／升级 VM，也不删除容器。该控制器变更需独立审查后部署；
+候选验收仍使用原可信控制器，不自动启用候选的新闸门。
 
 状态按 `queued → scoped → implementing → verifying → review_ready → accepted` 演进；失败、阻断、取消和未知结果分别保存。每条事件包含序号、前项哈希和 fencing token，证据写入并 fsync 后才推进状态。文件锁不按超时强抢，只能显式恢复已确认死亡的本机 PID。
 
@@ -65,6 +102,16 @@ node maintenance/run.mjs verify --state /absolute/private/maintenance-state --id
 外部操作可先用 `action-intent --action STABLE_ID --evidence description.json` 记录意图，取得回执后用 `action-result --result confirmed|not-applied --evidence proof.json` 对账。重复 identity 不会再次授权；未对账意图阻断新任务。这两条命令只记账，不执行 push / PR / 发布。
 
 ## 用量与真实评测边界
+
+日报可以重复传入 `--maintenance-events /absolute/state/events.jsonl`，也可以与
+`--session-root` 同时使用。维护源有独立 provenance／日志 SHA-256 和事件时间窗。
+`strict_writer_starts` 仅按实际 `codex/process-start` 时间计数；启动失败或窗口内收到结果
+不会补算一次启动。`result_only_writer_attempts` 单列有结果而在可见历史中缺少启动记录的尝试，
+其启动是否发生及发生时间仍未知，不能并入已观察启动数。窗口前已有启动记录的结果也不算推断启动。
+维护事件继续按 task/check/owner 去重，将 baseline uncertain、基础设施诊断、模型失败、候选验收失败、
+未知清理、writer 接纳意图、已观察启动和 reviewer 启动分别计数，不进入原生生产 run 分母。
+只有接纳意图不能确认 writer 实际启动。其他受监督入口应显式提供自己的来源记录，
+不能从原生 session 没有事件推出没有真实模型调用。缺失来源、解析失败与未知费用继续保留。
 
 `usage/request` 在主循环及压缩调用前、结束后保存同一 request_id，失败和重试也保留；子 runtime 使用同一入口，JSON 事件带所属 session / agent。记录 provider、model、purpose、attempt、已返回 usage 和耗时，不复制 prompt 或密钥。
 
@@ -78,7 +125,23 @@ QI_MAINTENANCE_OUTPUT=/absolute/new-evidence-directory npm run test:maintenance:
 
 容器 smoke 运行合成缺陷的 nop / oracle、只读挂载和超时清理，oracle 应到 review_ready，nop 不得通过。另有 qi-smoke 全项目演练和 broker-smoke 断网代理演练。它们均不是模型成绩；无人值守资格另要求匹配执行材料的真实 dev/heldout 试跑，完整 Harbor 横向比较仍按 `evals/harbor/README.md` 独立执行。
 
+`qi-smoke.mjs EXACT_BASE_SHA ABS_NEW_OUTPUT [EXACT_ORACLE_SHA]` 的已知参考实现
+默认固定在 `a0b74ad310aa0e0978f747369c41315560aa6dd3`，只取两份压缩请求归属相关
+源码，并在回执中保存 `oracle_sha` 和逐文件 SHA-256。可显式指定另一个完整提交；
+缺失对象或文件立即失败，不回退到 HEAD。需要完整 Git 历史或明确保留参考提交的对象。
+参考实现与控制器、当前应用源码分别记录，避免后续生命周期事件等无关变化被整文件带入
+历史基线，破坏原有测试。当前源码仍独立运行完整测试；离线 oracle 通过不能代替其验收。
+
 ## 有游标的复盘
+
+`report-telemetry.mjs` 只读取显式提供的 session-root，不扫描整个用户目录。新输出的
+`sources` 包含路径、时间覆盖、事件数量/类别和来源指纹，不包含消息正文、工具参数或密钥。
+`source_status` 分别报告 missing_source、no_events、unclassified、classified 或 incomplete；
+生产组同时携带 session/run 样本数，N=0 的错误率和费用仍为 null。session/source 只影响
+其后的事件，跨午夜和恢复不能将旧数据重新归类。
+
+`qi-agent doctor` 的 `telemetry_sources` 提供 supervisor 已登记的会话文件与状态目录路径；
+它不读取会话正文、不推测其他磁盘/机器覆盖，也不会创建任务或调度。
 
 ```sh
 node maintenance/run.mjs review-window --state /absolute/private/maintenance-state \
