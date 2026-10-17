@@ -101,6 +101,8 @@ export class AgentWorker extends EventEmitter {
     this.#socket.setEncoding("utf8");
     const lines = createInterface({ input: this.#socket, crlfDelay: Infinity });
     lines.on("line", (line) => this.handleLine(line));
+    // readline forwards input errors separately from the socket error listener.
+    lines.on("error", (error) => this.fail(error));
     this.#socket.on("error", (error) => this.fail(error));
     this.#socket.on("close", () => {
       this.fail(new Error("DAO daemon connection closed"));
