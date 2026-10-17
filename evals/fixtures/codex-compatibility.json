@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "checked_at": "2026-10-17",
+  "uses": [
+    {
+      "id": "readonly-subagent",
+      "declared_cli_version": "0.157.1",
+      "executable_sha256": null,
+      "executable_hash_scope": "Required host-selected executable digest at each dispatch; no production executable is selected by this corpus",
+      "authentication": "New empty HOME/CODEX_HOME; no ambient credentials or discovery",
+      "sandbox": "read-only",
+      "controls": ["start", "wait", "interrupt", "stop"],
+      "events": ["thread.started", "turn.started", "item.started", "item.updated", "item.completed", "error", "turn.completed", "turn.failed", "turn.interrupted", "turn.cancelled"],
+      "observed_failure": "codex-exec-0.157.1.observed-failure.json",
+      "live_success": "NOT_RUN",
+      "live_cancel_resume": "NOT_RUN",
+      "evidence": "documented synthetic success plus observed historical failure; lifecycle controls use offline processes"
+    },
+    {
+      "id": "supervised-maintenance",
+      "declared_cli_version": "0.162.0-alpha.17.2",
+      "executable_sha256": null,
+      "executable_hash_scope": "Historical probe did not record this hash; absolute --codex records it per future run",
+      "authentication": "Existing ChatGPT login managed by CLI; API-key overrides excluded; no credential copying",
+      "sandbox": "workspace-write writer; fresh read-only reviewer; shell network disabled",
+      "controls": ["bounded run", "pause", "process-group termination", "explicit reconciliation"],
+      "events": ["thread.started", "turn.started", "item.*", "error", "turn.completed", "turn.failed"],
+      "observed_success": "codex-exec-0.162.observed-probe.json",
+      "shared_failure": "codex-exec-0.157.1.observed-failure.json",
+      "live_cancel_resume": "NOT_RUN",
+      "evidence": "Prior observed read-only model probe; independent strict maintenance tasks remained uncertain before writer admission"
+    }
+  ],
+  "note": "Pure decoder replay does not authorize a different CLI version at process dispatch or transfer authentication/account/model availability evidence between uses. This corpus run makes zero model calls."
+}

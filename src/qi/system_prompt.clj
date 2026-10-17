@@ -67,6 +67,17 @@
                      (str "- Project resources trusted: "
                           (if project-trusted "yes" "no")))]))))]))
 
+(defn- response-detail-block [detail]
+  (when detail
+    (let [instruction (case (keyword detail)
+                        :short "Lead with three concise lines: what changed, verification, and the next action. Keep supporting detail brief."
+                        :auto "Lead with a concise result and adapt supporting detail to the task's complexity. Expand actionable failures."
+                        :detailed "Explain the result, relevant changes, verification evidence, and remaining actions in detail."
+                        (throw (ex-info "Invalid response detail" {:response-detail detail})))]
+      (str "# Response detail: " (name detail) "\n\n" instruction
+           " Always disclose failed, unknown, partial, or missing verification, even in a short response."
+           " This preference changes presentation only; it grants no permissions and never certifies a result."))))
+
 (defn assemble
   "Assemble a provider-facing prompt.
 
@@ -75,7 +86,7 @@
   or at the end of the normal generated prompt, matching OMP's composition
   semantics. Explicit custom/append values should be resolved before calling."
   [{:keys [base-prompt custom-prompt append-prompt contexts skills tool-names
-           workspace local-date project-trusted]}]
+           workspace local-date project-trusted response-detail]}]
   (let [custom? (some? (present custom-prompt))
         stable (if custom? custom-prompt base-prompt)
         generated [(context-block contexts)
@@ -83,7 +94,8 @@
                    (tools-block tool-names)
                    (environment-block {:workspace workspace
                                        :local-date local-date
-                                       :project-trusted project-trusted})]]
+                                       :project-trusted project-trusted})
+                   (response-detail-block response-detail)]]
     (join-blocks
      (if custom?
        (concat [stable append-prompt] generated)

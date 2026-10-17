@@ -5,10 +5,12 @@
 
 (defn- job-tools [manager]
   [{:name "job_list"
+    :progress-mode :poll
     :description "List this session's retained background shell jobs, newest first."
     :parameters {:type "object" :properties {} :additionalProperties false}
     :execute (fn [_ _] {:jobs ((:list manager))})}
    {:name "job_output"
+    :progress-mode :poll
     :description (str "Read a background job's combined stdout/stderr stream. "
                       "offset is a zero-based character cursor; continue with next-offset. "
                       "wait_ms waits for new output or completion within its configured limit. "

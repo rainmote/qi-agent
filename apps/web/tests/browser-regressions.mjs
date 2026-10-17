@@ -15,7 +15,8 @@ async function fixture(initialCount=2){
  const page=await browser.newPage({viewport:{width:1440,height:1000}});
  page.on('pageerror',e=>errors.push(e.message));
  await page.addInitScript(()=>{window.sources=[];window.EventSource=class extends EventTarget{constructor(url){super();this.url=url;window.sources.push(this);queueMicrotask(()=>this.dispatchEvent(new Event('ready')));}close(){this.closed=true;}}});
- const controls={holdSnapshot:null,holdOpen:null,holdPolicy:null,holdModels:null,modelCatalog:models,providerSaves:0,providerRetries:0,dropSubmit:false,rejectSubmit:false,uploads:[],submissions:[],operationStatus:"completed"};
+ const controls={holdSnapshot:null,holdOpen:null,holdPolicy:null,holdModels:null,snapshotOverride:null,steers:[],modelCatalog:models,providerSaves:0,providerRetries:0,dropSubmit:false,rejectSubmit:false,uploads:[],submissions:[],operationStatus:"completed",preferenceEvents:{A:[],B:[]},rejectPreference:false,verification:undefined};
+ const sessionSnapshot=(id,n=2)=>{const value=snapshot(id,n);value.events.push(...controls.preferenceEvents[id]);return value;};
  const provider={id:"mock-provider",name:"Mock Provider",protocol:"openai-completions",baseUrl:"https://example.invalid/v1",apiKeyConfigured:true,authType:"api-key",authStatus:"configured",models:[{id:"mock-model",name:"Mock Model"}]};
  await page.route('**/api/**', async route=>{
   const path=new URL(route.request().url()).pathname; let result; let held;
@@ -23,7 +24,7 @@ async function fixture(initialCount=2){
   else if(path.endsWith('/attachments')) {const input=route.request().postDataJSON();controls.uploads.push(input);result={type:'attachment',id:`fixture-upload-${controls.uploads.length}`,workspaceId,name:input.name,mime:input.mime,size:Buffer.from(input.base64,'base64').length};}
   else if(path.endsWith('/files') || path.endsWith('/search')) result={path:'',entries:[{name:'note.md',path:'note.md',kind:'file'},{name:'example.html',path:'example.html',kind:'file'}],truncated:false};
   else if(path.endsWith('/preview')) {const html=new URL(route.request().url()).searchParams.get('path')==='example.html';result={path:html?'example.html':'note.md',name:html?'example.html':'note.md',mime:html?'text/html':'text/markdown',size:200,kind:html?'html':'text',text:html?'<h1>Static fixture</h1><script>parent.fixtureScriptRan=true</script>':'# bounded file fixture'};}
-  else if(path.endsWith('/changes')) result={turnId:'fixture-turn',partial:true,files:[{path:'note.md',status:'modified',before:'old',after:'new',diff:'--- a/note.md\n+++ b/note.md\n-old\n+new'}],notice:'Fixture changes only'};
+  else if(path.endsWith('/changes')) result={turnId:'fixture-turn',partial:!controls.verification,verification:controls.verification,files:[{path:'note.md',status:'modified',before:'old',after:'new',diff:'--- a/note.md\n+++ b/note.md\n-old\n+new'}],notice:'Fixture changes only'};
   else if(path.endsWith('/references')) result={files:[{path:'note.md'}],sessions:[sessions[1]]};
   else if(path.endsWith('/resolve-references')) result=route.request().postDataJSON().message+'\n[User-selected source]\nbounded file fixture';
   else if(path==='/api/presets') result=[{id:'standard',name:'Standard',trust:'system'}];
@@ -33,7 +34,7 @@ async function fixture(initialCount=2){
   }
   else if(path==='/api/providers/reload'){controls.providerRetries++;assert.deepEqual(route.request().postDataJSON(),{sessionIds:['A']});result={scope:'open-web-sessions',applied:['A'],failures:[]};}
   else if(path.includes('/operations/')) result={status:controls.operationStatus,result:{accepted:true}};
-  else if(path.endsWith('/open')) {const id=path.split('/')[3]; result={session:sessions.find(s=>s.id===id),snapshot:snapshot(id,initialCount),eventCursor:"fixture:0"};if(id===controls.holdOpen?.id)held=controls.holdOpen;}
+  else if(path.endsWith('/open')) {const id=path.split('/')[3]; result={session:sessions.find(s=>s.id===id),snapshot:controls.snapshotOverride||sessionSnapshot(id,initialCount),eventCursor:"fixture:0"};if(id===controls.holdOpen?.id)held=controls.holdOpen;}
   else if(path.endsWith('/rpc')){
    const {method}=route.request().postDataJSON(); const id=path.split('/')[3];
    if(method==='trust.status') result={configured:false};
@@ -42,8 +43,10 @@ async function fixture(initialCount=2){
    else if(method==='subagent.status') result={providers:[],jobs:[]};
    else if(method==='policy.status') {result=policy;if(id===controls.holdPolicy?.id){held=controls.holdPolicy;result={...policy,mode:'allow'};}}
    else if(method==='turn.submit'){controls.submissions.push(route.request().postDataJSON());if(controls.dropSubmit){controls.dropSubmit=false;await route.abort();return;}if(controls.rejectSubmit){controls.rejectSubmit=false;await route.fulfill({status:400,json:{ok:false,error:{message:'Fixture rejected before acceptance'}}});return;}result={accepted:true};}
+   else if(method==='turn.steer'){controls.steers.push(route.request().postDataJSON());result={id:'steer-fixture'};}
    else if(method==='command.execute') result={output:'test-only'};
-   else if(method==='session.snapshot') {result=snapshot(id);if(id===controls.holdSnapshot?.id){held=controls.holdSnapshot;result.events[1].data.message.content='STALE-SNAPSHOT';}}
+   else if(method==='session.preferences.set') {if(controls.rejectPreference){controls.rejectPreference=false;await route.fulfill({status:400,json:{ok:false,error:{message:'Fixture preference not saved'}}});return;}const {response_detail}=route.request().postDataJSON().params;assert.ok(['short','auto','detailed'].includes(response_detail));const events=controls.preferenceEvents[id];const event={id:`preference-${id}-${events.length}`,seq:10000+events.length,at:'2026-10-15T15:00:00Z',type:'session/preferences',data:{response_detail}};events.push(event);result={response_detail,event};}
+   else if(method==='session.snapshot') {result=sessionSnapshot(id);if(id===controls.holdSnapshot?.id){held=controls.holdSnapshot;result.events[1].data.message.content='STALE-SNAPSHOT';}}
    else if(method==='context.status') result=null;
    else if(method==='model.list') {result=controls.modelCatalog;if(id===controls.holdModels?.id)held=controls.holdModels;}
    else throw new Error(`Unmocked ${method}`);
@@ -58,6 +61,35 @@ const gate=(id)=>({id,seen:deferred(),release:deferred(),done:deferred()});
 const settle=(page)=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
 const open=async(page,id)=>{await page.locator('.session-link').filter({hasText:`会话${id}`}).click();await page.locator('.session-header-title button').filter({hasText:`会话${id}`}).waitFor();};
 try{
+ {
+  const {page,controls}=await fixture(0);await page.goto(base);await page.locator('.session-header-title button').waitFor();
+  const ends=['completed','failed','cancelled','uncertain'].map((status,index)=>({id:`outcome-${status}`,seq:100+index,at:'2026-10-15T00:00:00Z',type:'agent/run/end',data:{'run-id':`native-${status}`,status,reason:status==='uncertain'?'restored':status,verification:'not-run',...(status==='failed'?{error:'Offline provider fixture'}:{})}}));
+  const dispatch=async(events)=>page.evaluate(events=>{const source=window.sources.findLast(source=>!source.closed);for(const event of events)source.dispatchEvent(new MessageEvent('worker',{data:JSON.stringify(event)}));},events);
+  await dispatch(ends.flatMap(event=>[{type:'event',event:'agent.run/end',data:event.data},{type:'event',event:event.type,data:event.data,durable:true,event_id:event.id,seq:event.seq}]));
+  await page.getByText(/结果未确认 · 需要核对/).waitFor();
+  assert.equal(await page.locator('.run-outcome').count(),4);
+  assert.equal(await page.locator('.run-outcome').filter({hasText:'尚未验收'}).count(),4);
+  assert.equal(await page.locator('.inline-error').count(),0);
+  controls.snapshotOverride={...snapshot('A',0),events:ends,state:{phase:'idle','last-outcome':ends.at(-1).data,revision:5}};
+  await page.reload();await page.getByText(/结果未确认 · 需要核对/).waitFor();
+  assert.equal(await page.locator('.run-outcome').count(),4);
+  for(const width of [1440,375]){
+   await page.setViewportSize({width,height:1000});await settle(page);
+   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+   if(process.env.QI_AGENT_BROWSER_ARTIFACTS)await page.screenshot({path:`${process.env.QI_AGENT_BROWSER_ARTIFACTS}/run-outcomes-${width}.png`,fullPage:true,animations:'disabled'});
+  }
+  await dispatch([{type:'event',event:'agent/state',data:{phase:'compacting','run-id':'active',revision:6,compaction:{'compaction-id':'c','completed-chunks':2,'total-chunks':6,'elapsed-ms':500,status:'progress'}}}]);
+  await page.getByRole('status').filter({hasText:'整理上下文 2/6'}).waitFor();
+  await page.locator('textarea').fill('Change the next step');
+  await page.getByRole('button',{name:'下一步引导',exact:true}).click();
+  await page.getByText('已接收，下一模型请求前生效',{exact:true}).waitFor();
+  assert.equal(controls.steers.length,1);
+  await dispatch([{type:'event',event:'agent/state',data:{phase:'idle',revision:7}}]);
+  await page.getByRole('button',{name:'发送消息',exact:true}).waitFor();
+  assert.equal(await page.locator('.composer-hint.has-run').count(),0);
+  await page.close();
+  console.log(JSON.stringify({nativeOutcomesAndCompactionProgress:'passed',cases:['four outcomes','live and durable deduplication','reload','375px','steer receipt','progress closes']}));
+ }
  for(const returnToA of [false,true]){
   const {page,controls}=await fixture();const held=gate('A');controls.holdSnapshot=held;
   await page.goto(base);await page.locator('.session-header-title button').waitFor();
@@ -189,7 +221,26 @@ try{
   await page.frameLocator('iframe[title="example.html 静态预览"]').getByRole('heading',{name:'Static fixture'}).waitFor();
   assert.equal(await page.evaluate(()=>window.fixtureScriptRan),undefined);
   for(const width of [1440,768,414,375,320]){await page.setViewportSize({width,height:900});await settle(page);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`workbench overflow ${width}`);}
-  await page.getByRole('button',{name:'本轮变更',exact:true}).click();await page.getByText('修改 · note.md',{exact:true}).click();assert.match(await page.locator('.workspace-diff pre').innerText(),/\+new/);
+  await page.getByRole('button',{name:'本轮变更',exact:true}).click();
+  await page.getByLabel('本轮结果摘要').waitFor();assert.equal(await page.getByLabel('本轮结果摘要').locator('p').count(),3);
+  assert.match(await page.getByLabel('本轮结果摘要').innerText(),/部分记录[\s\S]*尚未关联[\s\S]*核对遗漏/);
+  assert.equal(await page.locator('.workspace-diff').getAttribute('open'),'');assert.match(await page.locator('.workspace-diff pre').innerText(),/\+new/);
+  await page.getByLabel('结果详略',{exact:true}).selectOption('short');await page.waitForFunction(()=>document.querySelector('select[aria-label="结果详略"]').value==='short');
+  assert.equal(await page.locator('.workspace-diff').getAttribute('open'),null);assert.equal(await page.locator('.workspace-capture-scope').getAttribute('open'),'');
+  controls.rejectPreference=true;await page.getByLabel('结果详略',{exact:true}).selectOption('detailed');await page.getByRole('alert').filter({hasText:'Fixture preference not saved'}).waitFor();assert.equal(await page.getByLabel('结果详略',{exact:true}).inputValue(),'short');
+  await page.getByLabel('结果详略',{exact:true}).selectOption('detailed');await page.waitForFunction(()=>document.querySelector('select[aria-label="结果详略"]').value==='detailed');assert.equal(await page.locator('.workspace-diff').getAttribute('open'),'');
+  for (const status of ['PASS','UNKNOWN','NOT_RUN']) {
+   controls.verification={status,checks:[{id:'acceptance',status:'PASS'}]};
+   await page.getByRole('button',{name:'刷新',exact:true}).click();
+   const summary=page.getByLabel('本轮结果摘要');
+   await page.getByRole('button',{name:'刷新',exact:true}).waitFor({state:'visible'});
+   if(status==='PASS') await summary.getByText(/独立验收通过/).waitFor();
+   else if(status==='UNKNOWN') await summary.getByText(/验收结果未确认/).waitFor();
+   else await summary.getByText(/尚未关联本轮文件指纹/).waitFor();
+  }
+
+  await page.reload();await page.getByRole('button',{name:'添加附件与工具',exact:true}).click();await page.getByRole('menuitem',{name:'文件与变更',exact:true}).click();assert.equal(await page.getByLabel('结果详略',{exact:true}).inputValue(),'detailed');
+  await page.screenshot({path:process.env.QI_U3_SCREENSHOT||'/tmp/qi-u3-result-summary.png',fullPage:true});
   await page.getByRole('button',{name:'关闭文件面板',exact:true}).click();
   await page.getByLabel('选择附件').setInputFiles({name:'note.txt',mimeType:'text/plain',buffer:Buffer.from('attachment fixture')});
   await page.getByRole('list',{name:'待发送附件'}).getByText('note.txt',{exact:true}).waitFor();

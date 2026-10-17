@@ -242,7 +242,7 @@
       (throw (ex-info
               (str "Missing OpenAI API key; set "
                    (or (:api-key-env config) "OPENAI_API_KEY"))
-              {:provider :openai})))
+              {:provider :openai :code :missing-credentials :retryable false})))
     (let [tools (mapv tool-schema (:tools request))
           use-stream? (not= false (:stream config))
           body (cond->

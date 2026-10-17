@@ -1,5 +1,6 @@
 import { appendTimeline, buildTimeline, type TimelineModel } from "./timeline-model";
 import type { AgentState, DurableEvent, HostEvent, Interaction, SessionSnapshot } from "./types";
+import { runOutcome } from "./run-outcome";
 
 // Sharding keeps immutable updates from copying a full session-sized Set on each event.
 const INDEX_BUCKETS = 128;
@@ -55,6 +56,20 @@ function revision(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function withOutcome(projection: Projection, value: unknown): Projection {
+  const incoming = runOutcome(value);
+  if (!incoming) return projection;
+  const existing = projection.timeline.rows.find(row => row.id === `outcome:${incoming["run-id"]}`);
+  const outcome = existing?.kind === "outcome" ? runOutcome(existing.event.data)! : incoming;
+  const timeline = appendTimeline(projection.timeline, { id: `outcome:${outcome["run-id"]}`,
+    seq: 0, at: "", type: "agent/run/end", data: { ...outcome } });
+  const activeRun = projection.state["run-id"];
+  const state = activeRun && activeRun !== outcome["run-id"] ? projection.state
+    : { ...projection.state, "last-outcome": outcome };
+  return { ...projection, timeline, state,
+    lastRunError: projection.lastRunError === outcome.error ? null : projection.lastRunError };
+}
+
 export function fromSnapshot(snapshot: SessionSnapshot): Projection {
   const seen = new Set<string>();
   const events = snapshot.events.filter((event) => {
@@ -62,7 +77,7 @@ export function fromSnapshot(snapshot: SessionSnapshot): Projection {
     seen.add(event.id);
     return true;
   }).sort((a, b) => a.seq - b.seq);
-  return {
+  const projection: Projection = {
     events,
     eventIds: EventIdIndex.from(events),
     timeline: buildTimeline(events),
@@ -75,6 +90,10 @@ export function fromSnapshot(snapshot: SessionSnapshot): Projection {
     snapshotInteractionRevision: revision(snapshot.interactions_revision),
     interactionRevisions: new Map(),
   };
+  let clearedAt = -1;
+  events.forEach((event, index) => { if (event.type === "session/clear") clearedAt = index; });
+  const last = events.slice(clearedAt + 1).reverse().find(event => event.type === "agent/run/end");
+  return withOutcome(projection, clearedAt >= 0 ? last?.data : snapshot.state["last-outcome"] ?? last?.data);
 }
 
 export function applyHostEvent(projection: Projection, envelope: HostEvent): Projection {
@@ -101,15 +120,21 @@ export function applyHostEvent(projection: Projection, envelope: HostEvent): Pro
       }
       events.splice(low, 0, event);
     }
-    return { ...projection, events, eventIds: projection.eventIds.add(event.id),
-      timeline: appending ? appendTimeline(projection.timeline, event) : buildTimeline(events),
+    let timeline = appending ? appendTimeline(projection.timeline, event) : buildTimeline(events);
+    if (!appending) for (const row of projection.timeline.rows) {
+      if (row.kind === "outcome") timeline = appendTimeline(timeline, row.event);
+    }
+    const next = { ...projection, events, eventIds: projection.eventIds.add(event.id), timeline,
       summary: addSummary(projection.summary, event) };
+    return event.type === "agent/run/end" && appending ? withOutcome(next, event.data) : next;
   }
+  if (envelope.event === "agent.run/end" || envelope.event === "agent/run/end") return withOutcome(projection, envelope.data);
   if (envelope.event === "agent/state") {
     const incomingRevision = revision(envelope.data?.revision);
     if (incomingRevision !== null && projection.stateRevision !== null && incomingRevision <= projection.stateRevision) return projection;
-    return { ...projection, state: { phase: "idle", ...envelope.data } as unknown as AgentState,
+    const next = { ...projection, state: { phase: "idle", ...envelope.data } as unknown as AgentState,
       stateRevision: incomingRevision ?? projection.stateRevision };
+    return withOutcome(next, envelope.data?.["last-outcome"]);
   }
   if (envelope.event === "interaction/request" || envelope.event === "interaction/resolved") {
     const incomingRevision = revision(envelope.data?.revision);
@@ -139,7 +164,8 @@ export function applyHostEvent(projection: Projection, envelope: HostEvent): Pro
     } : projection;
   }
   if (envelope.event === "remote/run-result" && envelope.data?.ok === false) {
-    const error = envelope.data.error as { message?: string } | undefined;
+    const error = envelope.data.error as { message?: string; data?: unknown } | undefined;
+    if (runOutcome(error?.data)) return withOutcome(projection, error?.data);
     return { ...projection, lastRunError: error?.message || "Agent run failed" };
   }
   return projection;

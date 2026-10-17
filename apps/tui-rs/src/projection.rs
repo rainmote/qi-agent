@@ -51,6 +51,59 @@ fn normalize_state(raw: &Map<String, Value>) -> AgentState {
         )
         .unwrap_or_default(),
         last_error: string_at(raw, &["lastError", "last-error", "last_error"]),
+        last_outcome: object_at(raw, &["last-outcome", "last_outcome"]).and_then(normalize_outcome),
+        compaction: object_at(raw, &["compaction"]).and_then(|progress| {
+            Some(CompactionProgress {
+                compaction_id: string_at(progress, &["compaction-id"])?,
+                completed_chunks: u64_at(progress, &["completed-chunks"])?,
+                total_chunks: u64_at(progress, &["total-chunks"])?,
+            })
+        }),
+    }
+}
+
+fn normalize_outcome(raw: &Map<String, Value>) -> Option<RunOutcome> {
+    let status = string_at(raw, &["status"])?;
+    if !matches!(
+        status.as_str(),
+        "completed" | "failed" | "cancelled" | "uncertain"
+    ) {
+        return None;
+    }
+    Some(RunOutcome {
+        run_id: string_at(raw, &["run-id", "run_id"])?,
+        status,
+        reason: string_at(raw, &["reason"]),
+        error: string_at(raw, &["error"]),
+        verification: string_at(raw, &["verification"])
+            .or_else(|| {
+                object_at(raw, &["verification"]).and_then(|value| string_at(value, &["status"]))
+            })
+            .unwrap_or_else(|| "not-run".into()),
+    })
+}
+
+fn record_run_outcome(projection: &mut UiProjection, outcome: RunOutcome) {
+    let id = format!("outcome:{}", outcome.run_id);
+    if projection.history.iter().any(|item| item.id() == id) {
+        return;
+    }
+    projection
+        .history
+        .retain(|item| item.id() != format!("run-error:{}", outcome.run_id));
+    let text = outcome.text();
+    if outcome.status == "failed" {
+        projection.history.push(HistoryItem::Error { id, text });
+    } else {
+        projection.history.push(HistoryItem::Info { id, text });
+    }
+    if projection
+        .state
+        .run_id
+        .as_deref()
+        .is_none_or(|run| run == outcome.run_id)
+    {
+        projection.state.last_outcome = Some(outcome);
     }
 }
 
@@ -149,7 +202,13 @@ pub fn from_snapshot(snapshot: Snapshot) -> UiProjection {
         );
     }
     projection.state_revision = u64_at(&snapshot.state, &["revision"]);
+    let historical_outcome = projection.state.last_outcome.take();
     projection.state = normalize_state(&snapshot.state);
+    if let Some(outcome) = projection.state.last_outcome.clone() {
+        record_run_outcome(&mut projection, outcome);
+    } else {
+        projection.state.last_outcome = historical_outcome;
+    }
     projection.snapshot_interaction_revision = snapshot.interactions_revision;
     for raw in &snapshot.interactions {
         if let Some(interaction) = normalize_interaction(raw) {
@@ -228,10 +287,10 @@ fn accept_interaction_revision(
 }
 
 fn record_run_error(projection: &mut UiProjection, text: String, fallback_id: String) {
-    let duplicate =
-        projection.history.iter().rev().take(4).any(
+    let duplicate = projection.history.iter().any(|item| item.id() == fallback_id)
+        || (!fallback_id.starts_with("run-error:") && projection.history.iter().rev().take(4).any(
             |item| matches!(item, HistoryItem::Error { text: existing, .. } if existing == &text),
-        );
+        ));
     if !duplicate {
         projection.history.push(HistoryItem::Error {
             id: fallback_id,
@@ -254,6 +313,11 @@ fn apply_event(
         .unwrap_or_else(|| format!("live:{}", seq.unwrap_or(0)));
     match event {
         "message" | "session/message" => add_message(&mut projection, data, fallback_id),
+        "agent/run/end" | "agent.run/end" => {
+            if let Some(outcome) = normalize_outcome(data) {
+                record_run_outcome(&mut projection, outcome);
+            }
+        }
         "agent/state" | "runtime/state" => {
             let state = object_at(data, &["state"]).unwrap_or(data);
             let revision = u64_at(state, &["revision"]);
@@ -266,6 +330,9 @@ fn apply_event(
             projection.state_revision = revision;
             let previous_phase = projection.state.phase.clone();
             projection.state = normalize_state(state);
+            if let Some(outcome) = projection.state.last_outcome.clone() {
+                record_run_outcome(&mut projection, outcome);
+            }
             if previous_phase != "idle" && projection.state.phase == "idle" {
                 terminalize_open_tools(&mut projection, "Turn ended before tool completion");
             }
@@ -352,16 +419,38 @@ fn apply_event(
                 fallback_id,
             );
         }
-        "ui/run-error" => {
+        "agent/error" | "ui/run-error" => {
+            let run = string_at(data, &["run-id", "run_id"]);
+            if run.as_ref().is_some_and(|id| {
+                projection
+                    .history
+                    .iter()
+                    .any(|item| item.id() == format!("outcome:{id}"))
+            }) {
+                return projection;
+            }
             let text =
                 string_at(data, &["message", "error"]).unwrap_or_else(|| "Run failed".into());
-            record_run_error(&mut projection, text, fallback_id);
+            record_run_error(
+                &mut projection,
+                text,
+                run.map(|id| format!("run-error:{id}"))
+                    .unwrap_or(fallback_id),
+            );
         }
         "remote/run-result" if data.get("ok").and_then(Value::as_bool) == Some(false) => {
-            let text = object_at(data, &["error"])
-                .and_then(|error| string_at(error, &["message"]))
-                .unwrap_or_else(|| "Run failed".into());
-            record_run_error(&mut projection, text, fallback_id);
+            let error = object_at(data, &["error"]);
+            if let Some(outcome) = error
+                .and_then(|error| object_at(error, &["data"]))
+                .and_then(normalize_outcome)
+            {
+                record_run_outcome(&mut projection, outcome);
+            } else {
+                let text = error
+                    .and_then(|error| string_at(error, &["message"]))
+                    .unwrap_or_else(|| "Run failed".into());
+                record_run_error(&mut projection, text, fallback_id);
+            }
         }
         "llm/model-selected" => {
             if let Ok(model) = serde_json::from_value::<Model>(Value::Object(data.clone())) {
@@ -918,5 +1007,92 @@ mod tests {
         assert!(
             matches!(&projection.history[0], HistoryItem::ToolGroup { tools, .. } if tools.len() == 1 && tools[0].name == "read")
         );
+    }
+}
+
+#[cfg(test)]
+mod introspection_regressions {
+    use crate::{
+        Envelope, HistoryItem, Snapshot, UiProjection,
+        projection::{apply_envelope, from_snapshot},
+    };
+    use serde_json::{Value, json};
+
+    fn outcome(status: &str) -> Value {
+        json!({"run-id":"native-run", "status":status, "reason":if status == "uncertain" {"restored"} else {status}, "verification":"not-run"})
+    }
+    fn event(status: &str, durable: bool) -> Envelope {
+        serde_json::from_value(
+            json!({"type":"event", "event":if durable {"agent/run/end"} else {"agent.run/end"},
+      "event_id":if durable {Some("end")} else {None}, "seq":2, "data":outcome(status)}),
+        )
+        .unwrap()
+    }
+    fn verify(p: &UiProjection, label: &str) {
+        let rows: Vec<_> = p
+            .history
+            .iter()
+            .filter(|item| item.id() == "outcome:native-run")
+            .collect();
+        assert_eq!(
+            rows.len(),
+            1,
+            "native terminal outcome must be visible exactly once"
+        );
+        let text = match rows[0] {
+            HistoryItem::Info { text, .. } | HistoryItem::Error { text, .. } => text,
+            _ => panic!("outcome must explain its meaning"),
+        };
+        assert!(text.contains(label), "{text}");
+        assert!(text.contains("尚未验收"), "{text}");
+    }
+    fn check(status: &str, label: &str) {
+        let snapshot: Snapshot = serde_json::from_value(json!({"state":{"phase":"idle"},"events":[
+          {"id":"start","seq":1,"type":"agent/run/start","data":{"run-id":"native-run"}},
+          {"id":"end","seq":2,"type":"agent/run/end","data":outcome(status)}
+        ]}))
+        .unwrap();
+        let restored = from_snapshot(snapshot);
+        verify(&restored, label);
+        let p = apply_envelope(UiProjection::default(), &event(status, false));
+        verify(&p, label);
+        let p = apply_envelope(
+            apply_envelope(p, &event(status, true)),
+            &event(status, false),
+        );
+        verify(&p, label);
+        let snapshot: Snapshot = serde_json::from_value(
+            json!({"state":{"phase":"idle", "last-outcome":outcome(status)}}),
+        )
+        .unwrap();
+        verify(&from_snapshot(snapshot), label);
+    }
+    #[test]
+    fn completed() {
+        check("completed", "运行完成");
+    }
+    #[test]
+    fn failed() {
+        check("failed", "运行失败");
+    }
+    #[test]
+    fn cancelled() {
+        check("cancelled", "运行已取消");
+    }
+    #[test]
+    fn uncertain() {
+        check("uncertain", "需要核对");
+    }
+
+    #[test]
+    fn native_failure_and_remote_error_are_one_result() {
+        let end = event("failed", true);
+        let error: Envelope = serde_json::from_value(json!({"type":"event","event":"agent/error", "data":{"run-id":"native-run","message":"offline failure"}})).unwrap();
+        let p = apply_envelope(UiProjection::default(), &error);
+        let p = apply_envelope(p, &end);
+        let remote: Envelope = serde_json::from_value(json!({"type":"event","event":"remote/run-result", "data":{"ok":false,"error":{"message":"offline failure", "data":outcome("failed")}}})).unwrap();
+        let p = apply_envelope(p, &remote);
+        assert_eq!(p.history.len(), 1);
+        verify(&p, "运行失败");
     }
 }

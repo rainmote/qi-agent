@@ -4,7 +4,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { lockStore, readJournal, encode } from '../lib/store.mjs';
+import { lockStore, readJournal, encode, digest } from '../lib/store.mjs';
 import { enqueue, tick, pause, resume, scheduleSlot } from '../lib/runner.mjs';
 import { cleanupContainer } from '../lib/execution.mjs';
 import { recover, transition } from '../lib/controller.mjs';
@@ -105,6 +105,21 @@ test('container recovery verifies ownership and removes the inspected immutable 
   assert.deepEqual(calls[1], ['rm', '-f', id]);
   await assert.rejects(cleanupContainer(name, 'd'.repeat(36), run), /ownership mismatch/);
   await assert.rejects(cleanupContainer('other-container', owner, run), /ownership receipt/);
+});
+
+test('container recovery pins original host and refuses a replacement engine before inspection',async()=>{
+  const name='qi-maint-'+'a'.repeat(36),owner='b'.repeat(36),calls=[];
+  const environment={host:'unix:///original.sock',engine:'original',endpoint:digest('unix:///original.sock')};
+  let engine='original';
+  const run=async(_,args)=>{
+    calls.push(args);assert.deepEqual(args.slice(0,2),['--host',environment.host]);
+    return args[2]==='info'?{exit_code:0,stdout:engine}:{exit_code:1,stderr:'No such container: original'};
+  };
+  assert.equal((await cleanupContainer(name,owner,run,environment)).status,'absent');
+  assert.deepEqual(calls.map(args=>args[2]),['info','inspect']);
+  engine='replacement';calls.length=0;
+  await assert.rejects(cleanupContainer(name,owner,run,environment),/Original engine identity/);
+  assert.deepEqual(calls.map(args=>args[2]),['info']);
 });
 
 test('restart cleans recorded resources, retains uncertainty and never reruns the worker', async (t) => {

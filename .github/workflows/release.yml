@@ -89,7 +89,7 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.verify.outputs.source_sha }}
       - uses: actions/setup-node@v4

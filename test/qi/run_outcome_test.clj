@@ -2,10 +2,55 @@
   (:require [qi.cancellation :as cancellation]
             [qi.kernel :as kernel]
             [qi.plugin :as plugin]
+            [qi.run-outcome :as outcome]
+            [qi.env :as env]
             [qi.orchestration-test :as fixture]
             [qi.plugins.workflow :as workflow]
             [babashka.fs :as fs]
             [clojure.test :refer [deftest is testing]]))
+
+(deftest host-deadline-overrides-only-its-own-older-session-run-once
+  (let [events [{:type "agent/run/start" :data {:run-id "r"}}
+                {:type "agent/run/end" :data {:run-id "r" :status :completed}}]
+        receipt {:schema_version 1 :reason "hard-wall-timeout" :worker_id "w" :generation 2
+                 :runs [{:run_id "r" :session_id "s" :deadline_at_ms 50}
+                        {:run_id "other" :session_id "other-session"}]}
+        identity {:worker-id "w" :generation 3 :session-id "s"}
+        result (outcome/host-deadline-outcomes receipt identity events)]
+    (is (= 1 (count result)))
+    (is (= :uncertain (:status (first result))))
+    (is (= :hard-wall-timeout (:reason (first result))))
+    (is (= :not-run (:verification (first result))))
+    (doseq [other [(assoc identity :worker-id "other") (assoc identity :generation 2)
+                  (assoc identity :session-id "other") (assoc identity :generation nil)]]
+      (is (empty? (outcome/host-deadline-outcomes receipt other events))))
+    (is (empty? (outcome/host-deadline-outcomes receipt identity
+                 (conj events {:type "agent/run/end" :data (first result)}))))))
+
+(deftest runtime-persists-host-correction-before-recovery-can-show-late-completion
+  (let [root (fs/create-temp-dir {:prefix "qi-deadline-correction-"})
+        log (str (fs/path root "session.jsonl"))
+        receipt (str (fs/path root "timeout.json"))
+        environment {"QI_AGENT_HOST_DEADLINE_RECEIPT" receipt "QI_AGENT_WORKER_ID" "w"
+                     "QI_AGENT_WORKER_GENERATION" "3"}
+        config {:plugins [{:ns 'qi.plugins.session :config {:path log}}
+                          {:ns 'qi.plugins.mock} {:ns 'qi.plugins.runtime}]}]
+    (try
+      (spit log (str "{\"type\":\"session/start\",\"data\":{\"session_id\":\"s\"}}\n"
+                     "{\"type\":\"agent/run/start\",\"data\":{\"run-id\":\"r\"}}\n"
+                     "{\"type\":\"agent/run/end\",\"data\":{\"run-id\":\"r\",\"status\":\"completed\"}}\n"))
+      (spit receipt "{\"schema_version\":1,\"reason\":\"hard-wall-timeout\",\"worker_id\":\"w\",\"generation\":2,\"runs\":[{\"run_id\":\"r\",\"session_id\":\"s\",\"deadline_at_ms\":50}]}")
+      (dotimes [_ 2]
+        (with-redefs [env/get #(get environment %)]
+          (let [ctx (plugin/boot! config)]
+            (try
+              (let [events ((:events (kernel/require-service ctx :session/store)))
+                    terminal (:data (last events))]
+                (is (= 4 (count events)))
+                (is (= :uncertain (some-> (:status terminal) name keyword)))
+                (is (= 2 (:host-generation terminal))))
+              (finally (kernel/dispose-all! ctx))))))
+      (finally (fs/delete-tree root)))))
 
 (defn- answer [text]
   {:message {:role "assistant" :content text}

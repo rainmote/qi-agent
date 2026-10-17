@@ -1,5 +1,7 @@
 use anyhow::{Context, Result, bail};
+use serde_json::{Value, json};
 use std::{
+    collections::BTreeSet,
     env, fs,
     path::{Path, PathBuf},
 };
@@ -78,6 +80,26 @@ impl RuntimePaths {
 
     pub fn worker_descriptor(&self, worker_id: &str) -> PathBuf {
         self.workers_dir.join(format!("{worker_id}.json"))
+    }
+
+    /// Only supervisor-known sources; do not scan a user's home or event bodies.
+    pub fn telemetry_sources(&self, sessions: impl Iterator<Item = PathBuf>) -> Value {
+        let sessions: BTreeSet<_> = sessions.collect();
+        json!({
+            "scope": "supervisor-known-sessions",
+            "state_directory": self.state_dir,
+            "runtime_directory": self.runtime_dir,
+            "logs_directory": self.logs_dir,
+            "session_sources": sessions.iter().map(|path| {
+                let status = match fs::symlink_metadata(path) {
+                    Ok(metadata) if metadata.is_file() => "available",
+                    Ok(_) => "unsupported",
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => "missing_source",
+                    Err(_) => "read_error",
+                };
+                json!({"path": path, "status": status})
+            }).collect::<Vec<_>>()
+        })
     }
 }
 
@@ -189,5 +211,27 @@ mod tests {
             first,
             paths.worker_socket("worker-00000000-0000-0000-0000-000000000002")
         );
+    }
+
+    #[test]
+    fn telemetry_manifest_uses_only_known_paths_and_never_reads_bodies() {
+        let root = env::temp_dir().join(format!("qi-source-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let file = root.join("session.jsonl");
+        fs::write(&file, "PRIVATE-CONTENT").unwrap();
+        let missing = root.join("missing.jsonl");
+        let manifest =
+            paths(root.clone()).telemetry_sources(vec![file.clone(), file, missing].into_iter());
+        assert_eq!(manifest["scope"], "supervisor-known-sessions");
+        assert_eq!(manifest["session_sources"].as_array().unwrap().len(), 2);
+        assert!(!manifest.to_string().contains("PRIVATE-CONTENT"));
+        assert!(
+            manifest["session_sources"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|row| row["status"] == "missing_source")
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 }
