@@ -1,0 +1,68 @@
+name: Maintenance container
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, feat/unattended-readiness]
+    paths:
+      - 'maintenance/**'
+      - 'apps/tui-rs/**'
+      - 'src/qi/generation.clj'
+      - 'src/qi/plugins/context_manager.clj'
+      - '.github/workflows/maintenance-container.yml'
+permissions:
+  contents: read
+concurrency:
+  group: maintenance-container-${{ github.run_id }}
+  cancel-in-progress: false
+jobs:
+  full-qi-container:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+      - name: Build pinned toolchain and offline dependencies
+        run: node maintenance/build-image.mjs "$RUNNER_TEMP/qi-image.json" 5bc2acb72d8141d01d5e31f81bb539e8c4ed6149
+      - name: Disconnected worker reaches only the budgeted fake provider
+        run: |
+          export QI_MAINTENANCE_IMAGE="$(node -p 'require(process.env.RUNNER_TEMP + "/qi-image.json").image')"
+          node maintenance/broker-smoke.mjs "$RUNNER_TEMP/qi-broker-evidence"
+      - name: Native qi worker executes a tool and reconciles both logical requests
+        run: |
+          export QI_MAINTENANCE_IMAGE="$(node -p 'require(process.env.RUNNER_TEMP + "/qi-image.json").image')"
+          node maintenance/worker-smoke.mjs "$RUNNER_TEMP/qi-worker-evidence"
+      - name: Full repository baseline, valid red, oracle and isolated verification
+        env:
+          QI_OUTPUT: ${{ runner.temp }}/qi-container-evidence
+        run: |
+          export QI_MAINTENANCE_IMAGE="$(node -p 'require(process.env.RUNNER_TEMP + "/qi-image.json").image')"
+          node maintenance/qi-smoke.mjs 5bc2acb72d8141d01d5e31f81bb539e8c4ed6149 "$QI_OUTPUT"
+      - name: Export the verified ARM64 toolchain for a remote runtime
+        run: node maintenance/export-image.mjs "$RUNNER_TEMP" "$RUNNER_TEMP/qi-toolchain"
+      - name: Retain the portable toolchain for one day
+        uses: actions/upload-artifact@v4
+        with:
+          name: qi-toolchain-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/qi-toolchain/
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+      - name: Retain exact image, checks and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qi-container-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/qi-image.json
+            ${{ runner.temp }}/qi-container-evidence/report.json
+            ${{ runner.temp }}/qi-container-evidence/failure.json
+            ${{ runner.temp }}/qi-container-evidence/state/events.jsonl
+            ${{ runner.temp }}/qi-container-evidence/state/artifacts/
+            ${{ runner.temp }}/qi-broker-evidence/report.json
+            ${{ runner.temp }}/qi-worker-evidence/report.json
+            ${{ runner.temp }}/qi-worker-evidence/failure.json
+            ${{ runner.temp }}/qi-worker-evidence/execution.json

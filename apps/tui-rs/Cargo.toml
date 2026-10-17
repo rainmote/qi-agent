@@ -1,21 +1,31 @@
 [package]
-name = "bb-agent-tui"
+name = "qi-agent-tui"
 version = "0.1.0"
 edition = "2024"
-description = "Daemon-backed agent runtime and Ratatui client for dao"
+rust-version = "1.88"
+description = "Daemon-backed agent runtime and Ratatui client for qì agent"
 license = "MIT"
+default-run = "qi-agent"
 
 [[bin]]
-name = "dao"
+name = "qi-agent"
 path = "src/main.rs"
+
+# Compatibility entrypoint. New documentation and installers use `qi-agent`.
+[[bin]]
+name = "dao"
+path = "src/bin/dao.rs"
 
 [dependencies]
 anyhow = "1.0"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+chrono-tz = "0.10"
 crossterm = { version = "0.29", features = ["use-dev-tty"] }
 fs2 = "0.4"
 libc = "0.2"
 ratatui = { version = "0.30", features = ["crossterm", "scrolling-regions", "serde"] }
-rusqlite = { version = "0.38", features = ["bundled"] }
+# Includes the WAL connection-close deadlock and WAL-reset fixes.
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 unicode-segmentation = "1.12"

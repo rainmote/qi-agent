@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "task_id": "QI-EXAMPLE-REPLACE",
+  "kind": "bug",
+  "goal": "Replace with a concrete reproduction and observable acceptance conditions.",
+  "base_sha": "REPLACE_WITH_EXACT_40_CHARACTER_COMMIT",
+  "image": "REPLACE_WITH_TRUSTED_IMAGE_AT_SHA256_DIGEST",
+  "profile_path": "/absolute/private/path/agent.edn",
+  "verifier_dir": "/absolute/private/path/verifier",
+  "allowed_files": ["src/qi/REPLACE.clj"],
+  "checks": [],
+  "acceptance": {"file": "acceptance.test.mjs", "tests": ["exact trusted test name"]},
+  "note": "Fill before use. Copy checks from maintenance/checks.json and add impact checks. Place acceptance outside the candidate; its imports target /work explicitly. Placeholders deliberately fail validation."
+}

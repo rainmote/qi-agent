@@ -14,6 +14,16 @@ export interface SessionSummary {
   eventCount: number;
   messageCount: number;
   updatedAt: string | null;
+  presetId?: string;
+}
+
+export interface AgentPresetSummary {
+  id: string;
+  name: string;
+  description?: string;
+  order?: number;
+  trust: "system" | "user";
+  broken?: boolean;
 }
 
 export interface DurableEvent {
@@ -29,10 +39,63 @@ export interface ModelEntry {
   id: string;
   provider?: string;
   model?: string;
+  "display-name"?: string;
+  "settings-provider-id"?: string;
+  "context-window"?: number;
+  "thinking-levels"?: string[];
+  "thinking-level"?: string;
+}
+
+export interface ContextStatus {
+  used_tokens: number;
+  context_window: number;
+  percent: number;
+  system_tokens: number;
+  tool_tokens: number;
+  message_tokens: number;
+}
+
+export type ProviderProtocol = "openai-completions" | "openai-responses" | "anthropic-messages"
+  | "chatgpt-subscription";
+export type ProviderAuthType = "api-key" | "chatgpt-subscription";
+export type ProviderAuthStatus = "configured" | "missing" | "invalid" | "expired" | "insecure";
+
+export interface ProviderModelSettings {
+  id: string;
+  name: string;
+  contextWindow?: number;
+  thinkingLevels?: Array<"off" | "low" | "medium" | "high" | "max">;
+  defaultThinkingLevel?: "off" | "low" | "medium" | "high" | "max";
+}
+
+export interface ProviderSettings {
+  id: string;
+  name: string;
+  protocol: ProviderProtocol;
+  baseUrl: string;
+  apiKeyEnv?: string;
+  apiKeyConfigured: boolean;
+  authType: ProviderAuthType;
+  authStatus: ProviderAuthStatus;
+  authSource?: "settings" | "environment" | "codex-auth-cache";
+  authFile?: string;
+  models: ProviderModelSettings[];
+  builtin?: boolean;
+}
+
+export type ProviderInput = Omit<ProviderSettings,
+  "apiKeyConfigured" | "authType" | "authStatus" | "authSource" | "authFile"> & { apiKey?: string };
+
+export interface ProviderPreset {
+  id: string;
+  name: string;
+  protocol: ProviderProtocol;
+  baseUrl: string;
 }
 
 export interface Interaction {
   id: string;
+  revision?: number;
   title: string;
   message: string;
   createdAt?: string;
@@ -48,10 +111,30 @@ export interface SessionSnapshot {
   events: DurableEvent[];
   state: AgentState;
   models: { current: ModelEntry | null; providers: ModelEntry[] } | null;
+  context?: ContextStatus | null;
   interactions: Interaction[];
+  interactions_revision?: number;
+  policy?: PolicyStatus | null;
+  trust?: ProjectTrust | null;
+}
+
+export interface ProjectTrust {
+  configured: boolean;
+  root?: string;
+  decision?: "allow" | "deny";
+  "explicit?"?: boolean;
+  "matched-root"?: string | null;
+  source?: string;
+  mutable?: boolean;
+}
+
+export interface PolicyStatus {
+  mode: "deny" | "ask" | "allow";
+  modes: Array<{ id: "deny" | "ask" | "allow"; label: string }>;
 }
 
 export interface AgentState {
+  revision?: number;
   phase: "idle" | "model" | "tool" | "retry" | "compacting" | string;
   "run-id"?: string | null;
   partialAssistant?: string;
@@ -88,4 +171,11 @@ export interface RuntimeStatus {
 export interface SubagentStatus {
   providers: Array<{ id: string; description?: string; capabilities?: Record<string, unknown> }>;
   jobs: Array<{ id: string; label: string; provider: string; status: string; result?: unknown }>;
+}
+
+export interface ProviderReloadResult {
+  scope: "open-web-sessions";
+  applied: string[];
+  failures: Array<{ sessionId: string; sessionName: string; message: string }>;
+  warnings?: Array<{ sessionId: string; sessionName: string; message: string }>;
 }

@@ -2,15 +2,15 @@
 
 状态：Implemented  
 首次整理：2026-08-23  
-最后更新：2026-08-25
+最后更新：2026-08-28
 
-实施结果：阶段 0–6 已落地。Rust `dao` 是唯一 TUI 与 supervisor 入口；WebUI 和 headless client
+实施结果：阶段 0–6 已落地。Rust `qi-agent` 是唯一 TUI 与 supervisor 入口；WebUI 和 headless client
 使用同一 public socket；resident worker、per-agent REPL、retained child、durable messaging、
 goal/schedule、恢复、诊断与用户级 OS service 均已实现。结果不确定的外部副作用不会自动重放。
 
 ## 1. 决策摘要
 
-DAO 已从“Babashka host 启动一个 Rust TUI 子进程”迁移为常驻的本地 agent runtime：
+qì agent 已从“Babashka host 启动一个 Rust TUI 子进程”迁移为常驻的本地 agent runtime：
 
 > Rust TUI 只拥有连接；daemon 拥有任务接纳、路由和生命周期；Clojure worker 拥有实际执行；每个 agent 拥有独立 REPL。
 
@@ -70,7 +70,7 @@ DAO 已从“Babashka host 启动一个 Rust TUI 子进程”迁移为常驻的�
 
 ```mermaid
 flowchart LR
-    TUI["dao · Rust CLI + Ratatui"] <-->|"public Unix socket v1"| D["dao daemon · supervisor"]
+    TUI["qi-agent · Rust CLI + Ratatui"] <-->|"public Unix socket v1"| D["qi-agent daemon · supervisor"]
     WEB["WebUI / headless client"] <-->|"同一公开协议"| D
 
     D --> DB["supervisor.sqlite"]
@@ -88,23 +88,23 @@ flowchart LR
 
 ### 4.1 Rust 客户端
 
-Rust 可执行文件是唯一终端入口，命令名统一为 `dao`：
+Rust 可执行文件是唯一终端入口，命令名统一为 `qi-agent`：
 
 ```text
-dao                              打开 agent 列表或 attach/create 后进入 TUI
-dao agents                       列出 active、idle、failed、saved agents
-dao attach <agent-id-or-name>    连接已有 agent
-dao run --detach "..."           创建后台任务并立即返回
-dao repl <agent-id>              打开或代理该 agent 的 REPL
-dao status                       查看 daemon 和 worker 状态
-dao doctor                       检查 socket、描述文件、租约和孤儿进程
-dao doctor --fix                 只清理可证明已过期的 lease
-dao backup                       创建一致的 supervisor SQLite 快照
-dao update                       收养 live worker、恢复缺失 worker、刷新 lease
-dao service print|install|uninstall
+qi-agent                              打开 agent 列表或 attach/create 后进入 TUI
+qi-agent agents                       列出 active、idle、failed、saved agents
+qi-agent attach <agent-id-or-name>    连接已有 agent
+qi-agent run --detach "..."           创建后台任务并立即返回
+qi-agent repl <agent-id>              打开或代理该 agent 的 REPL
+qi-agent status                       查看 daemon 和 worker 状态
+qi-agent doctor                       检查 socket、描述文件、租约和孤儿进程
+qi-agent doctor --fix                 只清理可证明已过期的 lease
+qi-agent backup                       创建一致的 supervisor SQLite 快照
+qi-agent update                       收养 live worker、恢复缺失 worker、刷新 lease
+qi-agent service print|install|uninstall
                                  管理 launchd/systemd 用户服务
-dao stop <agent-id>              显式停止一个 agent tree
-dao shutdown                     显式停止所有 worker 和 daemon
+qi-agent stop <agent-id>              显式停止一个 agent tree
+qi-agent shutdown                     显式停止所有 worker 和 daemon
 ```
 
 客户端负责：
@@ -136,8 +136,8 @@ daemon 不得执行：
 - session transcript 全量扫描；
 - root 内部的 parent/child agent loop。
 
-当前使用一个 Rust 安装产物、三个运行角色：普通 `dao` 是客户端，`dao daemon serve` 是无 TTY
-supervisor，`dao worker serve` 是每个 root tree 的常驻代理。客户端发现 daemon 不存在时触发拉起；daemon
+当前使用一个 Rust 安装产物、三个运行角色：普通 `qi-agent` 是客户端，`qi-agent daemon serve` 是无 TTY
+supervisor，`qi-agent worker serve` 是每个 root tree 的常驻代理。客户端发现 daemon 不存在时触发拉起；daemon
 通过 owner-only launch lease 排除重复实例，并用 `setsid` 进入独立 session，之后不再受客户端生命周期控制。
 
 ### 4.3 resident worker
@@ -151,7 +151,7 @@ supervisor，`dao worker serve` 是每个 root tree 的常驻代理。客户端�
 - root 以及每个 child 的 REPL backend；
 - transcript append、artifact 写入和运行期事件。
 
-现有 `agent.plugins.subagent-in-process` 可以继续作为第一版 child provider。child 仍是独立 plugin context，
+现有 `qi.plugins.subagent-in-process` 可以继续作为第一版 child provider。child 仍是独立 plugin context，
 但随 root worker 一起恢复。将来可以新增 `:external-worker` provider，而不改变模型侧 spawn/message API。
 
 ### 4.4 catalog/indexer
@@ -166,8 +166,8 @@ session catalog 的目录扫描不应阻塞 daemon 或 active worker。初版可
 | TUI 正常退出 | detach；agent、run、REPL 不变 |
 | TUI 被 `SIGKILL` | socket EOF；效果等同 detach |
 | `Esc` / 单次 `Ctrl+C` | 显式 `run.abort`，不停止 agent |
-| `dao stop <agent>` | 停止 root worker、child 和各自 REPL |
-| `dao shutdown` | 协调停止全部 worker 和 daemon |
+| `qi-agent stop <agent>` | 停止 root worker、child 和各自 REPL |
+| `qi-agent shutdown` | 协调停止全部 worker 和 daemon |
 | daemon 崩溃 | worker 继续执行并重连新 daemon |
 | worker 崩溃 | 只影响一个 root tree；进入 recovering |
 | REPL 崩溃或超时 | 只重启该 agent REPL；agent loop 保持存活 |
@@ -187,18 +187,18 @@ session 现在沿三条互不替代的轴公开状态：
 
 正常闲置回收只把 `resident` 变为 `inactive`。它不会归档或删除 session JSONL、artifact、durable state
 与 retained-child roster。后续 attach、agent message、schedule tick 或其他需要 runtime 的命令会从原 session
-惰性恢复；`session_id` 保持不变，worker `generation` 递增。显式 `dao stop`/`dao shutdown` 才把 lifecycle
+惰性恢复；`session_id` 保持不变，worker `generation` 递增。显式 `qi-agent stop`/`qi-agent shutdown` 才把 lifecycle
 推进到 `archived`。
 
 默认阈值为 90 分钟，可通过 daemon 环境变量配置：
 
 ```text
-DAO_IDLE_EVICTION_MINUTES=90     # 任意正有限分钟数
-DAO_IDLE_EVICTION_MINUTES=off    # 关闭（none 也兼容）
+QI_AGENT_IDLE_EVICTION_MINUTES=90     # 任意正有限分钟数
+QI_AGENT_IDLE_EVICTION_MINUTES=off    # 关闭（none 也兼容）
 ```
 
-扫描间隔为 `max(1 分钟, min(5 分钟, threshold / 3))`。`dao update` 也会立即执行一次扫描，结果在
-`idle_sweep` 中返回；`dao status` 与 `dao doctor` 暴露阈值、上次/下次扫描时间。
+扫描间隔为 `max(1 分钟, min(5 分钟, threshold / 3))`。`qi-agent update` 也会立即执行一次扫描，结果在
+`idle_sweep` 中返回；`qi-agent status` 与 `qi-agent doctor` 暴露阈值、上次/下次扫描时间。
 
 整棵 root tree 只有在以下条件全部成立时才会 graceful shutdown：root 与所有 resident child 都为 idle、
 最后持久事件达到阈值、没有 attachment、没有 running task、没有 active/claimed/paused schedule、worker
@@ -315,7 +315,7 @@ goal.set/list/status/cancel/complete/resume
 当前实现不把 daemon 持有的匿名 stdin/stdout pipe 当作 worker 的生命线：
 
 1. daemon 为每个 root tree 生成 `worker_id`、随机 token 和 owner-only descriptor。
-2. 独立的 `dao worker serve` 代理拥有 private Unix socket 和 Babashka 子进程；daemon 只连接该 socket。
+2. 独立的 `qi-agent worker serve` 代理拥有 private Unix socket 和 Babashka 子进程；daemon 只连接该 socket。
 3. daemon 认证后，worker 代理保证 `worker.register` 是首帧，再发布业务事件，避免注册/事件竞态。
 4. daemon 崩溃时代理、Babashka、agent loop 和 REPL 保持存活；事件写入有限 buffer，最终状态继续落盘。
 5. replacement daemon 扫描 descriptor，以 token 重新连接并收养 live proxy；机器重启后则递增 generation，
@@ -340,7 +340,7 @@ REPL 不负责 provider 调用、agent loop、child 生命周期、budget 或 tr
 
 ### 9.2 Backend 接口
 
-`agent.plugins.bb-repl` 和 `agent.plugins.jvm-clojure-repl` 都实现统一的
+`qi.plugins.bb-repl` 和 `qi.plugins.jvm-clojure-repl` 都实现统一的
 `:execution/repl` service：
 
 ```clojure
@@ -356,7 +356,7 @@ REPL 不负责 provider 调用、agent loop、child 生命周期、budget 或 tr
 每个 agent context 创建独立 service，使用独立 namespace：
 
 ```text
-dao.agent.<short-agent-id>
+qi.agent.<short-agent-id>
 ```
 
 进程可以 lazy start，但逻辑 REPL handle 在 agent 创建时就存在。状态机为：
@@ -368,15 +368,61 @@ cold → starting → ready → busy → ready
 ```
 
 默认 backend 是 Babashka。新建 agent 时可通过
-`dao --repl-backend jvm-clojure` 选择原生 JVM Clojure；选择值写入 owner-only worker
-descriptor 并由 worker proxy 传给 resident worker。daemon 的 `agent.list` 同时返回
-`config_path` 和 `repl_backend`，客户端只复用 workspace、profile 和显式 backend 均匹配的
-agent，因此同一 daemon 下两种 backend 可以并存。已有 agent 不会因后续命令行选项而换 backend。
+`qi-agent --repl-backend jvm-clojure` 选择原生 JVM Clojure；选择值写入 owner-only worker
+descriptor 并由 worker proxy 传给 resident worker。新会话还可通过 `qi-agent --preset ID`
+选择注册表中的 Agent Preset。公共 `agent.create` 只接受 `preset_id`，不接受客户端提交的
+任意 `config_path`；daemon 通过 Clojure Preset 注册表按系统优先、用户其次的受控根目录
+解析并完成 structural validation，然后把配置序列化到 owner-only runtime snapshot。Worker
+始终从该不可变快照启动，因此创建后修改或删除用户 Preset 不会改变既有 Session 的行为。
+解析后的 `preset_id` 和快照 `config_path` 同时写入 worker descriptor，其中 `preset_id` 还
+持久化到 SQLite session/agent 记录。拒绝结果在 `error.data.type` 返回稳定类型（如
+`unknown_preset`、`broken_preset`、`preset_validation_failed`）。`--config PATH` 仅用于可信的
+daemon 启动默认配置；安装版 launcher 会固定提供该参数，而 `--preset` 只决定新 Agent
+使用的注册 Preset。
+
+daemon 的 `agent.list` 返回 `preset_id`、`config_path` 和 `repl_backend`，客户端只复用
+workspace、Preset/默认 profile 和显式 backend 均匹配的 agent。因此同一 daemon 下不同
+Preset 和两种 backend 可以并存；已有 agent 不会因后续命令行选项而切换 Preset 或 backend。
+
+#### 9.2.1 Creator Profile 与模式选择
+
+`preset.list` 是 daemon-scoped、只读的 discovery API，并通过
+`preset.discovery.v1` capability 发布。它只返回 `id`、展示名称、描述、排序、信任级别以及可选的
+`broken` 布尔值，不返回 Preset 目录、`config_path`、配置正文或解析错误细节。TUI 的
+`qi-agent new` 在任何 `agent.create` 发生之前调用该 API 并从 `/dev/tty` 选择模式；
+`qi-agent new --preset creator` 用于非交互自动化。该路径始终新建 Agent，不复用匹配的旧 Agent。
+WebUI 同样先调用 `/api/presets`，新 Session 第一次提交时才发送 `presetId`；Web Host 明确拒绝
+`configPath`/`config_path` 与空值、超长或格式非法的 Preset ID，并只透传安全的
+`error.data.type` 机器错误类型。现有 Session 的 open/attach 不接受 UI 模式切换，fork 继承源
+Session 的持久化 `presetId`。
+
+内置 `creator` Preset 是 `standard` 的能力超集，增加三组受限工具：
+
+- `runtime_inspect`：返回确定性、只读的 Kernel 插件、工具、命令、hook 和 service 所有权元数据；
+  不返回 service value、handler、disposer、配置正文或可执行对象。
+- `runtime_plugin`：支持 Host 代码中审核过的内置插件目录（当前开放
+  `qi.plugins.math`），也支持 Clojure EDN Blueprint。Blueprint 是宿主编译的纯数据 AST，
+  可声明带 JSON Schema 的工具、词法变量、条件/集合变换和有界 Session 状态，但不能解析
+  symbol/Var、namespace、Java interop、文件、网络、线程、`eval` 或 `load-string`。除兼容的
+  activate/deactivate/status 外，二者共享不可变 Package 的 define/inspect/run/update/stop/undefine，
+  保留 current/next 指针、精确源码、包级失败诊断；更新时保留逻辑插件状态，失败不推进 current，
+  并尽力恢复上一运行版本。Creator Plugin dispose 时会回收所有动态工具和状态。
+- `preset_guide`、`preset_inspect`、`preset_author`：指导并执行用户 Preset 的 roster 检查、源码读取、
+  复制、完整 EDN 原子更新、结构校验和删除。系统 Preset 永远只读，变更只在新 Session 的不可变
+  snapshot 中生效。`creating-agent-presets` 与 `creating-runtime-blueprints` 两个 progressive skill
+  随 Creator Preset 分发，复制 Preset 时会和其他 skill/assets 一起复制。
+
+第一阶段仍故意不支持任意 `load-string`、模型提供的 Clojure 源码、任意 namespace/path 或卸载
+Preset 基础插件。EDN Blueprint 用 Clojure 的数据/闭包/Atom/可撤销注册机制获得动态定义、热替换、
+状态保留和失败回滚效果，不把主 worker 变成通用代码执行器。系统 Preset 仍只读；用户修改流程必须
+先复制为用户 Preset，并在创建新的 Agent/Session 时重新经过 structural validation 与不可变
+snapshot。与 DeepSeek Harness 创造模式的逐项差距和后续边界见
+[创造模式对齐分析](deepseek-creator-gap-analysis.md)。
 
 也可在 profile 中显式加载：
 
 ```clojure
-{:ns agent.plugins.jvm-clojure-repl
+{:ns qi.plugins.jvm-clojure-repl
  :config {:root "."
           :sandbox :auto
           :project-deps true
@@ -385,11 +431,11 @@ agent，因此同一 daemon 下两种 backend 可以并存。已有 agent 不会
           :timeout-ms 10000
           :max-output-chars 20000}}
 
-{:ns agent.plugins.clojure-repl}
+{:ns qi.plugins.clojure-repl}
 ```
 
 JVM provider 使用官方 Clojure CLI 和 JDK。它在 agent 专属 sandbox 目录生成 `deps.edn`：
-保留项目 deps/aliases，把相对 classpath 与 `:local/root` 转成绝对路径，并加入 DAO runtime
+保留项目 deps/aliases，把相对 classpath 与 `:local/root` 转成绝对路径，并加入 qì agent runtime
 源码路径。启动命令使用 `-Srepro`，工作目录和 `CLJ_CONFIG`/`CLJ_CACHE`/`GITLIBS` 均指向
 agent 专属可写区域，所以不会污染项目根目录。Seatbelt 允许读取 JDK、Clojure CLI、
 `~/.m2`、`~/.gitlibs` 和 workspace，但仍禁止网络；依赖必须提前用 `clojure -P` 获取。
@@ -410,12 +456,12 @@ eval 通道的响应而死锁。
 REPL bootstrap 注入薄函数，不把 daemon 或 worker 内部对象暴露给 eval：
 
 ```clojure
-(dao.agent/spawn! {:name "reviewer" :prompt "检查 API"})
-(dao.agent/send! {:to "reviewer" :message "重新检查最新 diff"})
-(dao.task/status)
-(dao.state/get :plan)
-(dao.state/put! :plan {:remaining ["tests" "docs"]})
-(dao.artifact/write! "notes/result.edn" result)
+(qi.agent/spawn! {:name "reviewer" :prompt "检查 API"})
+(qi.agent/send! {:to "reviewer" :message "重新检查最新 diff"})
+(qi.task/status)
+(qi.state/get :plan)
+(qi.state/put! :plan {:remaining ["tests" "docs"]})
+(qi.artifact/write! "notes/result.edn" result)
 ```
 
 `spawn!` 只返回 admission handle，不等待 child 最终答案。child 通过 durable inbox/report 或 artifact 回传结果。
@@ -462,17 +508,17 @@ root tree 内消息由 worker 直接处理；跨 root tree 消息经 daemon 路�
 当前 supervisor 布局：
 
 ```text
-$XDG_RUNTIME_DIR/dao/
+$XDG_RUNTIME_DIR/qi-agent/
   daemon.sock
   worker-<worker-id>.sock
 
-$XDG_STATE_HOME/dao/
+$XDG_STATE_HOME/qi-agent/
   supervisor.sqlite
   workers/<worker-id>.json
   logs/daemon.log
   logs/<worker-id>.log
 
-<workspace>/.bb-agent/
+<workspace>/.qi-agent/
   sessions/<session-id>.jsonl
   artifacts/<session-id>/
     agents/<agent-id>/
@@ -542,7 +588,7 @@ workspace/session leases
 bounded stderr tail
 ```
 
-`dao doctor` 只做安全诊断，并检查 schema revision 与 SQLite quick check；当前 `--fix` 也只清理可由过期时间证明失效的 lease，不会删除 socket/descriptor 或
+`qi-agent doctor` 只做安全诊断，并检查 schema revision 与 SQLite quick check；当前 `--fix` 也只清理可由过期时间证明失效的 lease，不会删除 socket/descriptor 或
 杀进程。进程修复不能仅凭 PID 存在与否判断，必须同时验证 descriptor token、进程启动时间和 worker identity。
 
 ## 14. 实施计划
@@ -553,15 +599,15 @@ bounded stderr tail
 
 - 删除 `apps/tui/`、Ink 构建脚本、测试和依赖；
 - `npm run tui:build` 与 `npm run test:tui` 直接运行 Rust；
-- daemon 直连稳定后删除历史 namespace `agent.plugins.tui-ink` 和反向子进程 bridge；
-- 安装器直接暴露 Rust `dao` 二进制。
+- daemon 直连稳定后删除历史 namespace `qi.plugins.tui-ink` 和反向子进程 bridge；
+- 安装器直接暴露 Rust `qi-agent` 二进制。
 
 验收：Rust unit/UI/PTY、daemon 端到端、Web typecheck 和 Web tests 全部通过。
 
 ### 阶段 1：最小 daemon vertical slice
 
 - 为 Rust 程序增加 daemon client、Unix socket 和 capability handshake。
-- 增加 `dao daemon serve/status/shutdown`。
+- 增加 `qi-agent daemon serve/status/shutdown`。
 - daemon 能 create/list/attach 一个 resident Babashka worker。
 - worker 继续使用现有 `--mode rpc`，但 transport EOF 不再 abort session。
 - TUI 直接消费 daemon 转发的 ready/response/event。
@@ -615,12 +661,12 @@ bounded stderr tail
 - provider、token、CPU、worker 数量和 workspace write lease 配额；
 - macOS launchd、Linux systemd user service；
 - 完整 `status/doctor/update/shutdown` 生命周期。
-- 显式 SQLite schema revision、事务迁移、迁移前自动快照与 `dao backup` 手工快照；
+- 显式 SQLite schema revision、事务迁移、迁移前自动快照与 `qi-agent backup` 手工快照；
 - worker 日志大小/份数/总数配额，以及 owner-only 状态文件迁移。
 
-具体配置：`DAO_MAX_WORKERS` 限制 resident worker 数量；`DAO_ALLOWED_PROVIDERS` 提供 provider
-allowlist；`DAO_MAX_TOKENS_PER_RUN` 拒绝显式超过上限的 `max_tokens/max_output_tokens`；
-`DAO_WORKER_CPU_SECONDS` 使用 OS `RLIMIT_CPU` 限制单个 worker generation；同一 workspace 同时只允许
+具体配置：`QI_AGENT_MAX_WORKERS` 限制 resident worker 数量；`QI_AGENT_ALLOWED_PROVIDERS` 提供 provider
+allowlist；`QI_AGENT_MAX_TOKENS_PER_RUN` 拒绝显式超过上限的 `max_tokens/max_output_tokens`；
+`QI_AGENT_WORKER_CPU_SECONDS` 使用 OS `RLIMIT_CPU` 限制单个 worker generation；同一 workspace 同时只允许
 一个 root tree 持有 write lease。goal continuation 最多 20 次，schedule retry 最多 10 次且指数退避封顶。
 
 验收：机器重启后 future schedule 自动恢复；正在执行而失去 worker 的 goal 进入 `uncertain`，经人工核对后
@@ -631,17 +677,17 @@ allowlist；`DAO_MAX_TOKENS_PER_RUN` 拒绝显式超过上限的 `max_tokens/max
 
 | 现有模块 | 迁移方向 |
 | --- | --- |
-| `apps/tui-rs` | 成为 `dao` 客户端和唯一 TUI；增加 socket client |
-| `agent.plugins.tui-ink` | 已删除；Rust TUI 直接连接 daemon |
-| `agent.protocol/rpc!` | 拆成可复用 envelope/handler 与 worker private transport |
+| `apps/tui-rs` | 成为 `qi-agent` 客户端和唯一 TUI；增加 socket client |
+| `qi.plugins.tui-ink` | 已删除；Rust TUI 直接连接 daemon |
+| `qi.protocol/rpc!` | 拆成可复用 envelope/handler 与 worker private transport |
 | `apps/web-host/worker.ts` | 已改为 public daemon socket client，不再 spawn Babashka |
 | `apps/web-host/sessions.ts` | 保留只读 catalog；create/open/attach/RPC 经 daemon 完成 |
-| `agent.plugins.session` | 继续作为 transcript 事实源，强化 writer lease 和 durability |
-| `agent.plugins.bb-repl` | 默认 Babashka per-agent `ReplBackend`；共享进程协议实现 |
-| `agent.plugins.jvm-clojure-repl` | 可选原生 JVM Clojure `ReplBackend` |
-| `agent.repl-worker` | 增加异步协议、interrupt、reset、status 或替换为 nREPL adapter |
-| `agent.plugins.subagent-in-process` | 从 one-shot child 演进为 retained child provider |
-| `agent.plugins.stdio-session` | 继续提供受 execution-world 约束的持久外部进程能力 |
+| `qi.plugins.session` | 继续作为 transcript 事实源，强化 writer lease 和 durability |
+| `qi.plugins.bb-repl` | 默认 Babashka per-agent `ReplBackend`；共享进程协议实现 |
+| `qi.plugins.jvm-clojure-repl` | 可选原生 JVM Clojure `ReplBackend` |
+| `qi.repl-worker` | 增加异步协议、interrupt、reset、status 或替换为 nREPL adapter |
+| `qi.plugins.subagent-in-process` | 从 one-shot child 演进为 retained child provider |
+| `qi.plugins.stdio-session` | 继续提供受 execution-world 约束的持久外部进程能力 |
 
 ## 16. 必须自动化的故障测试
 

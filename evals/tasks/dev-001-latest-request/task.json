@@ -1,0 +1,17 @@
+{
+  "id": "dev-001-latest-request",
+  "title": "异步请求仅由最新调用更新状态",
+  "category": "bugfix",
+  "split": "dev",
+  "timeout_seconds": 180,
+  "allowed_files": ["src/request-store.mjs"],
+  "acceptance_tests": [
+    "initial state and independent snapshots",
+    "newest success wins while each promise keeps its own value",
+    "older success cannot stop the newest loading state",
+    "stale rejection is delivered to caller without changing newer success",
+    "current failure preserves value, and next loading clears the error",
+    "reset invalidates pending success and pending failure"
+  ],
+  "verify_command": ["node", "--test", "tests/acceptance.test.mjs"]
+}

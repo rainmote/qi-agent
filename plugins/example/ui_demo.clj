@@ -1,6 +1,6 @@
 (ns example.ui-demo
   "Example of reversible third-party TUI extension registration."
-  (:require [agent.ui :as ui]))
+  (:require [qi.ui :as ui]))
 
 (def plugin
   {:id :example/ui-demo

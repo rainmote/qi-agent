@@ -1,0 +1,17 @@
+{
+  "id": "dev-002-ordered-queue",
+  "title": "队列串行执行与任务标识去重",
+  "category": "bugfix",
+  "split": "dev",
+  "timeout_seconds": 180,
+  "allowed_files": ["src/queue.mjs"],
+  "acceptance_tests": [
+    "different ids execute FIFO with only one pending handler",
+    "duplicate ids keep the first payload and exact promise before and after completion",
+    "rejected tasks are deduplicated and later tasks still run",
+    "drain resolves despite rejection",
+    "drain captures only work accepted before its invocation",
+    "validation, empty drain, unusual ids, and independent instances"
+  ],
+  "verify_command": ["node", "--test", "tests/acceptance.test.mjs"]
+}

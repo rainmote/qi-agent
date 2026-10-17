@@ -14,6 +14,16 @@ export interface SessionSummary {
   eventCount: number;
   messageCount: number;
   updatedAt: string | null;
+  presetId?: string;
+}
+
+export interface AgentPresetSummary {
+  id: string;
+  name: string;
+  description?: string;
+  order?: number;
+  trust: "system" | "user";
+  broken?: boolean;
 }
 
 export interface WorkerMessage {
@@ -34,5 +44,20 @@ export interface WorkerMessage {
 }
 
 export interface HostEvent extends WorkerMessage {
+  hostEpoch: string;
   hostSeq: number;
+}
+
+export type ReplayResetReason = "initial" | "invalid-cursor" | "generation" | "buffer-gap";
+
+export interface EventReplay {
+  reset: ReplayResetReason | null;
+  events: HostEvent[];
+}
+
+export interface ProviderReloadResult {
+  scope: "open-web-sessions";
+  applied: string[];
+  failures: Array<{ sessionId: string; sessionName: string; message: string }>;
+  warnings?: Array<{ sessionId: string; sessionName: string; message: string }>;
 }

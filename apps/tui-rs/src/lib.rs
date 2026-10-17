@@ -11,6 +11,7 @@ pub mod sanitize;
 pub mod service;
 pub mod theme;
 pub mod ui;
+pub mod viewport;
 pub mod wire;
 pub mod worker_proxy;
 

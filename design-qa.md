@@ -1,3 +1,174 @@
+# Web model-provider settings parity QA
+
+## Comparison target
+
+- Source visual truth: `/tmp/dao-settings-models/source-list.png`,
+  `/tmp/dao-settings-models/source-edit.png`, and
+  `/tmp/dao-settings-models/source-custom.png`, captured from DeepSeek Harness at
+  `http://127.0.0.1:3080/`.
+- Implementation captures: `/tmp/dao-settings-models/target-list-final-v2.png`,
+  `/tmp/dao-settings-models/target-edit-final.png`, and
+  `/tmp/dao-settings-models/target-custom-final-v2.png`, captured from the isolated qì agent
+  production preview at `http://127.0.0.1:3185/`.
+- Full-view evidence: the three source captures and three implementation captures were opened
+  together in one comparison input and judged as matched list, edit, and custom-provider states.
+
+## Capture normalization
+
+- Source and implementation captures are 1280 × 720 image pixels from the same 1280 × 720
+  CSS-pixel viewport at device scale factor 1.
+- State: light theme, settings modal open, Models tab active. The three comparisons cover the
+  provider list, collapsed built-in-provider editor, and expanded custom-provider form.
+- qì agent intentionally shows OpenAI and the temporary `Local Test` QA provider in addition to
+  DeepSeek. Comparison therefore judges frame geometry, hierarchy, cards, controls, form order,
+  typography, and interaction behavior rather than identical provider-row count.
+- Focused crops were not needed: labels, inputs, status dots, borders, radii, and button states are
+  legible at the normalized native resolution, and the edit/custom states isolate the dense regions.
+
+## Findings
+
+No actionable P0, P1, or P2 differences remain in the model-provider settings flow.
+
+- Fonts and typography: modal/nav headings, 12–13 px labels, secondary copy, provider identity,
+  and button weights follow the source hierarchy without wrapping or truncation.
+- Spacing and layout rhythm: the 800 × 704 modal, 190 px navigation rail, 24 px content inset,
+  provider-card height, inset editor, two-column add actions, and custom-form field rhythm align
+  with the source. Content naturally scrolls when the real provider list is longer.
+- Colors and tokens: white provider cards, gray inset editors, subtle borders, focus rings, muted
+  status dots, and configured-key green state use existing qì agent tokens while matching the source
+  contrast and surface hierarchy.
+- Image and asset fidelity: this settings surface has no raster imagery. Existing project icon
+  components are used consistently; no placeholder or generated visual asset is present.
+- Copy and content: Chinese labels and action names match the DeepSeek flow. qì agent uses its own
+  provider IDs and exposes three supported protocols, which is required by the backend contract.
+- Interactions exercised in the browser: 13 preset providers can be selected; advanced settings
+  expand; a custom provider can be created with a model catalog; the saved model immediately
+  appears in an already-running session's model selector; editing its display name refreshes the
+  option without changing the selected model; model rows can be added/removed; custom providers
+  expose guarded deletion; and no browser console warnings or errors were emitted.
+- API keys are persisted only in the local Host state file with mode `0600`; API responses are
+  redacted to an `apiKeyConfigured` flag. OpenAI-compatible completions, OpenAI Responses, and
+  Anthropic Messages settings are loaded into the live runtime and can be reloaded without restart.
+
+## Comparison history
+
+### Iteration 1
+
+- P2 finding: the first settings modal was 920 px wide, repeated a content-level “设置” heading,
+  and used gray provider cards, making the content column and surface hierarchy visibly different.
+- Fix: matched the 800 × 704 frame, 190 px rail, source content inset, direct tab heading, white cards,
+  and gray inset editor.
+- Post-fix evidence: `/tmp/dao-settings-models/target-list-final-v2.png`.
+
+### Iteration 2
+
+- P2 finding: built-in provider editing used a full editable display-name field and the disclosure
+  arrow pointed upward, producing a taller form and the wrong collapsed affordance.
+- Fix: replaced it with the source-style provider-name/ID identity row, kept API key plus collapsed
+  advanced settings, corrected the right/down disclosure rotation, and aligned action placement.
+- Post-fix evidence: `/tmp/dao-settings-models/target-edit-final.png`.
+
+### Iteration 3
+
+- P2 finding: the custom-provider form placed the API key before URL/protocol and stretched the
+  protocol selector across the whole editor, unlike the source field order and half-width control.
+- Fix: ordered Provider ID, name, API URL, protocol, API key, and model catalog; removed the redundant
+  disclosure in custom mode; constrained the protocol selector to 240 px.
+- Post-fix evidence: `/tmp/dao-settings-models/target-custom-final-v2.png`.
+
+final result: passed
+
+# Web new-session, slash-command, and context parity QA
+
+## Comparison target
+
+- Source visual truth: `/tmp/dao-three-fixes/source-new.jpg`, `/tmp/dao-three-fixes/source-slash.jpg`, and `/tmp/dao-three-fixes/source-context.jpg` from DeepSeek Harness at `http://127.0.0.1:3080/`.
+- Implementation captures: `/tmp/dao-three-fixes/target-new-final.jpg`, `/tmp/dao-three-fixes/target-slash-final.jpg`, and `/tmp/dao-three-fixes/target-context-final.jpg` from an isolated authenticated qì agent preview serving the same production build as `http://127.0.0.1:3081/`.
+- Full comparison: `/tmp/dao-three-fixes/comparison-all-final.jpg`, with DeepSeek on the left and qì agent on the right for all three states.
+- Focused slash-menu comparison: `/tmp/dao-three-fixes/comparison-slash-focused.jpg`.
+
+## Capture normalization
+
+- All source and implementation states were captured at a 1280 × 720 CSS-pixel viewport and retained as 1280 × 720 image pixels.
+- States: focused empty new session with a model selector, `/` entered with the command list open, and a populated trajectory with a real runtime-context row.
+- Provider/model values, available runtime commands, session contents, and run length differ by product and test environment. Comparison is limited to the shared interaction contract, hierarchy, spacing, menu/composer geometry, and semantic trajectory presentation.
+
+## Findings
+
+No actionable P0, P1, or P2 differences remain in these three surfaces.
+
+- A new session loads model, policy, and command metadata before the first submit. The chosen model is retained when the first message creates the durable session.
+- Entering `/` immediately opens a real runtime command list. Arrow navigation, `Tab`/`Enter` selection, `Escape` dismissal, filtering, and execution after a command plus whitespace were exercised in the browser.
+- Each new model turn records a durable `context/snapshot` before the provider request. The trajectory renders its actual prompt content as a green `CONTEXT` row, including when a provider request fails before returning a response.
+- The final browser state contained no console warnings or errors. The full suite passes: 8 web UI tests, 4 web-host tests, 76 Rust library tests, 5 Rust binary tests, 15 daemon fault tests, and 80 Clojure tests with 621 assertions.
+- Expected P3 differences are the native select treatment versus DeepSeek's nested model/reasoning menu, the provider-specific command catalog, and one consolidated context snapshot versus the two historical context records in the reference session.
+
+## Comparison history
+
+### Iteration 1
+
+- P1 finding: the new-session path cleared runtime metadata and rendered model controls only for an active session.
+- Fix: introduced draft-session metadata plus pending model/policy state and applied those selections before the first submitted turn.
+
+### Iteration 2
+
+- P1 finding: `/` had no response before a session existed, and a selected command ending in whitespace could leave Enter trapped in menu selection.
+- Fix: retained the runtime command catalog for empty sessions, added complete keyboard handling, and closed suggestions once command arguments begin.
+
+### Iteration 3
+
+- P1 finding: trajectory rows inferred context-like labels from unrelated events but had no durable record of the actual provider prompt.
+- Fix: recorded `context/snapshot` immediately before the provider call and rendered its exact content through the semantic trajectory projection.
+
+### Iteration 4
+
+- P2 finding: the first command-menu pass was too wide and short, and `follow-up` wrapped across lines.
+- Fix: aligned the menu to the reference composer width and height, widened the command-name column, and prevented command labels from wrapping.
+
+final result: passed
+
+# Web trajectory visual parity QA
+
+## Comparison target
+
+- Source visual truth: `/tmp/dao-trajectory-ui/01-deepseek-trajectory.jpg` from DeepSeek Harness at `http://127.0.0.1:3080/`.
+- Implementation capture: `/tmp/dao-trajectory-ui/07-dao-final.jpg` from qì agent Harness at `http://127.0.0.1:3081/` (verified through an isolated authenticated preview serving the same build).
+- Full-view comparison: `/tmp/dao-trajectory-ui/08-comparison-final.jpg`, with DeepSeek on the left and qì agent on the right.
+- Focused trajectory comparison: `/tmp/dao-trajectory-ui/09-comparison-final-main.jpg`, cropped to the shared 1160 × 390 main trajectory surface.
+
+## Capture normalization
+
+- Both pages were captured at a 1440 × 900 CSS-pixel viewport and normalized to 1440 × 900 image pixels before comparison.
+- State: dark theme, populated session selected, `轨迹` tab active, equal-width timeline mode, turns and calls expanded, search empty, and no event detail selected.
+- Session payloads differ, so comparison is limited to the shared trajectory shell, hierarchy, spacing, typography, controls, timeline lanes, event ledger, composer, and responsive behavior.
+- A separate 760 × 900 check confirmed that the trajectory surface has no document-level horizontal overflow and that toolbar, timeline, table, and composer remain usable.
+
+## Findings
+
+No actionable P0, P1, or P2 differences remain in the trajectory surface.
+
+- The 46 px session header, tab row, 32 px toolbar, 50 px Input/Model/Tools overview, full-width semantic event rows, and fixed composer geometry now follow the DeepSeek reference.
+- Durable events are presented as `SYSTEM`, `USER`, `CONTEXT`, `ASSISTANT`, `TOOL`, and error rows instead of raw JSON blocks. Tool calls are paired with their results and expose arguments, output, and duration.
+- Duration mode, turn folding, tool-call folding, search dimming, timeline selection, and event detail selection were exercised against a 32-call session.
+- The final browser console contained no warnings or errors.
+- Expected P3 differences are limited to project branding, session data, provider/model values, and telemetry availability outside the shared trajectory contract.
+
+## Comparison history
+
+### Iteration 1
+
+- P1 finding: qì agent rendered the durable event stream as a raw JSON-oriented list and lacked the DeepSeek toolbar, three-lane overview, semantic tags, folding controls, search, and linked tool-call presentation.
+- Fix: introduced a dedicated trajectory projection and view with paired tool lifecycle records, semantic rows, timeline lanes, filtering, folding, selection, and details.
+- Evidence: `/tmp/dao-trajectory-ui/04-comparison-1.jpg`.
+
+### Iteration 2
+
+- P2 finding: the first pass still differed in header/tab spacing, composer proportions, timeline density, and bottom-run summary.
+- Fix: aligned those dimensions and added run telemetry derived from the selected session.
+- Post-fix evidence: `/tmp/dao-trajectory-ui/08-comparison-final.jpg` and `/tmp/dao-trajectory-ui/09-comparison-final-main.jpg`.
+
+final result: passed
+
 # TUI visual parity QA
 
 ## Comparison target
@@ -33,7 +204,7 @@ do not change the core Qwen interaction or hierarchy.
 - Spacing and layout rhythm: the two-column 37-column wordmark plus single-border runtime panel, two-column breakpoint, two-column margins, scrolling banner, full-width input rules, and two-column footer behavior follow the Qwen layout. The 80-column PTY check hides the wordmark without clipping the panel.
 - Colors and tokens: the implementation uses Qwen's default dark semantic mapping and blue-purple-pink gradient. Focus, accent, secondary, success, warning, and error colors no longer use component-local color names. Theme-specific syntax/diff colors retain Qwen's raw built-in palettes.
 - Image and asset fidelity: this terminal surface has no raster image assets. The source's native ASCII wordmark treatment is retained with a project-specific `BB AGENT` wordmark of equivalent width and gradient behavior.
-- Copy and content: Qwen's placeholder, Tips line, model-change hint, dialog help, and busy/abort affordances are preserved. Product identity and mock response text intentionally remain bb-agent-specific.
+- Copy and content: Qwen's placeholder, Tips line, model-change hint, dialog help, and busy/abort affordances are preserved. Product identity and mock response text intentionally remain qì agent-specific.
 - Icons: user, assistant, reasoning, and tool status glyphs follow the Qwen vocabulary (`>`, `◆`, `∵`, `∴`, `o`, `⊷`, `✓`, `x`) and force ambiguous symbols to text presentation where needed.
 - States and interactions: idle, completed history, model dialog, theme preview/apply/rollback, narrow terminal, selection, approval, input, loading, queue, and long-history states are covered by captures or component tests. Opening a dialog hides composer/footer and keeps the conversation visible.
 - Accessibility and resilience: all controls remain keyboard-driven; software cursor and focus border are visible; grapheme editing and constrained-height dialogs are covered. The 80-column PTY capture and narrow component tests show no overlap or clipping.
@@ -111,7 +282,7 @@ the historical TypeScript/Ink implementation that has since been removed from th
 - P3: the checked-in Qwen source screenshot is from v0.19.2 and contains different session content. Current component source was used to resolve later token and layout behavior, but an upstream current-version idle screenshot would make future pixel diffs more exact.
 - P2: Qwen can show token/rate telemetry in the wide loading row. The current host protocol does not publish those values, so the Rust frontend cannot display them yet.
 - P3: the action-tool output safety cap is applied per tool instead of sharing one constrained budget across all sibling tools; expanded mode still exposes each complete result.
-- Expected difference: the wordmark, product title, version, provider, model, path, and transcript content remain specific to bb-agent.
+- Expected difference: the wordmark, product title, version, provider, model, path, and transcript content remain specific to qì agent.
 
 ## Implementation checklist
 

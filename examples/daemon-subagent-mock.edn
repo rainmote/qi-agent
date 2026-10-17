@@ -1,6 +1,6 @@
 {:plugins
- [{:ns agent.plugins.session}
-  {:ns agent.plugins.mock
+ [{:ns qi.plugins.session}
+  {:ns qi.plugins.mock
    :config
    {:responses
     [{:message
@@ -14,28 +14,28 @@
       :finish-reason "tool_calls"}
      {:message {:role "assistant" :content "root completed"}
       :finish-reason "stop"}]}}
-  {:ns agent.plugins.subagent}
-  {:ns agent.plugins.subagent-in-process
+  {:ns qi.plugins.subagent}
+  {:ns qi.plugins.subagent-in-process
    :config
    {:allowed-tools []
     :child-profile
     {:plugins
-     [{:ns agent.plugins.session}
-      {:ns agent.plugins.mock
+     [{:ns qi.plugins.session}
+      {:ns qi.plugins.mock
        :config
        {:responses
         [{:message {:role "assistant" :content "child completed"}
           :finish-reason "stop"}
          {:message {:role "assistant" :content "child follow-up completed"}
           :finish-reason "stop"}]}}
-      {:ns agent.plugins.durable-state :config {:root "."}}
-      {:ns agent.plugins.bb-repl
+      {:ns qi.plugins.durable-state :config {:root "."}}
+      {:ns qi.plugins.bb-repl
        :config {:root "." :sandbox :none :timeout-ms 5000}}
-      {:ns agent.plugins.runtime :config {:max-steps 2}}]}}}
-  {:ns agent.plugins.subagent-tools}
-  {:ns agent.plugins.durable-state :config {:root "."}}
-  {:ns agent.plugins.bb-repl
+      {:ns qi.plugins.runtime :config {:max-steps 2}}]}}}
+  {:ns qi.plugins.subagent-tools}
+  {:ns qi.plugins.durable-state :config {:root "."}}
+  {:ns qi.plugins.bb-repl
    :config {:root "." :sandbox :none :timeout-ms 5000}}
-  {:ns agent.plugins.runtime :config {:max-steps 3}}
-  {:ns agent.plugins.remote-registry}
-  {:ns agent.plugins.remote-api}]}
+  {:ns qi.plugins.runtime :config {:max-steps 3}}
+  {:ns qi.plugins.remote-registry}
+  {:ns qi.plugins.remote-api}]}

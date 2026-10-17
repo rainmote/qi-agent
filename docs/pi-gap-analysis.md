@@ -1,9 +1,9 @@
-# bb-agent 与 Pi 当前能力差距
+# qì agent 与 Pi 当前能力差距
 
 调研时间：2026-08-15。实施复核：2026-08-16。
 
 对比基线：Pi 官方 `main` 分支 `086c32e74530564922d011ade23ff582c9d63116`，以及
-`pi.dev/docs/latest`；bb-agent 使用本仓库当前工作区。本文比较的是“能否作为日常 coding
+`pi.dev/docs/latest`；qì agent 使用本仓库当前工作区。本文比较的是“能否作为日常 coding
 agent 使用”，不是比较语言、代码量或 UI 外观。
 
 ## 实施后的结论
@@ -55,7 +55,7 @@ tool-call loop、JSON mode、RPC ready/state/shutdown 和真实 PTY 下的 TUI �
 - session 是模型上下文的事实来源，支持损坏 JSONL 行恢复、resume、独立文件 fork、
   append-only clear/compaction。
 - `bb_repl` 是独立执行 provider；macOS 默认通过 Seatbelt 禁网、限制读取并只开放专用
-  写目录。Pi 的 project trust 也明确不是 sandbox，因此这一点不是 bb-agent 的落后项。
+  写目录。Pi 的 project trust 也明确不是 sandbox，因此这一点不是 qì agent 的落后项。
 - 工具调用过程已经由 trace 插件写到 stderr；`--once` 会显示过程，且最终流式文本不会
   重复打印。
 
@@ -64,7 +64,7 @@ tool-call loop、JSON mode、RPC ready/state/shutdown 和真实 PTY 下的 TUI �
 状态含义：`已具备` 表示主路径可用；`部分` 表示已有底层机制但缺产品闭环；`缺失`
 表示当前没有对应能力；`不同` 表示设计不同且不需要机械照搬。
 
-| 能力 | Pi 当前能力 | bb-agent 当前状态 | 差距与优先级 |
+| 能力 | Pi 当前能力 | qì agent 当前状态 | 差距与优先级 |
 |---|---|---|---|
 | 可替换核心 | 统一模型层、agent loop、coding-agent 上层 | service/tool/hook/effect 微内核，loop 也是插件 | 已具备 |
 | 流式生命周期 | message/turn/tool start、update、end，partial assistant state | 统一 state/message/turn/tool/queue live event；state 累积 partial text/reasoning，session 只落 final | 已具备 |
@@ -88,7 +88,7 @@ tool-call loop、JSON mode、RPC ready/state/shutdown 和真实 PTY 下的 TUI �
 | Skill / prompt / context | Agent Skills progressive disclosure、prompt template、AGENTS.md、SYSTEM.md | YAML metadata、`skill://` 资源、slash command、筛选/去重、子 Agent 继承及 AGENTS/SYSTEM/prompt | 已具备主路径；多生态 provider 待补 |
 | 包管理 | npm/git/local package，过滤、启停、更新、项目级安装 | 依赖 Babashka classpath 和手工 profile | 缺失，P2 |
 | TUI | 多行编辑器、快捷键、命令、主题、工具 renderer、session/model selector | JLine 全屏插件；流式 Markdown、工具折叠、补全、审批 overlay、selector、主题及 UI registry | 已具备主路径；图片与费用 UI 待补 |
-| Headless / SDK | print、JSON event stream、stdin/stdout RPC、TypeScript SDK | version 1 JSONL、stdin/stdout RPC、公开 `agent.api` | 已具备（Clojure API，无 TS SDK） |
+| Headless / SDK | print、JSON event stream、stdin/stdout RPC、TypeScript SDK | version 1 JSONL、stdin/stdout RPC、公开 `qi.api` | 已具备（Clojure API，无 TS SDK） |
 | 多模态 | typed text/image/thinking/tool content，RPC/SDK 可传图片 | typed text/image user blocks，adapter 转换；reasoning/tool 仍保留 provider state | 部分；无终端图片选择/展示 |
 | Project trust | 用户目录 trust store、父目录继承、临时 override、项目资源加载 gate | 用户 trust.edn、canonical nearest-parent inheritance、加载前 gate | 已具备 |
 | Sandbox | 官方明确 trust 不是 sandbox，可通过容器/远程 operation 隔离 | macOS bash 与 bb_repl 默认 Seatbelt；其他 OS `:auto` 安全降级为文件工具，显式 `:none` 才开放进程 | 不同且更保守；容器 provider 待补 |
@@ -144,7 +144,7 @@ Seatbelt、容器、SSH 或远程 daemon 可以替换 ExecutionWorld provider；
 
 在开启写和 shell 前同时完成：
 
-- 用户控制的 `~/.bb-agent/trust.edn`，按 canonical root 保存决定，并支持父目录继承；
+- 用户控制的 `~/.qi-agent/trust.edn`，按 canonical root 保存决定，并支持父目录继承；
 - 项目 profile/插件只在 trust 后加载，不能由项目自己的 `agent.edn` 自证可信；
 - approval rule 支持按工具、路径、命令模式和当前 session 临时放行；
 - 审批前显示最终解析后的 cwd、路径、命令和目标 provider。
@@ -202,7 +202,7 @@ catalog 以 no-follow 目录遍历索引 id、父 session、名称、标签、�
 
 独立 `:resources/catalog` 插件已经统一发现：
 
-- `~/.bb-agent/`、`~/.agents/skills/` 用户级与 `.bb-agent/` 项目级资源；
+- `~/.qi-agent/`、`~/.agents/skills/` 用户级与 `.qi-agent/` 项目级资源；
 - `AGENTS.md`、`SYSTEM.md`、prompt template；
 - `SKILL.md`，启动时只注入 metadata，命中后通过 `skill://` 读取全文和同目录资源；
 - 资源来源、scope 和 trust 状态。
@@ -238,14 +238,14 @@ IDE 和测试 runner 可复用同一协议。
 
 ### 9. TUI 与可扩展 UI（已实现主路径）
 
-`agent.plugins.tui` 作为 frontend host 插件建立在 AgentSession 之上，采用 Charm/Bubble Tea
+`qi.plugins.tui` 作为 frontend host 插件建立在 AgentSession 之上，采用 Charm/Bubble Tea
 式 Model/Update/View，但终端后端直接复用 Babashka 内置 JLine，保持单二进制启动。它支持
 partial assistant、tool update/end、scroll、多行编辑、历史、命令/路径补全、工具与 reasoning
 折叠、Markdown、主题、主/备用屏，以及 model/session/tree/theme selector。session catalog
 选择会销毁当前 context 并用所选日志重新 boot；运行中的普通 Enter、Alt+Enter、Ctrl+S
 与 Esc 分别映射 steer、follow-up、steer 别名与 abort。
 
-`agent.ui` 暴露可逆 message/entry/tool renderer、shortcut、status、widget 与 notification；
+`qi.ui` 暴露可逆 message/entry/tool renderer、shortcut、status、widget 与 notification；
 `:ui/prompt` 提供 select/confirm/input/custom overlay，approval 在 TUI 中复用同一服务。工具
 `:render-model` 与 `:render-tui` 分离，旧 `:render` 保持模型文本兼容。详见 `docs/tui-ratatui.md`。
 
@@ -277,7 +277,7 @@ partial assistant、tool update/end、scroll、多行编辑、历史、命令/�
   -> [下一阶段] 包生态、登录 UI 与生态 provider
 ```
 
-前四项完成后，bb-agent 才能从“演示型 harness”跨到“能持续完成真实代码任务的 agent”；
+前四项完成后，qì agent 才能从“演示型 harness”跨到“能持续完成真实代码任务的 agent”；
 后续项目则主要提升可发现性、交互体验和生态规模。
 
 ## 不建议机械照搬 Pi 的部分
@@ -293,7 +293,7 @@ partial assistant、tool update/end、scroll、多行编辑、历史、命令/�
 ## 官方来源
 
 - [Pi 官方仓库](https://github.com/earendil-works/pi)
-- [Pi agent loop 源码](https://github.com/earendil-works/pi/blob/main/packages/agent/src/agent-loop.ts)
+- [Pi agent loop 源码](https://github.com/earendil-works/pi/blob/main/packages/agent/src/qi-loop.ts)
 - [Pi 使用与 session 命令](https://pi.dev/docs/latest/usage)
 - [Pi session 格式](https://pi.dev/docs/latest/session-format)
 - [Pi compaction 与 branch summarization](https://pi.dev/docs/latest/compaction)

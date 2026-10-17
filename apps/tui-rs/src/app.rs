@@ -4,6 +4,7 @@ use crate::{
     model::*,
     projection, sanitize,
     theme::{self, Theme},
+    viewport::HistoryViewport,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
 use serde_json::{Value, json};
@@ -70,8 +71,7 @@ pub struct App {
     pub header_committed: bool,
     pub committed_history_count: usize,
     pub inline_stream_commit: Option<InlineStreamCommit>,
-    pub scroll_offset: usize,
-    pub follow_bottom: bool,
+    pub history_viewport: HistoryViewport,
     pub notice: Option<String>,
     pub error: Option<String>,
     pub exiting: bool,
@@ -96,7 +96,7 @@ impl Default for App {
             dialog_interaction_id: None,
             theme: Theme::default(),
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-            brand: "bb-agent".into(),
+            brand: "qì agent".into(),
             version: env!("CARGO_PKG_VERSION").into(),
             details_expanded: false,
             expanded_tool_groups: HashSet::new(),
@@ -105,8 +105,7 @@ impl Default for App {
             header_committed: false,
             committed_history_count: 0,
             inline_stream_commit: None,
-            scroll_offset: 0,
-            follow_bottom: true,
+            history_viewport: HistoryViewport::default(),
             notice: None,
             error: None,
             exiting: false,
@@ -200,11 +199,11 @@ impl App {
         }
         match kind {
             MouseEventKind::ScrollUp => {
-                self.scroll_history_up(1);
+                self.history_viewport.scroll_by(-3);
                 true
             }
             MouseEventKind::ScrollDown => {
-                self.scroll_history_down(1);
+                self.history_viewport.scroll_by(3);
                 true
             }
             _ => false,
@@ -212,7 +211,20 @@ impl App {
     }
 
     pub fn load_snapshot(&mut self, value: Value) -> anyhow::Result<()> {
+        let previous_session = self
+            .projection
+            .as_ref()
+            .map(|projection| projection.session_id.clone());
         self.projection = Some(projection::from_snapshot(serde_json::from_value(value)?));
+        if previous_session.is_some_and(|session| {
+            self.projection
+                .as_ref()
+                .is_some_and(|projection| projection.session_id != session)
+        }) {
+            // Height keys are session-local. Reset anchors and measurements so
+            // reused item IDs cannot inherit geometry from another session.
+            self.history_viewport = HistoryViewport::default();
+        }
         self.reconcile_inline_stream_commit();
         self.sync_theme();
         self.sync_busy_indicator();
@@ -244,7 +256,14 @@ impl App {
 
     pub fn apply_envelope(&mut self, envelope: &Envelope) {
         if let Some(current) = self.projection.take() {
-            self.projection = Some(projection::apply_envelope(current, envelope));
+            let previous_error = current.state.last_error.clone();
+            let next = projection::apply_envelope(current, envelope);
+            if next.state.last_error != previous_error
+                && let Some(error) = next.state.last_error.as_ref()
+            {
+                self.error = Some(error.clone());
+            }
+            self.projection = Some(next);
             self.reconcile_inline_stream_commit();
             self.sync_theme();
             self.sync_busy_indicator();
@@ -406,22 +425,36 @@ impl App {
             self.focused_tool_group = self.tool_group_indices().last().copied();
             if self.focused_tool_group.is_none() {
                 self.notice = Some("No tool groups in this session".into());
+            } else if let Some(id) = self.focused_tool_group_id() {
+                self.history_viewport.scroll_to_item(&id);
             }
             return vec![];
         }
-        if matches!(key.code, KeyCode::PageUp) {
-            if self.inline_mode {
+        if !self.inline_mode {
+            if key.modifiers.contains(KeyModifiers::SHIFT) && matches!(key.code, KeyCode::Up) {
+                self.history_viewport.scroll_by(-1);
                 return vec![];
             }
-            self.scroll_history_up(5);
-            return vec![];
-        }
-        if matches!(key.code, KeyCode::PageDown) {
-            if self.inline_mode {
+            if key.modifiers.contains(KeyModifiers::SHIFT) && matches!(key.code, KeyCode::Down) {
+                self.history_viewport.scroll_by(1);
                 return vec![];
             }
-            self.scroll_history_down(5);
-            return vec![];
+            if matches!(key.code, KeyCode::PageUp) {
+                self.history_viewport.scroll_page(-1);
+                return vec![];
+            }
+            if matches!(key.code, KeyCode::PageDown) {
+                self.history_viewport.scroll_page(1);
+                return vec![];
+            }
+            if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Home) {
+                self.history_viewport.scroll_to_start();
+                return vec![];
+            }
+            if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::End) {
+                self.history_viewport.scroll_to_end();
+                return vec![];
+            }
         }
         if key.modifiers.contains(KeyModifiers::CONTROL)
             && matches!(key.code, KeyCode::Char('o' | 'O'))
@@ -555,14 +588,6 @@ impl App {
             }
             _ => {}
         }
-        if let Some(index) = self.focused_tool_group {
-            let history_len = self
-                .projection
-                .as_ref()
-                .map_or(0, |projection| projection.history.len());
-            self.scroll_offset = history_len.saturating_sub(index + 1);
-            self.follow_bottom = self.scroll_offset == 0;
-        }
         vec![]
     }
 
@@ -580,20 +605,6 @@ impl App {
                     .collect()
             })
             .unwrap_or_default()
-    }
-
-    fn scroll_history_up(&mut self, amount: usize) {
-        let maximum = self
-            .projection
-            .as_ref()
-            .map_or(0, |projection| projection.history.len().saturating_sub(1));
-        self.scroll_offset = self.scroll_offset.saturating_add(amount).min(maximum);
-        self.follow_bottom = self.scroll_offset == 0;
-    }
-
-    fn scroll_history_down(&mut self, amount: usize) {
-        self.scroll_offset = self.scroll_offset.saturating_sub(amount);
-        self.follow_bottom = self.scroll_offset == 0;
     }
 
     pub fn committable_history_end(&self) -> usize {
@@ -703,6 +714,9 @@ impl App {
                 }
             }
             _ => {}
+        }
+        if let Some(id) = self.focused_tool_group_id() {
+            self.history_viewport.scroll_to_item(&id);
         }
         vec![]
     }
@@ -1114,6 +1128,7 @@ fn display_value(value: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::viewport::ViewportMetric;
     use crossterm::event::KeyEventKind;
 
     fn key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
@@ -1141,6 +1156,24 @@ mod tests {
                 params: json!({"message":"later"})
             }
         );
+    }
+
+    #[test]
+    fn asynchronous_run_failure_is_visible_in_the_status_row() {
+        let mut app = App::with_projection(UiProjection::default());
+        let envelope: Envelope = serde_json::from_value(json!({
+            "type":"event", "event":"remote/run-result",
+            "data":{"ok":false, "error":{"message":"subscription unavailable"}}
+        }))
+        .unwrap();
+
+        app.apply_envelope(&envelope);
+
+        assert_eq!(app.error.as_deref(), Some("subscription unavailable"));
+        assert!(matches!(
+            app.projection.as_ref().and_then(|projection| projection.history.last()),
+            Some(HistoryItem::Error { text, .. }) if text == "subscription unavailable"
+        ));
     }
 
     #[test]
@@ -1396,23 +1429,82 @@ mod tests {
             ..UiProjection::default()
         };
         let mut app = App::with_projection(projection);
+        app.history_viewport.update_layout(
+            std::iter::once(ViewportMetric::header(1))
+                .chain((0..6).map(|index| ViewportMetric::history(&format!("info-{index}"), 2)))
+                .collect(),
+            5,
+        );
 
         assert!(app.handle_mouse(MouseEventKind::ScrollUp));
-        assert_eq!(app.scroll_offset, 1);
-        assert!(!app.follow_bottom);
+        assert_eq!(app.history_viewport.scroll_top(), 5);
+        assert!(!app.history_viewport.follow_bottom());
 
         for _ in 0..20 {
             app.handle_mouse(MouseEventKind::ScrollUp);
         }
-        assert_eq!(app.scroll_offset, 5);
+        assert_eq!(app.history_viewport.scroll_top(), 0);
 
         assert!(app.handle_mouse(MouseEventKind::ScrollDown));
-        assert_eq!(app.scroll_offset, 4);
+        assert_eq!(app.history_viewport.scroll_top(), 3);
         for _ in 0..20 {
             app.handle_mouse(MouseEventKind::ScrollDown);
         }
-        assert_eq!(app.scroll_offset, 0);
-        assert!(app.follow_bottom);
+        assert_eq!(app.history_viewport.scroll_top(), 8);
+        assert!(app.history_viewport.follow_bottom());
         assert!(!app.handle_mouse(MouseEventKind::Moved));
+    }
+
+    #[test]
+    fn qwen_history_keys_scroll_by_line_page_and_boundary() {
+        let mut app = App::with_projection(UiProjection::default());
+        app.history_viewport.update_layout(
+            vec![
+                ViewportMetric::header(2),
+                ViewportMetric::history("first", 6),
+                ViewportMetric::history("second", 6),
+            ],
+            5,
+        );
+        assert_eq!(app.history_viewport.scroll_top(), 9);
+
+        app.handle_key(key(KeyCode::Up, KeyModifiers::SHIFT));
+        assert_eq!(app.history_viewport.scroll_top(), 8);
+        app.handle_key(key(KeyCode::PageUp, KeyModifiers::NONE));
+        assert_eq!(app.history_viewport.scroll_top(), 3);
+        app.handle_key(key(KeyCode::Home, KeyModifiers::CONTROL));
+        assert_eq!(app.history_viewport.scroll_top(), 0);
+        app.handle_key(key(KeyCode::PageDown, KeyModifiers::NONE));
+        assert_eq!(app.history_viewport.scroll_top(), 5);
+        app.handle_key(key(KeyCode::End, KeyModifiers::CONTROL));
+        assert_eq!(app.history_viewport.scroll_top(), 9);
+        assert!(app.history_viewport.follow_bottom());
+    }
+
+    #[test]
+    fn switching_sessions_resets_virtual_history_geometry() {
+        let mut app = App::with_projection(UiProjection {
+            session_id: "old-session".into(),
+            ..UiProjection::default()
+        });
+        app.history_viewport
+            .record_height("reused-id", 80, false, 40, true);
+        app.history_viewport.update_layout(
+            vec![
+                ViewportMetric::header(2),
+                ViewportMetric::history("reused-id", 40),
+            ],
+            10,
+        );
+        app.history_viewport.scroll_by(-5);
+
+        app.load_snapshot(json!({"session_id":"new-session"}))
+            .unwrap();
+
+        assert!(app.history_viewport.follow_bottom());
+        assert_eq!(
+            app.history_viewport.cached_height("reused-id", 80, false),
+            None
+        );
     }
 }

@@ -18,9 +18,9 @@ DeepSeek Harness 方案的主要优势不是“多开几个模型请求”，而
 
 | 插件 | 职责 |
 | --- | --- |
-| `agent.plugins.subagent` | 提供 `:subagents/runtime`，注册 provider，校验能力，管理任务与回收 |
-| `agent.plugins.subagent-in-process` | 注册 `:spawn`、`:fork`，创建隔离的子 plugin context |
-| `agent.plugins.subagent-tools` | 注册委派与后台控制工具 |
+| `qi.plugins.subagent` | 提供 `:subagents/runtime`，注册 provider，校验能力，管理任务与回收 |
+| `qi.plugins.subagent-in-process` | 注册 `:spawn`、`:fork`，创建隔离的子 plugin context |
+| `qi.plugins.subagent-tools` | 注册委派与后台控制工具 |
 
 默认工具：
 
@@ -42,9 +42,11 @@ DeepSeek Harness 方案的主要优势不是“多开几个模型请求”，而
 2. 在执行入口再次拒绝未授权工具；
 3. 只允许请求把 provider 的 allowlist 进一步缩小，不能扩大。
 
-默认 allowlist 只有 `current_time/read/read_file/ls/find/grep`，所以无人值守子代理不能写文件、
-编辑文件或启动进程。需要更强隔离时，应把 `:child-profile` 中的 execution world 换成容器或
-远程 provider，而不是扩大本地 allowlist。
+默认 allowlist 包含 `current_time/read/read_file/ls/find/grep/load_skill/bb_repl`。每个子代理
+可以使用自己独立、持久的 Clojure-family REPL；边界 interceptor 仅在 `bb_repl` 实际出现在
+本次 tool schema 时，才把该能力及恢复限制追加到 system prompt。子代理仍不能写项目文件、
+编辑文件或启动通用进程。需要更强隔离时，应把 `:child-profile` 中的 execution world 换成
+容器或远程 provider，而不是扩大本地 allowlist。
 
 `output_schema` 会在 child 完成后解析最终文本并走项目现有 JSON Schema validator；解析或
 校验失败时任务以 `:error` 结束，并保留已有的 partial output。
@@ -54,22 +56,22 @@ DeepSeek Harness 方案的主要优势不是“多开几个模型请求”，而
 默认 [agent.edn](../agent.edn) 已启用三层插件。provider 的关键配置如下：
 
 ```clojure
-{:ns agent.plugins.subagent-in-process
+{:ns qi.plugins.subagent-in-process
  :config
  {:max-depth 1
-  :allowed-tools ["read" "grep" "find" "ls"]
+  :allowed-tools ["read" "grep" "find" "ls" "bb_repl"]
   :child-profile
   {:plugins
-   [{:ns agent.plugins.session :config {:path nil}}
-    {:ns agent.plugins.model-registry :config {:default-provider :chatgpt}}
-    {:ns agent.plugins.chatgpt :config {:model "gpt-5.6-sol"}}
-    {:ns agent.plugins.runtime :config {:max-steps 8}}]}}}
+   [{:ns qi.plugins.session :config {:path nil}}
+    {:ns qi.plugins.model-registry :config {:default-provider :chatgpt}}
+    {:ns qi.plugins.chatgpt :config {:model "gpt-5.6-sol"}}
+    {:ns qi.plugins.runtime :config {:max-steps 8}}]}}}
 ```
 
 也可以为 tool adapter 配置其他固定 provider 名称：
 
 ```clojure
-{:ns agent.plugins.subagent-tools
+{:ns qi.plugins.subagent-tools
  :config
  {:delegates
   [{:name "research_agent"

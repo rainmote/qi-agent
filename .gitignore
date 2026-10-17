@@ -1,4 +1,7 @@
 # Agent runtime state: conversations, tool calls, local paths, and sandboxes
+.qi-agent/
+.qi-agent-*
+# Legacy state is ignored while migration fallback remains supported.
 .bb-agent/
 .bb-agent-*
 
@@ -17,7 +20,9 @@ auth.json
 *.local
 
 # Generated, cache, and test output
+.finesse/
 target/
+/apps/tui-rs/target
 out/
 coverage/
 .cache/
@@ -29,6 +34,13 @@ temp/
 *.log
 node_modules/
 apps/web/dist/
+evals/results/
+evals/exports/
+/.maintenance/state/
+/.maintenance/runs/
+/.maintenance/evidence/
+/.maintenance/tasks/current.md
+evals/**/__pycache__/
 
 # Editor and operating-system files
 .DS_Store

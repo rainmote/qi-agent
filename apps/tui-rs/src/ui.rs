@@ -4,6 +4,7 @@ use crate::{
     model::{HistoryItem, ToolCall, ToolStatus},
     sanitize,
     theme::Theme,
+    viewport::{HistoryViewport, ViewportMetric},
 };
 use ratatui::{
     Frame,
@@ -39,7 +40,7 @@ pub struct StreamingCommitCandidate {
     pub state: InlineStreamCommit,
 }
 
-pub fn draw(frame: &mut Frame<'_>, app: &App) {
+pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
     let area = frame.area();
     frame.render_widget(
         Block::default().style(Style::default().bg(app.theme.background)),
@@ -319,22 +320,22 @@ fn plain_text_rows(value: &str, width: usize) -> u16 {
         .min(u16::MAX as usize) as u16
 }
 
-fn render_transcript(frame: &mut Frame<'_>, app: &App, area: Rect) {
+fn render_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
+    if app.inline_mode {
+        render_inline_transcript(frame, app, area);
+    } else {
+        render_virtual_transcript(frame, app, area);
+    }
+}
+
+fn render_inline_transcript(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let Some(projection) = app.projection.as_ref() else {
         return;
     };
     let history = &projection.history;
-    let history_base = if app.inline_mode {
-        app.committed_history_count.min(history.len())
-    } else {
-        0
-    };
+    let history_base = app.committed_history_count.min(history.len());
     let visible = area.height as usize;
-    let end = history.len().saturating_sub(if app.inline_mode {
-        0
-    } else {
-        app.scroll_offset.min(history.len())
-    });
+    let end = history.len();
     let mut selected = Vec::<(usize, Vec<Line<'static>>)>::new();
     let mut logical_rows = 0usize;
     for index in (history_base..end).rev() {
@@ -356,13 +357,8 @@ fn render_transcript(frame: &mut Frame<'_>, app: &App, area: Rect) {
     }
     selected.reverse();
     let start = selected.first().map_or(end, |(index, _)| *index);
-    let show_scrollbar = !app.inline_mode && (start > 0 || end < history.len());
-    let content_area = if show_scrollbar && area.width > 1 {
-        Rect::new(area.x, area.y, area.width - 1, area.height)
-    } else {
-        area
-    };
-    let mut lines = if start == 0 && (!app.inline_mode || !app.header_committed) {
+    let content_area = area;
+    let mut lines = if start == 0 && !app.header_committed {
         header_lines(app, content_area.width)
     } else {
         Vec::new()
@@ -381,16 +377,138 @@ fn render_transcript(frame: &mut Frame<'_>, app: &App, area: Rect) {
             .wrap(Wrap { trim: false }),
         content_area,
     );
-    if show_scrollbar && area.width > 1 {
-        render_history_scrollbar(
+}
+
+fn render_virtual_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
+    if area.width == 0 || area.height == 0 || app.projection.is_none() {
+        return;
+    }
+    let content_area = if area.width > 1 {
+        Rect::new(area.x, area.y, area.width - 1, area.height)
+    } else {
+        area
+    };
+    let content_width = content_area.width.max(1);
+    let mut viewport = std::mem::take(&mut app.history_viewport);
+    if let Some(projection) = app.projection.as_ref() {
+        viewport.prune_height_cache(
+            projection.history.len(),
+            projection.history.iter().map(HistoryItem::id),
+        );
+    }
+
+    viewport.update_layout(
+        virtual_metrics(app, &viewport, content_width),
+        content_area.height as usize,
+    );
+    let mut window = viewport.visible_window(1);
+    let mut lines = Vec::new();
+    let mut settled = false;
+    for _ in 0..8 {
+        lines = virtual_window_lines(app, &mut viewport, content_width, window.start, window.end);
+        viewport.update_layout(
+            virtual_metrics(app, &viewport, content_width),
+            content_area.height as usize,
+        );
+        let next_window = viewport.visible_window(1);
+        if next_window.start == window.start && next_window.end == window.end {
+            window = next_window;
+            settled = true;
+            break;
+        }
+        window = next_window;
+    }
+
+    if !settled {
+        // Keep rendered rows and crop coordinates from the same metric pass.
+        // The newly recorded measurements will settle on the next redraw.
+        window = viewport.visible_window(1);
+        lines = virtual_window_lines(app, &mut viewport, content_width, window.start, window.end);
+    }
+    frame.render_widget(
+        Paragraph::new(Text::from(lines))
+            .scroll((window.crop_top.min(u16::MAX as usize) as u16, 0))
+            .wrap(Wrap { trim: false }),
+        content_area,
+    );
+    if area.width > 1 {
+        render_virtual_scrollbar(
             frame,
             app,
             Rect::new(area.right() - 1, area.y, 1, area.height),
-            start,
-            end,
-            history.len(),
+            &viewport,
         );
     }
+    app.history_viewport = viewport;
+}
+
+fn virtual_metrics(app: &App, viewport: &HistoryViewport, width: u16) -> Vec<ViewportMetric> {
+    let header_height = rendered_rows(&header_lines(app, width), width as usize).max(1);
+    let mut metrics = vec![ViewportMetric::header(header_height)];
+    let Some(projection) = app.projection.as_ref() else {
+        return metrics;
+    };
+    metrics.extend(projection.history.iter().map(|item| {
+        let expanded = app.details_expanded || app.expanded_tool_groups.contains(item.id());
+        let estimated = estimated_history_height(item);
+        match viewport.cached_height(item.id(), width, expanded) {
+            Some((height, true)) if item.is_final() => ViewportMetric::history(item.id(), height),
+            Some((height, _)) => {
+                ViewportMetric::estimated_history(item.id(), height.max(estimated))
+            }
+            None => ViewportMetric::estimated_history(item.id(), estimated),
+        }
+    }));
+    metrics
+}
+
+fn estimated_history_height(item: &HistoryItem) -> usize {
+    // Deliberately do not scan message text here: this runs for every history
+    // item on every frame, including restored sessions with large messages.
+    // Visible items are measured exactly and cached immediately.
+    match item {
+        HistoryItem::User { .. } | HistoryItem::Info { .. } | HistoryItem::Error { .. } => 3,
+        HistoryItem::Assistant { reasoning, .. } if reasoning.is_some() => 5,
+        HistoryItem::Assistant { .. } => 4,
+        HistoryItem::ToolGroup { tools, .. } => tools.len().clamp(1, 3).saturating_add(1),
+    }
+}
+
+fn virtual_window_lines(
+    app: &App,
+    viewport: &mut HistoryViewport,
+    width: u16,
+    start: usize,
+    end: usize,
+) -> Vec<Line<'static>> {
+    let Some(projection) = app.projection.as_ref() else {
+        return Vec::new();
+    };
+    let mut lines = Vec::new();
+    for virtual_index in start..end {
+        if virtual_index == 0 {
+            lines.extend(header_lines(app, width));
+            continue;
+        }
+        let history_index = virtual_index - 1;
+        let Some(item) = projection.history.get(history_index) else {
+            continue;
+        };
+        let expanded = app.details_expanded || app.expanded_tool_groups.contains(item.id());
+        let mut item_lines = vec![Line::raw("")];
+        item_lines.extend(history_lines_for_app(
+            app,
+            history_index,
+            item,
+            expanded,
+            width.saturating_sub(6) as usize,
+            app.focused_tool_group == Some(history_index),
+        ));
+        let height = rendered_rows(&item_lines, width as usize).max(1);
+        viewport.record_height(item.id(), width, expanded, height, item.is_final());
+        lines.extend(item_lines);
+    }
+    lines
 }
 
 /// Builds immutable transcript rows that can be inserted above Ratatui's
@@ -610,28 +728,28 @@ fn rendered_rows(lines: &[Line<'_>], width: usize) -> usize {
         .sum()
 }
 
-fn render_history_scrollbar(
+fn render_virtual_scrollbar(
     frame: &mut Frame<'_>,
     app: &App,
     area: Rect,
-    start: usize,
-    end: usize,
-    total: usize,
+    viewport: &HistoryViewport,
 ) {
-    if area.height == 0 || total == 0 {
+    if area.height == 0 || viewport.total_rows() <= viewport.viewport_rows() {
         return;
     }
     let height = area.height as usize;
-    let visible_items = end.saturating_sub(start).max(1);
-    let thumb_height = ((height * visible_items) / total).clamp(1, height);
-    let max_start = total.saturating_sub(visible_items).max(1);
-    let thumb_top = ((start.min(max_start) * height.saturating_sub(thumb_height)) / max_start)
+    let total = viewport.total_rows();
+    let visible = viewport.viewport_rows().max(1);
+    let thumb_height = ((height * visible) / total).clamp(1, height);
+    let max_scroll = total.saturating_sub(visible).max(1);
+    let thumb_top = ((viewport.scroll_top().min(max_scroll) * height.saturating_sub(thumb_height))
+        / max_scroll)
         .min(height.saturating_sub(thumb_height));
     let lines = (0..height)
         .map(|row| {
             let thumb = row >= thumb_top && row < thumb_top + thumb_height;
             Line::styled(
-                if thumb { "#" } else { "|" },
+                if thumb { "█" } else { "│" },
                 Style::default().fg(if thumb {
                     app.theme.focused
                 } else {
@@ -2119,6 +2237,11 @@ mod tests {
     use serde_json::json;
 
     fn frame(app: &App, width: u16, height: u16) -> String {
+        let mut app = app.clone();
+        frame_with_state(&mut app, width, height)
+    }
+
+    fn frame_with_state(app: &mut App, width: u16, height: u16) -> String {
         let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|frame| draw(frame, app)).unwrap();
@@ -2177,7 +2300,7 @@ mod tests {
             },
         ];
         let mut app = App::with_projection(projection);
-        app.cwd = "/workspace/dao".into();
+        app.cwd = "/workspace/qi-agent".into();
         app
     }
 
@@ -2341,7 +2464,7 @@ mod tests {
     fn idle_frame_matches_qwen_shell_at_160x44() {
         let output = frame(&fixture(), 160, 44);
         assert!(output.contains("___ ___     _   ___ ___ _  _ _____"));
-        assert!(output.contains(">_ bb-agent (v0.1.0)"));
+        assert!(output.contains(">_ qì agent (v0.1.0)"));
         assert!(output.contains("Tips: Type / to see all available commands."));
         assert!(output.contains("> hello"));
         assert!(output.contains("◆ TUI is ready. Ctrl+N inserts a newline; Enter submits."));
@@ -2354,7 +2477,7 @@ mod tests {
     fn narrow_frame_hides_logo_without_clipping_controls() {
         let output = frame(&fixture(), 80, 24);
         assert!(!output.contains("___ ___"));
-        assert!(output.contains(">_ bb-agent"));
+        assert!(output.contains(">_ qì agent"));
         assert!(output.contains("Type your message or @path/to/file"));
         assert!(output.lines().all(|line| line.width() <= 80));
     }
@@ -2418,13 +2541,13 @@ mod tests {
             .unwrap();
         app.header_committed = true;
         app.committed_history_count = end;
-        terminal.draw(|frame| draw(frame, &app)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
 
         let viewport_area = terminal.current_buffer_mut().area;
         let scrollback = buffer_text(terminal.backend().scrollback());
         let screen = buffer_text(terminal.backend().buffer());
         let viewport = buffer_rect_text(terminal.backend().buffer(), viewport_area);
-        assert!(scrollback.contains(">_ bb-agent"));
+        assert!(scrollback.contains(">_ qì agent"));
         assert!(format!("{scrollback}\n{screen}").contains("> hello"));
         assert!(!viewport.contains("> hello"));
         assert!(!viewport.contains("TUI is ready"));
@@ -2707,7 +2830,7 @@ mod tests {
     }
 
     #[test]
-    fn long_history_renders_a_bottom_window_and_ascii_scrollbar() {
+    fn long_history_renders_a_row_virtualized_window_and_scrollbar() {
         let mut app = fixture();
         app.projection.as_mut().unwrap().history = (1..=60)
             .map(|index| HistoryItem::Assistant {
@@ -2717,16 +2840,97 @@ mod tests {
                 streaming: false,
             })
             .collect();
-        let output = frame(&app, 80, 24);
+        let output = frame_with_state(&mut app, 80, 24);
         assert!(output.contains("answer 60"));
         assert!(!output.contains("answer 1\n"));
-        assert!(output.lines().any(|line| line.ends_with('#')));
+        assert!(output.lines().any(|line| line.ends_with('█')));
         assert!(output.lines().count() == 24);
 
-        app.scroll_offset = 20;
-        let scrolled = frame(&app, 80, 24);
+        app.history_viewport.scroll_by(-40);
+        let scrolled = frame_with_state(&mut app, 80, 24);
         assert!(scrolled.contains("answer 40"));
         assert!(!scrolled.contains("answer 60"));
+    }
+
+    #[test]
+    fn one_long_message_scrolls_by_physical_row() {
+        let mut app = fixture();
+        app.projection.as_mut().unwrap().history = vec![HistoryItem::Assistant {
+            id: "long-answer".into(),
+            text: (1..=60)
+                .map(|index| format!("line {index:02}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            reasoning: None,
+            streaming: false,
+        }];
+        let bottom = frame_with_state(&mut app, 80, 24);
+        assert!(bottom.contains("line 60"));
+        let bottom_offset = app.history_viewport.scroll_top();
+
+        app.history_viewport.scroll_by(-1);
+        let scrolled = frame_with_state(&mut app, 80, 24);
+        assert_eq!(app.history_viewport.scroll_top(), bottom_offset - 1);
+        assert!(!scrolled.contains("line 60"));
+        assert!(scrolled.contains("line 59"));
+    }
+
+    #[test]
+    fn new_output_does_not_move_a_scrolled_virtual_viewport() {
+        let mut app = fixture();
+        app.projection.as_mut().unwrap().history = (1..=40)
+            .map(|index| HistoryItem::Assistant {
+                id: format!("answer-{index}"),
+                text: format!("answer {index}"),
+                reasoning: None,
+                streaming: false,
+            })
+            .collect();
+        frame_with_state(&mut app, 80, 24);
+        app.history_viewport.scroll_by(-20);
+        let before = frame_with_state(&mut app, 80, 24);
+        let before_top = app.history_viewport.scroll_top();
+        let visible_before = (1..=40)
+            .filter(|index| before.contains(&format!("answer {index}")))
+            .collect::<Vec<_>>();
+
+        app.projection
+            .as_mut()
+            .unwrap()
+            .history
+            .push(HistoryItem::Assistant {
+                id: "streaming".into(),
+                text: (1..=20)
+                    .map(|index| format!("new line {index}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                reasoning: None,
+                streaming: true,
+            });
+        let after = frame_with_state(&mut app, 80, 24);
+        assert_eq!(app.history_viewport.scroll_top(), before_top);
+        let visible_after = (1..=40)
+            .filter(|index| after.contains(&format!("answer {index}")))
+            .collect::<Vec<_>>();
+        assert_eq!(visible_before, visible_after);
+        assert!(!after.contains("new line"));
+    }
+
+    #[test]
+    fn ten_thousand_items_only_measure_the_visible_window() {
+        let mut app = fixture();
+        app.projection.as_mut().unwrap().history = (1..=10_000)
+            .map(|index| HistoryItem::Assistant {
+                id: format!("answer-{index}"),
+                text: format!("answer {index}"),
+                reasoning: None,
+                streaming: false,
+            })
+            .collect();
+
+        let output = frame_with_state(&mut app, 80, 24);
+        assert!(output.contains("answer 10000"));
+        assert!(app.history_viewport.cached_height_count() < 64);
     }
 
     #[test]

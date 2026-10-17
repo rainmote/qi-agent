@@ -1,14 +1,20 @@
 use anyhow::{Context, Result, bail};
-use bb_agent_tui::{
+use crossterm::{
+    cursor::{Hide, MoveTo, Show},
+    event::{
+        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event, KeyEventKind,
+    },
+    execute,
+    terminal::{
+        Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
+        enable_raw_mode, size,
+    },
+};
+use qi_agent_tui::{
     Action, App, Envelope,
     client::{self, AttachedAgent},
     daemon, service, ui, wire, worker_proxy,
-};
-use crossterm::{
-    cursor::{Hide, MoveTo, Show},
-    event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyEventKind},
-    execute,
-    terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode, size},
 };
 use ratatui::{
     Terminal, TerminalOptions, Viewport,
@@ -55,6 +61,13 @@ struct TerminalGuard {
     terminal: Terminal<CrosstermBackend<File>>,
     tty: File,
     viewport_height: u16,
+    mode: TerminalMode,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TerminalMode {
+    VirtualHistory,
+    NativeScrollback,
 }
 
 /// Crossterm obtains the cursor position by writing a device-status query to
@@ -93,7 +106,7 @@ impl Drop for StdoutToTty {
 }
 
 impl TerminalGuard {
-    fn open() -> Result<Self> {
+    fn open(mode: TerminalMode) -> Result<Self> {
         let mut tty = OpenOptions::new()
             .read(true)
             .write(true)
@@ -107,43 +120,76 @@ impl TerminalGuard {
             .try_clone()
             .context("could not clone controlling terminal for renderer")?;
         enable_raw_mode().context("could not enable terminal raw mode")?;
-        if let Err(error) = execute!(tty, EnableBracketedPaste, Hide) {
-            let _ = execute!(cleanup_tty, Show, DisableBracketedPaste);
+        let setup = match mode {
+            TerminalMode::VirtualHistory => execute!(
+                tty,
+                EnterAlternateScreen,
+                EnableMouseCapture,
+                EnableBracketedPaste,
+                Hide
+            ),
+            TerminalMode::NativeScrollback => execute!(tty, EnableBracketedPaste, Hide),
+        };
+        if let Err(error) = setup {
+            let _ = execute!(
+                cleanup_tty,
+                Show,
+                DisableBracketedPaste,
+                DisableMouseCapture,
+                LeaveAlternateScreen
+            );
             let _ = disable_raw_mode();
-            return Err(error).context("could not initialize inline terminal UI");
+            return Err(error).context("could not initialize terminal UI");
         }
         let initialized = match StdoutToTty::new(tty_fd).and_then(|_redirect| {
             let terminal_size = size()?;
-            let viewport_height = inline_viewport_height(4, terminal_size.1);
+            let (viewport, viewport_height) = match mode {
+                TerminalMode::VirtualHistory => (Viewport::Fullscreen, terminal_size.1),
+                TerminalMode::NativeScrollback => {
+                    let height = inline_viewport_height(4, terminal_size.1);
+                    (Viewport::Inline(height), height)
+                }
+            };
             let terminal = Terminal::with_options(
                 CrosstermBackend::new(backend_tty),
-                TerminalOptions {
-                    viewport: Viewport::Inline(viewport_height),
-                },
+                TerminalOptions { viewport },
             )?;
             Ok((terminal, viewport_height))
         }) {
             Ok(initialized) => initialized,
             Err(error) => {
-                let _ = execute!(cleanup_tty, Show, DisableBracketedPaste);
+                let _ = execute!(
+                    cleanup_tty,
+                    Show,
+                    DisableBracketedPaste,
+                    DisableMouseCapture,
+                    LeaveAlternateScreen
+                );
                 let _ = disable_raw_mode();
-                return Err(error).context("could not create inline terminal viewport");
+                return Err(error).context("could not create terminal viewport");
             }
         };
         Ok(Self {
             terminal: initialized.0,
             tty,
             viewport_height: initialized.1,
+            mode,
         })
     }
 
-    fn draw(&mut self, app: &App) -> Result<()> {
+    fn draw(&mut self, app: &mut App) -> Result<()> {
         let _redirect = StdoutToTty::new(self.tty.as_raw_fd())?;
         self.terminal.draw(|frame| ui::draw(frame, app))?;
         Ok(())
     }
 
     fn resize_inline(&mut self, app: &App, terminal_width: u16, terminal_rows: u16) -> Result<()> {
+        if self.mode == TerminalMode::VirtualHistory {
+            let _redirect = StdoutToTty::new(self.tty.as_raw_fd())?;
+            self.terminal.autoresize()?;
+            self.viewport_height = terminal_rows;
+            return Ok(());
+        }
         let viewport_height = inline_viewport_height(
             ui::inline_content_height(app, terminal_width),
             terminal_rows,
@@ -180,6 +226,9 @@ impl TerminalGuard {
         terminal_width: u16,
         terminal_rows: u16,
     ) -> Result<bool> {
+        if self.mode == TerminalMode::VirtualHistory {
+            return Ok(false);
+        }
         if app.projection.is_none() {
             return Ok(false);
         }
@@ -232,14 +281,27 @@ impl TerminalGuard {
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        let area = self.terminal.current_buffer_mut().area;
-        let _ = execute!(
-            self.terminal.backend_mut(),
-            MoveTo(area.x, area.y),
-            Clear(ClearType::FromCursorDown),
-            Show,
-            DisableBracketedPaste
-        );
+        match self.mode {
+            TerminalMode::VirtualHistory => {
+                let _ = execute!(
+                    self.terminal.backend_mut(),
+                    DisableBracketedPaste,
+                    DisableMouseCapture,
+                    LeaveAlternateScreen,
+                    Show
+                );
+            }
+            TerminalMode::NativeScrollback => {
+                let area = self.terminal.current_buffer_mut().area;
+                let _ = execute!(
+                    self.terminal.backend_mut(),
+                    MoveTo(area.x, area.y),
+                    Clear(ClearType::FromCursorDown),
+                    Show,
+                    DisableBracketedPaste
+                );
+            }
+        }
         let _ = disable_raw_mode();
     }
 }
@@ -387,7 +449,7 @@ fn dispatch_action(
     }
 }
 
-fn run_tui(mut attached: AttachedAgent) -> Result<()> {
+fn run_tui(mut attached: AttachedAgent, terminal_mode: TerminalMode) -> Result<()> {
     attached
         .connection
         .reader
@@ -404,7 +466,7 @@ fn run_tui(mut attached: AttachedAgent) -> Result<()> {
     let mut pending = HashMap::<String, PendingRequest>::new();
     let mut request_counter = 0u64;
     let mut app = App {
-        inline_mode: true,
+        inline_mode: terminal_mode == TerminalMode::NativeScrollback,
         ..App::default()
     };
     app.load_snapshot(attached.snapshot)?;
@@ -417,7 +479,7 @@ fn run_tui(mut attached: AttachedAgent) -> Result<()> {
         "command.list",
         json!({}),
     )?;
-    let mut terminal = TerminalGuard::open()?;
+    let mut terminal = TerminalGuard::open(terminal_mode)?;
     let mut last_tick = Instant::now();
     let tick_rate = Duration::from_millis(80);
     let mut dirty = true;
@@ -427,7 +489,7 @@ fn run_tui(mut attached: AttachedAgent) -> Result<()> {
             let terminal_size = size()?;
             terminal.commit_ready_history(&mut app, terminal_size.0, terminal_size.1)?;
             terminal.resize_inline(&app, terminal_size.0, terminal_size.1)?;
-            terminal.draw(&app)?;
+            terminal.draw(&mut app)?;
             dirty = false;
         }
 
@@ -537,7 +599,7 @@ fn run_tui(mut attached: AttachedAgent) -> Result<()> {
     }
 }
 
-fn reconnect_tui(agent_id: &str, cursor: bb_agent_tui::Cursor) -> Result<AttachedAgent> {
+fn reconnect_tui(agent_id: &str, cursor: qi_agent_tui::Cursor) -> Result<AttachedAgent> {
     let started = Instant::now();
     let mut last_error = None;
     while started.elapsed() < Duration::from_secs(15) {
@@ -552,7 +614,7 @@ fn reconnect_tui(agent_id: &str, cursor: bb_agent_tui::Cursor) -> Result<Attache
 
 fn main() {
     if let Err(error) = entrypoint() {
-        eprintln!("dao failed: {error:#}");
+        eprintln!("qi-agent failed: {error:#}");
         std::process::exit(1);
     }
 }
@@ -561,7 +623,16 @@ fn entrypoint() -> Result<()> {
     let args: Vec<String> = env::args().skip(1).collect();
     let repository_root = option_path(&args, "--repository-root");
     let config_path = option_path(&args, "--config");
+    let preset_id = value_after(&args, "--preset");
     let repl_backend = value_after(&args, "--repl-backend");
+    let terminal_mode = if args
+        .iter()
+        .any(|argument| argument == "--native-scrollback")
+    {
+        TerminalMode::NativeScrollback
+    } else {
+        TerminalMode::VirtualHistory
+    };
     let (command, tail) = command_and_tail(&args);
     match command {
         Some("daemon") if tail.first().map(String::as_str) == Some("serve") => {
@@ -611,9 +682,27 @@ fn entrypoint() -> Result<()> {
                 repository_root.as_deref(),
                 config_path.as_deref(),
                 None,
+                None,
             )?;
             let result = attached.connection.call("agent.stop", json!({}))?;
             print_json(&result)
+        }
+        Some("new") => {
+            let selected = match preset_id {
+                Some(value) => value.to_owned(),
+                None => {
+                    choose_preset_interactive(repository_root.as_deref(), config_path.as_deref())?
+                }
+            };
+            run_tui(
+                client::create_and_attach(
+                    repository_root.as_deref(),
+                    config_path.as_deref(),
+                    &selected,
+                    repl_backend,
+                )?,
+                terminal_mode,
+            )
         }
         Some("run") => {
             let prompt = value_after(tail, "--detach")
@@ -624,6 +713,7 @@ fn entrypoint() -> Result<()> {
                 requested_agent,
                 repository_root.as_deref(),
                 config_path.as_deref(),
+                preset_id,
                 repl_backend,
             )?;
             let result = attached
@@ -642,25 +732,33 @@ fn entrypoint() -> Result<()> {
         }
         Some("attach") => {
             let agent_id = positional(tail, 0).context("attach requires an agent id")?;
-            run_tui(client::attach_or_create(
-                Some(agent_id),
-                repository_root.as_deref(),
-                config_path.as_deref(),
-                None,
-            )?)
+            run_tui(
+                client::attach_or_create(
+                    Some(agent_id),
+                    repository_root.as_deref(),
+                    config_path.as_deref(),
+                    None,
+                    None,
+                )?,
+                terminal_mode,
+            )
         }
         Some("help" | "--help" | "-h") => {
             println!("{USAGE}");
             Ok(())
         }
-        Some(value) if !value.starts_with('-') => bail!("unknown dao command: {value}"),
-        Some(value) => bail!("unknown dao option: {value}"),
-        _ => run_tui(client::attach_or_create(
-            None,
-            repository_root.as_deref(),
-            config_path.as_deref(),
-            repl_backend,
-        )?),
+        Some(value) if !value.starts_with('-') => bail!("unknown qi-agent command: {value}"),
+        Some(value) => bail!("unknown qi-agent option: {value}"),
+        _ => run_tui(
+            client::attach_or_create(
+                None,
+                repository_root.as_deref(),
+                config_path.as_deref(),
+                preset_id,
+                repl_backend,
+            )?,
+            terminal_mode,
+        ),
     }
 }
 
@@ -669,9 +767,13 @@ fn command_and_tail(args: &[String]) -> (Option<&str>, &[String]) {
     while index < args.len() {
         if matches!(
             args[index].as_str(),
-            "--config" | "--repository-root" | "--repl-backend"
+            "--config" | "--preset" | "--repository-root" | "--repl-backend"
         ) {
             index += 2;
+            continue;
+        }
+        if args[index] == "--native-scrollback" {
+            index += 1;
             continue;
         }
         if matches!(args[index].as_str(), "--help" | "-h") {
@@ -685,28 +787,89 @@ fn command_and_tail(args: &[String]) -> (Option<&str>, &[String]) {
     (None, &[])
 }
 
+fn choose_preset_interactive(
+    repository_root: Option<&Path>,
+    config_path: Option<&Path>,
+) -> Result<String> {
+    let presets = client::list_presets(repository_root, config_path)?;
+    let mut tty = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/tty")
+        .context("qi-agent new requires a terminal; pass --preset ID for automation")?;
+    writeln!(tty, "选择新会话的 Agent 模式：")?;
+    for (index, preset) in presets.iter().enumerate() {
+        let state = if preset.broken { " [不可用]" } else { "" };
+        writeln!(
+            tty,
+            "  {}. {} ({}){}",
+            index + 1,
+            preset.name,
+            preset.id,
+            state,
+        )?;
+        if let Some(description) = preset.description.as_deref() {
+            writeln!(tty, "     {description}")?;
+        }
+    }
+    write!(tty, "请选择编号 [默认 standard]: ")?;
+    tty.flush()?;
+    let mut input = String::new();
+    BufReader::new(tty.try_clone()?).read_line(&mut input)?;
+    let choices = presets
+        .iter()
+        .map(|preset| (preset.id.clone(), preset.broken))
+        .collect::<Vec<_>>();
+    select_preset_id(&choices, &input)
+}
+
+fn select_preset_id(presets: &[(String, bool)], input: &str) -> Result<String> {
+    if input.trim().is_empty() {
+        return presets
+            .iter()
+            .find(|(id, broken)| id == "standard" && !broken)
+            .or_else(|| presets.iter().find(|(_, broken)| !broken))
+            .map(|(id, _)| id.clone())
+            .context("no usable presets are available");
+    }
+    let index = input
+        .trim()
+        .parse::<usize>()
+        .context("preset selection must be a number")?;
+    let (id, broken) = presets
+        .get(index.saturating_sub(1))
+        .with_context(|| format!("preset selection is out of range: {index}"))?;
+    if *broken {
+        bail!("the selected preset is broken")
+    }
+    Ok(id.clone())
+}
+
 const USAGE: &str = "Daemon-backed Clojure agent runtime
 
-  dao                              attach/create and open the Rust TUI
-  dao agents                       list saved and resident agents
-  dao attach AGENT_ID              attach the TUI to an agent
-  dao run --detach PROMPT          submit background work and return
-  dao repl AGENT_ID                open the agent's Clojure REPL
-  dao status                       show daemon and worker state
-  dao update                       recover missing workers and refresh leases
-  dao doctor                       run non-destructive diagnostics
-  dao doctor --fix                 purge only provably expired leases
-  dao backup                       create a consistent SQLite snapshot
-  dao service print|install|uninstall
+  qi-agent                              attach/create and open the Rust TUI
+  qi-agent new [--preset ID]            choose a mode and create a distinct Agent/Session
+  qi-agent agents                       list saved and resident agents
+  qi-agent attach AGENT_ID              attach the TUI to an agent
+  qi-agent run --detach PROMPT          submit background work and return
+  qi-agent repl AGENT_ID                open the agent's Clojure REPL
+  qi-agent status                       show daemon and worker state
+  qi-agent update                       recover missing workers and refresh leases
+  qi-agent doctor                       run non-destructive diagnostics
+  qi-agent doctor --fix                 purge only provably expired leases
+  qi-agent backup                       create a consistent SQLite snapshot
+  qi-agent service print|install|uninstall
                                    manage the per-user OS daemon service
-  dao stop AGENT_ID                explicitly stop one root agent tree
-  dao shutdown                     stop all workers and the daemon
-  dao daemon serve                 run the supervisor in the foreground
+  qi-agent stop AGENT_ID                explicitly stop one root agent tree
+  qi-agent shutdown                     stop all workers and the daemon
+  qi-agent daemon serve                 run the supervisor in the foreground
 
 Options:
-  --config PATH                    worker profile (default: agent.edn)
+  --config PATH                    trusted daemon default profile (default: agent.edn)
+  --preset ID                      registered Preset for a newly created Agent
+  --native-scrollback              use terminal scrollback instead of virtual history
   --repl-backend BACKEND           babashka (default) or jvm-clojure
-  --repository-root PATH           dao runtime source root";
+  --repository-root PATH           qi-agent runtime source root";
 
 fn call_and_print(
     method: &str,
@@ -726,7 +889,7 @@ fn run_repl(
     config_path: Option<&Path>,
 ) -> Result<()> {
     let mut attached =
-        client::attach_or_create(Some(agent_id), repository_root, config_path, None)?;
+        client::attach_or_create(Some(agent_id), repository_root, config_path, None, None)?;
     println!("Clojure REPL for {agent_id}. Ctrl-D exits without stopping the agent.");
     let stdin = io::stdin();
     loop {
@@ -777,7 +940,7 @@ fn positional(args: &[String], index: usize) -> Option<&str> {
             }
             if matches!(
                 argument.as_str(),
-                "--config" | "--repository-root" | "--repl-backend" | "--agent"
+                "--config" | "--preset" | "--repository-root" | "--repl-backend" | "--agent"
             ) {
                 skip_next = true;
                 return false;
@@ -798,7 +961,7 @@ mod tests {
 
     #[test]
     fn top_level_help_is_a_command_instead_of_starting_the_tui() {
-        let values = args(&["--repository-root", "/tmp/dao", "--help"]);
+        let values = args(&["--repository-root", "/tmp/qi-agent", "--help"]);
         let (command, tail) = command_and_tail(&values);
         assert_eq!(command, Some("--help"));
         assert!(tail.is_empty());
@@ -813,6 +976,19 @@ mod tests {
     }
 
     #[test]
+    fn native_scrollback_is_a_global_tui_option() {
+        let values = args(&["--native-scrollback", "attach", "agent-1"]);
+        let (command, tail) = command_and_tail(&values);
+        assert_eq!(command, Some("attach"));
+        assert_eq!(positional(tail, 0), Some("agent-1"));
+
+        let values = args(&["attach", "--native-scrollback", "agent-2"]);
+        let (command, tail) = command_and_tail(&values);
+        assert_eq!(command, Some("attach"));
+        assert_eq!(positional(tail, 0), Some("agent-2"));
+    }
+
+    #[test]
     fn the_last_repeated_option_overrides_an_installed_launcher_default() {
         let values = args(&[
             "--config",
@@ -824,6 +1000,38 @@ mod tests {
             value_after(&values, "--config"),
             Some("/workspace/jvm-clojure.edn")
         );
+    }
+
+    #[test]
+    fn preset_is_a_global_agent_creation_option() {
+        let values = args(&[
+            "--repository-root",
+            "/installed/qi-agent",
+            "--config",
+            "/installed/qi-agent/agent.edn",
+            "--preset",
+            "standard",
+            "run",
+            "--detach",
+            "hello",
+        ]);
+        let (command, tail) = command_and_tail(&values);
+        assert_eq!(command, Some("run"));
+        assert_eq!(value_after(&values, "--preset"), Some("standard"));
+        assert_eq!(value_after(tail, "--detach"), Some("hello"));
+    }
+
+    #[test]
+    fn new_session_preset_selection_defaults_to_standard_and_rejects_broken_modes() {
+        let presets = vec![
+            ("standard".to_owned(), false),
+            ("creator".to_owned(), false),
+            ("broken".to_owned(), true),
+        ];
+        assert_eq!(select_preset_id(&presets, "").unwrap(), "standard");
+        assert_eq!(select_preset_id(&presets, "2").unwrap(), "creator");
+        assert!(select_preset_id(&presets, "3").is_err());
+        assert!(select_preset_id(&presets, "9").is_err());
     }
 
     #[test]

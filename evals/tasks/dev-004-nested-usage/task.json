@@ -1,0 +1,19 @@
+{
+  "id": "dev-004-nested-usage",
+  "title": "嵌套运行用量去重与聚合",
+  "category": "feature",
+  "split": "dev",
+  "timeout_seconds": 180,
+  "allowed_files": ["src/usage.mjs"],
+  "acceptance_tests": [
+    "empty ledger and missing counters",
+    "out-of-order nested runs, multi-root totals, duplicates, and cached subset",
+    "deduplication uses a tuple, ignores extras, and normalizes absent counters",
+    "duplicate conflicts and inconsistent run parents are rejected",
+    "missing parents, self references, and disconnected cycles are rejected",
+    "validation rejects malformed ledgers and unsafe or inconsistent counters",
+    "aggregated overflow is rejected within a run, subtree, or separate roots",
+    "deep frozen input is accepted and deeply nested runs do not overflow the call stack"
+  ],
+  "verify_command": ["node", "--test", "tests/acceptance.test.mjs"]
+}

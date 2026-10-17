@@ -1,0 +1,6 @@
+{
+  "enabled": false,
+  "controller_sha": "REPLACE_WITH_REVIEWED_CONTROLLER_SHA",
+  "schedule": { "time": "02:00", "timezone": "Asia/Singapore", "window_minutes": 60 },
+  "trial_ids": ["REPLACE_PASSED_DEV_TRIAL", "REPLACE_PASSED_HELDOUT_TRIAL"]
+}

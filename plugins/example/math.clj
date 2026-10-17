@@ -1,6 +1,6 @@
 (ns example.math
   "An out-of-tree plugin: its namespace lives on the `plugins/` classpath."
-  (:require [agent.kernel :as kernel]))
+  (:require [qi.kernel :as kernel]))
 
 (defn- calculate [{:keys [operation a b]}]
   (case operation

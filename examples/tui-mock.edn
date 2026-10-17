@@ -1,6 +1,6 @@
 {:plugins
- [{:ns agent.plugins.session}
-  {:ns agent.plugins.mock
+ [{:ns qi.plugins.session}
+  {:ns qi.plugins.mock
    :config
    {:responses
     [{:message
@@ -25,16 +25,16 @@
                 :content "The TUI groups discovery tools into one Qwen-style summary."}
       :finish-reason "stop"
       :usage {:total_tokens 12}}]}}
-  {:ns agent.plugins.execution-world
+  {:ns qi.plugins.execution-world
    :config {:root "."}}
-  {:ns agent.plugins.tools
+  {:ns qi.plugins.tools
    :config {:max-read-chars 5000 :default-read-lines 40}}
-  {:ns agent.plugins.runtime
+  {:ns qi.plugins.runtime
    :config {:max-steps 3
             :system-prompt "Use the supplied discovery tools, then reply briefly."}}
-  {:ns agent.plugins.remote-registry}
-  {:ns agent.plugins.durable-state
+  {:ns qi.plugins.remote-registry}
+  {:ns qi.plugins.durable-state
    :config {:root "."}}
-  {:ns agent.plugins.bb-repl
+  {:ns qi.plugins.bb-repl
    :config {:root "." :sandbox :none :timeout-ms 5000}}
-  {:ns agent.plugins.remote-api}]}
+  {:ns qi.plugins.remote-api}]}

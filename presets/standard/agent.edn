@@ -1,0 +1,244 @@
+{:plugins
+ [{:ns qi.plugins.session
+   :config {:path nil}}
+
+  {:ns qi.plugins.session-title}
+
+  {:ns qi.plugins.session-catalog}
+
+  {:ns qi.plugins.auth-store}
+
+  {:ns qi.plugins.model-registry
+   :config {:default-provider :chatgpt}}
+
+  {:ns qi.plugins.openai-responses
+   :config {:model "gpt-5.6-sol"
+            :api-key-env "OPENAI_API_KEY"
+            :timeout-ms 180000
+            :max-retries 2
+            :retry-delay-ms 500
+            :extra-body {:reasoning {:effort "medium"}}}}
+
+  {:ns qi.plugins.openai
+   :config {:base-url "https://api.deepseek.com"
+            :provider-id :deepseek
+            :api-key-env "DEEPSEEK_API_KEY"
+            :model "deepseek-v4-flash"
+            :context-window 1000000
+            :thinking-levels [:off :low :high :max]
+            :timeout-ms 180000
+            :extra-body {:thinking {:type "disabled"}}}}
+
+  ;; Optional experimental fallback that reuses a local Codex/ChatGPT login.
+  {:ns qi.plugins.chatgpt
+   :config {:model "gpt-5.6-sol"
+            :timeout-ms 180000
+            :connect-timeout-ms 15000
+            :http-version :http1.1
+            :transport-retries 4
+            :retry-delay-ms 400
+            :extra-body {:reasoning {:effort "medium"}}}}
+
+  ;; Web-managed providers are stored outside the repository with mode 0600.
+  ;; When QI_AGENT_PROVIDER_SETTINGS_FILE is unset this plugin is a no-op.
+  {:ns qi.plugins.provider-settings}
+
+  {:ns qi.plugins.execution-world
+   :config {:root "."
+            :timeout-ms 30000
+            :max-output-chars 50000}}
+
+  {:ns qi.plugins.trust
+   :config {:root "."}}
+
+  ;; Language servers are optional external executables. Missing binaries are
+  ;; reported by /lsp status and never prevent the agent from starting.
+  {:ns qi.plugins.stdio-session
+   :config {:stderr-tail-chars 20000
+            :close-timeout-ms 1000}}
+
+  {:ns qi.plugins.lsp
+   :config
+   {:request-timeout-ms 10000
+    :startup-timeout-ms 30000
+    :max-document-chars 2000000
+    :servers
+    [{:id :clojure-lsp
+      :command "clojure-lsp"
+      :file-types [".clj" ".cljs" ".cljc" ".edn"]
+      :language-id "clojure"
+      :root-markers ["deps.edn" "bb.edn" "project.clj" ".git"]}
+     {:id :rust-analyzer
+      :command "rust-analyzer"
+      :file-types [".rs"]
+      :language-id "rust"
+      :root-markers ["Cargo.toml" "rust-project.json" ".git"]}
+     {:id :clangd
+      :command "clangd"
+      :file-types [".c" ".cc" ".cpp" ".cxx" ".h" ".hh" ".hpp"]
+      :language-id {".c" "c" ".h" "c"
+                    ".cc" "cpp" ".cpp" "cpp" ".cxx" "cpp"
+                    ".hh" "cpp" ".hpp" "cpp"}
+      :root-markers ["compile_commands.json" "compile_flags.txt" ".clangd" ".git"]}
+     {:id :typescript-language-server
+      :command ["typescript-language-server" "--stdio"]
+      :file-types [".ts" ".tsx" ".js" ".jsx" ".mjs" ".cjs"]
+      :language-id {".ts" "typescript" ".tsx" "typescriptreact"
+                    ".js" "javascript" ".jsx" "javascriptreact"
+                    ".mjs" "javascript" ".cjs" "javascript"}
+      :root-markers ["tsconfig.json" "jsconfig.json" "package.json" ".git"]}
+     {:id :pyright
+      :command ["pyright-langserver" "--stdio"]
+      :file-types [".py" ".pyi"]
+      :language-id "python"
+      :root-markers ["pyproject.toml" "setup.py" "requirements.txt" ".git"]}]}}
+
+  {:ns qi.plugins.lsp-tools}
+
+  {:ns qi.plugins.jobs}
+
+  {:ns qi.plugins.tools
+   :config {:max-read-chars 50000}}
+
+  {:ns qi.plugins.omp
+   :config {:max-file-chars 500000
+            :max-edits 32
+            ;; Leave :default unrouted so /model controls normal turns.
+            ;; Named roles may still use fallback vectors such as
+            ;; :plan [:openai :chatgpt].
+            :default-role :default}}
+
+  ;; DeepSeek Harness-style subagents are split into a provider-neutral
+  ;; registry, isolated spawn/fork providers, and model-facing tool adapters.
+  {:ns qi.plugins.subagent}
+
+  {:ns qi.plugins.subagent-in-process
+   :config
+   {:max-depth 1
+    ;; A request may narrow this set but can never expand it. Mutating and
+    ;; general process tools remain unavailable to unattended child agents;
+    ;; bb_repl is confined to the child's own sandbox and namespace.
+    :allowed-tools ["current_time" "read" "read_file" "ls" "find" "grep"
+                    "load_skill" "bb_repl"]
+    :child-profile
+    {:plugins
+     [{:ns qi.plugins.session :config {:path nil :ephemeral true}}
+      {:ns qi.plugins.model-registry
+       :config {:default-provider :chatgpt}}
+      {:ns qi.plugins.openai-responses
+       :config {:model "gpt-5.6-sol"
+                :api-key-env "OPENAI_API_KEY"
+                :timeout-ms 180000
+                :max-retries 2
+                :retry-delay-ms 500
+                :extra-body {:reasoning {:effort "medium"}}}}
+      {:ns qi.plugins.openai
+       :config {:base-url "https://api.deepseek.com"
+                :provider-id :deepseek
+                :api-key-env "DEEPSEEK_API_KEY"
+                :model "deepseek-v4-flash"
+                :context-window 1000000
+                :thinking-levels [:off :low :high :max]
+                :timeout-ms 180000
+                :extra-body {:thinking {:type "disabled"}}}}
+      {:ns qi.plugins.chatgpt
+       :config {:model "gpt-5.6-sol"
+                :timeout-ms 180000
+                :connect-timeout-ms 15000
+                :http-version :http1.1
+                :transport-retries 4
+                :retry-delay-ms 400
+                :extra-body {:reasoning {:effort "medium"}}}}
+      {:ns qi.plugins.provider-settings}
+      {:ns qi.plugins.execution-world
+       :config {:root "."
+                :timeout-ms 30000
+                :max-output-chars 50000}}
+      {:ns qi.plugins.tools
+       :config {:max-read-chars 50000}}
+      {:ns qi.plugins.durable-state
+       :config {:root "."}}
+      {:ns qi.plugins.bb-repl
+       ;; `qi-agent --repl-backend jvm-clojure` 会为新 agent 覆盖默认 backend。
+       :config {:root "."
+                :sandbox :auto
+                :timeout-ms 10000
+                :max-output-chars 20000}}
+      {:ns qi.plugins.clojure-repl}
+      {:ns qi.plugins.context-manager
+       :config {:context-window 128000
+                :reserve-tokens 16384
+                :retain-messages 12}}
+      {:ns qi.plugins.runtime
+       :config {:max-steps 8
+                :system-prompt
+                "You are an isolated research subagent. Complete the delegated task with the available read-only tools, report concrete evidence, and do not claim to have changed files."}}]}}}
+
+  {:ns qi.plugins.subagent-tools}
+
+  {:ns qi.plugins.durable-state
+   :config {:root "."}}
+
+  {:ns qi.plugins.bb-repl
+   ;; 也可直接替换为 qi.plugins.jvm-clojure-repl。
+   :config {:root "."
+            :sandbox :auto
+            :timeout-ms 10000
+            :max-output-chars 20000}}
+
+  {:ns qi.plugins.clojure-repl}
+
+  {:ns qi.plugins.resources
+   :config {:root "."}}
+
+  ;; System presets ship with qì agent; user-authored copies live under ~/.qi-agent.
+  {:ns qi.plugins.presets}
+
+  ;; Remote methods are frontend-neutral. RPC mode inserts a remote interaction
+  ;; bridge before approval so the worker never reads prompts from stdin.
+  {:ns qi.plugins.remote-registry}
+
+  {:ns qi.plugins.approval
+   ;; Change to :ask for a confirmation before each bb_repl call.
+   :config {:mode :allow}}
+
+  {:ns qi.plugins.policy
+   :config {:deny-tools []
+            :trusted-tools ["write" "edit" "hash_edit" "bash" "bb_repl"
+                            "lsp_query"]
+            :approval-tools ["write" "edit" "hash_edit" "bash" "bb_repl"]}}
+
+  ;; Harness capabilities stay in the parent session. MCP servers are opt-in,
+  ;; and the paid search provider remains disabled until explicitly configured.
+  {:ns qi.plugins.mcp-client
+   :config {:servers []}}
+
+  {:ns qi.plugins.web-tools
+   :config {:search {:provider :tavily :enabled false}}}
+
+  {:ns qi.plugins.planning}
+
+  {:ns qi.plugins.workflow}
+
+  {:ns qi.plugins.team}
+
+  {:ns qi.plugins.automation}
+
+  {:ns qi.plugins.plugin-manager}
+
+  {:ns qi.plugins.trace
+   :config {:enabled true
+            :show-results true}}
+
+  {:ns qi.plugins.stream-console}
+
+  {:ns qi.plugins.context-manager
+   :config {:context-window 128000
+            :reserve-tokens 16384
+            :retain-messages 12}}
+
+  {:ns qi.plugins.runtime
+   :config {:max-steps 256
+            :system-prompt-template :omp}}
+
+  {:ns qi.plugins.remote-api}]}

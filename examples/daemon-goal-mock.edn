@@ -1,6 +1,6 @@
 {:plugins
- [{:ns agent.plugins.session}
-  {:ns agent.plugins.mock
+ [{:ns qi.plugins.session}
+  {:ns qi.plugins.mock
    :config
    {:responses
     [{:message {:role "assistant" :content "goal step 1"} :finish-reason "stop"}
@@ -11,9 +11,9 @@
      {:message {:role "assistant" :content "scheduled step 3"} :finish-reason "stop"}
      {:message {:role "assistant" :content "scheduled step 4"} :finish-reason "stop"}
      {:message {:role "assistant" :content "scheduled step 5"} :finish-reason "stop"}]}}
-  {:ns agent.plugins.durable-state :config {:root "."}}
-  {:ns agent.plugins.bb-repl
+  {:ns qi.plugins.durable-state :config {:root "."}}
+  {:ns qi.plugins.bb-repl
    :config {:root "." :sandbox :none :timeout-ms 5000}}
-  {:ns agent.plugins.runtime :config {:max-steps 2}}
-  {:ns agent.plugins.remote-registry}
-  {:ns agent.plugins.remote-api}]}
+  {:ns qi.plugins.runtime :config {:max-steps 2}}
+  {:ns qi.plugins.remote-registry}
+  {:ns qi.plugins.remote-api}]}

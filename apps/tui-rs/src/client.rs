@@ -4,6 +4,7 @@ use crate::{
     wire,
 };
 use anyhow::{Context, Result, bail};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
@@ -32,6 +33,38 @@ pub struct AttachedAgent {
     pub connection: DaemonConnection,
     pub snapshot: Value,
     pub attach_result: Value,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct PresetSummary {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub order: Option<i64>,
+    pub trust: String,
+    #[serde(default)]
+    pub broken: bool,
+}
+
+fn parse_preset_summaries(value: Value) -> Result<Vec<PresetSummary>> {
+    serde_json::from_value(value).context("daemon returned invalid preset metadata")
+}
+
+fn finish_preset_discovery(hello: Value, value: Value) -> Result<Vec<PresetSummary>> {
+    let supported = hello
+        .get("capabilities")
+        .and_then(Value::as_array)
+        .is_some_and(|capabilities| {
+            capabilities
+                .iter()
+                .any(|capability| capability.as_str() == Some("preset.discovery.v1"))
+        });
+    if !supported {
+        bail!("the running qi-agent daemon does not support preset discovery; restart it")
+    }
+    parse_preset_summaries(value)
 }
 
 impl DaemonConnection {
@@ -182,7 +215,7 @@ pub fn connect_or_launch(
         }
         if started.elapsed() >= Duration::from_secs(10) {
             bail!(
-                "dao daemon did not start; inspect {}",
+                "qi-agent daemon did not start; inspect {}",
                 paths.logs_dir.join("daemon.log").display()
             )
         }
@@ -190,15 +223,91 @@ pub fn connect_or_launch(
     }
 }
 
+pub fn list_presets(
+    repository_root: Option<&Path>,
+    config_path: Option<&Path>,
+) -> Result<Vec<PresetSummary>> {
+    let mut connection = connect_or_launch(repository_root, config_path)?;
+    let hello = connection.call("daemon.hello", json!({}))?;
+    let supported = hello
+        .get("capabilities")
+        .and_then(Value::as_array)
+        .is_some_and(|capabilities| {
+            capabilities
+                .iter()
+                .any(|capability| capability.as_str() == Some("preset.discovery.v1"))
+        });
+    if !supported {
+        return finish_preset_discovery(hello, json!([]));
+    }
+    let value = connection.call("preset.list", json!({}))?;
+    finish_preset_discovery(hello, value)
+}
+
 pub fn attach_or_create(
     requested_agent: Option<&str>,
     repository_root: Option<&Path>,
     config_path: Option<&Path>,
+    preset_id: Option<&str>,
     repl_backend: Option<&str>,
+) -> Result<AttachedAgent> {
+    attach_or_create_impl(
+        requested_agent,
+        repository_root,
+        config_path,
+        preset_id,
+        repl_backend,
+        true,
+    )
+}
+
+pub fn create_and_attach(
+    repository_root: Option<&Path>,
+    config_path: Option<&Path>,
+    preset_id: &str,
+    repl_backend: Option<&str>,
+) -> Result<AttachedAgent> {
+    attach_or_create_impl(
+        None,
+        repository_root,
+        config_path,
+        Some(preset_id),
+        repl_backend,
+        false,
+    )
+}
+
+fn attach_or_create_impl(
+    requested_agent: Option<&str>,
+    repository_root: Option<&Path>,
+    config_path: Option<&Path>,
+    preset_id: Option<&str>,
+    repl_backend: Option<&str>,
+    reuse_existing: bool,
 ) -> Result<AttachedAgent> {
     let requested_config = config_path.map(canonical).transpose()?;
     let mut connection = connect_or_launch(repository_root, config_path)?;
     let hello = connection.call("daemon.hello", json!({}))?;
+    if let Some(requested) = requested_config.as_ref()
+        && hello.get("default_config_path").and_then(Value::as_str)
+            != Some(requested.to_string_lossy().as_ref())
+    {
+        bail!(
+            "the running qi-agent daemon uses a different --config; restart it when current background tasks are safe to stop or select a registered --preset"
+        )
+    }
+    if preset_id.is_some()
+        && !hello
+            .get("capabilities")
+            .and_then(Value::as_array)
+            .is_some_and(|capabilities| {
+                capabilities
+                    .iter()
+                    .any(|value| value.as_str() == Some("agent.preset-selection.v1"))
+            })
+    {
+        bail!("the running qi-agent daemon does not support preset selection; restart it")
+    }
     if repl_backend.is_some()
         && !hello
             .get("capabilities")
@@ -210,7 +319,7 @@ pub fn attach_or_create(
             })
     {
         bail!(
-            "the running dao daemon does not support per-agent REPL selection; restart it when current background tasks are safe to stop"
+            "the running qi-agent daemon does not support per-agent REPL selection; restart it when current background tasks are safe to stop"
         )
     }
     let workspace = canonical(std::env::current_dir()?)?;
@@ -218,23 +327,14 @@ pub fn attach_or_create(
         agent_id.to_owned()
     } else {
         let agents = connection.call("agent.list", json!({}))?;
-        let existing = agents.as_array().and_then(|values| {
-            values.iter().find(|agent| {
-                agent.get("workspace_path").and_then(Value::as_str)
-                    == Some(workspace.to_string_lossy().as_ref())
-                    && requested_config.as_ref().is_none_or(|config| {
-                        agent.get("config_path").and_then(Value::as_str)
-                            == Some(config.to_string_lossy().as_ref())
-                    })
-                    && repl_backend.is_none_or(|backend| {
-                        agent.get("repl_backend").and_then(Value::as_str) == Some(backend)
-                    })
-                    && !matches!(
-                        agent.get("status").and_then(Value::as_str),
-                        Some("stopped" | "failed")
-                    )
-            })
-        });
+        let existing = find_reusable_agent(
+            &agents,
+            &workspace,
+            requested_config.as_deref(),
+            preset_id,
+            repl_backend,
+            reuse_existing,
+        );
         if let Some(agent) = existing {
             agent
                 .get("agent_id")
@@ -247,7 +347,7 @@ pub fn attach_or_create(
                 json!({
                     "workspace": workspace,
                     "name": workspace.file_name(),
-                    "config_path": requested_config,
+                    "preset_id": preset_id,
                     "repl_backend": repl_backend,
                 }),
             )?;
@@ -267,7 +367,7 @@ pub fn attach_or_create(
                 json!({
                     "workspace": workspace,
                     "name": workspace.file_name(),
-                    "config_path": requested_config,
+                    "preset_id": preset_id,
                     "repl_backend": repl_backend,
                 }),
             )?;
@@ -292,6 +392,48 @@ pub fn attach_or_create(
         snapshot,
         attach_result,
     })
+}
+
+fn find_reusable_agent<'a>(
+    agents: &'a Value,
+    workspace: &Path,
+    requested_config: Option<&Path>,
+    preset_id: Option<&str>,
+    repl_backend: Option<&str>,
+    reuse: bool,
+) -> Option<&'a Value> {
+    if !reuse {
+        return None;
+    }
+    agents.as_array()?.iter().find(|agent| {
+        matches_requested_profile(agent, workspace, requested_config, preset_id, repl_backend)
+    })
+}
+
+fn matches_requested_profile(
+    agent: &Value,
+    workspace: &Path,
+    requested_config: Option<&Path>,
+    preset_id: Option<&str>,
+    repl_backend: Option<&str>,
+) -> bool {
+    agent.get("workspace_path").and_then(Value::as_str)
+        == Some(workspace.to_string_lossy().as_ref())
+        && agent.get("preset_id").and_then(Value::as_str) == preset_id
+        && (preset_id.is_some()
+            || requested_config.is_none_or(|config| {
+                agent.get("config_path").and_then(Value::as_str)
+                    == Some(config.to_string_lossy().as_ref())
+            }))
+        && agent
+            .get("repl_backend")
+            .and_then(Value::as_str)
+            .unwrap_or("babashka")
+            == repl_backend.unwrap_or("babashka")
+        && !matches!(
+            agent.get("status").and_then(Value::as_str),
+            Some("stopped" | "failed")
+        )
 }
 
 pub fn attach_existing_with_cursor(
@@ -360,7 +502,9 @@ pub fn launch_daemon(
             Ok(())
         });
     }
-    command.spawn().context("could not launch dao daemon")?;
+    command
+        .spawn()
+        .context("could not launch qi-agent daemon")?;
     Ok(())
 }
 
@@ -410,5 +554,128 @@ mod tests {
         .unwrap();
         assert_eq!(result.pointer("/snapshot/session_id"), Some(&json!("会话")));
         assert!(transfers.is_empty());
+    }
+
+    #[test]
+    fn preset_discovery_parses_safe_display_metadata() {
+        let presets = parse_preset_summaries(json!([
+            {"id": "standard", "name": "标准模式", "description": "default",
+             "order": 1, "trust": "system", "config_path": "/must/not/surface"},
+            {"id": "broken", "name": "Broken", "order": 3,
+             "trust": "user", "broken": true}
+        ]))
+        .unwrap();
+        assert_eq!(presets.len(), 2);
+        assert_eq!(presets[0].id, "standard");
+        assert_eq!(presets[0].name, "标准模式");
+        assert!(!presets[0].broken);
+        assert!(presets[1].broken);
+    }
+
+    #[test]
+    fn preset_discovery_requires_the_daemon_capability() {
+        let result = finish_preset_discovery(
+            json!({"capabilities": ["agent.preset-selection.v1"]}),
+            json!([]),
+        );
+        assert!(result.is_err());
+        assert!(
+            finish_preset_discovery(json!({"capabilities": ["preset.discovery.v1"]}), json!([]),)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn explicit_new_session_never_reuses_a_matching_agent() {
+        let workspace = Path::new("/workspace");
+        let agents = json!([{
+            "agent_id": "existing",
+            "workspace_path": "/workspace",
+            "preset_id": "creator",
+            "repl_backend": "babashka",
+            "status": "idle"
+        }]);
+        assert!(
+            find_reusable_agent(&agents, workspace, None, Some("creator"), None, true).is_some()
+        );
+        assert!(
+            find_reusable_agent(&agents, workspace, None, Some("creator"), None, false).is_none()
+        );
+    }
+
+    #[test]
+    fn profile_matching_separates_default_and_preset_agents_with_launcher_config() {
+        let workspace = Path::new("/workspace");
+        let launcher_config = Path::new("/installed/qi-agent/agent.edn");
+        let default_agent = json!({
+            "workspace_path": "/workspace",
+            "preset_id": null,
+            "config_path": "/installed/qi-agent/agent.edn",
+            "repl_backend": "babashka",
+            "status": "idle"
+        });
+        let preset_agent = json!({
+            "workspace_path": "/workspace",
+            "preset_id": "standard",
+            "config_path": "/installed/qi-agent/presets/standard/agent.edn",
+            "repl_backend": "babashka",
+            "status": "idle"
+        });
+        let jvm_default_agent = json!({
+            "workspace_path": "/workspace",
+            "preset_id": null,
+            "config_path": "/installed/qi-agent/agent.edn",
+            "repl_backend": "jvm-clojure",
+            "status": "idle"
+        });
+        let jvm_preset_agent = json!({
+            "workspace_path": "/workspace",
+            "preset_id": "standard",
+            "config_path": "/installed/qi-agent/presets/standard/agent.edn",
+            "repl_backend": "jvm-clojure",
+            "status": "idle"
+        });
+        assert!(matches_requested_profile(
+            &default_agent,
+            workspace,
+            Some(launcher_config),
+            None,
+            Some("babashka")
+        ));
+        assert!(!matches_requested_profile(
+            &preset_agent,
+            workspace,
+            Some(launcher_config),
+            None,
+            Some("babashka")
+        ));
+        assert!(matches_requested_profile(
+            &preset_agent,
+            workspace,
+            Some(launcher_config),
+            Some("standard"),
+            Some("babashka")
+        ));
+        assert!(!matches_requested_profile(
+            &default_agent,
+            workspace,
+            Some(launcher_config),
+            Some("standard"),
+            Some("babashka")
+        ));
+        assert!(!matches_requested_profile(
+            &jvm_default_agent,
+            workspace,
+            Some(launcher_config),
+            None,
+            None
+        ));
+        assert!(!matches_requested_profile(
+            &jvm_preset_agent,
+            workspace,
+            Some(launcher_config),
+            Some("standard"),
+            None
+        ));
     }
 }

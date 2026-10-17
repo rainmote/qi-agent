@@ -6,8 +6,8 @@ use std::{
     process::Command,
 };
 
-const LAUNCHD_LABEL: &str = "ai.dao.agent";
-const SYSTEMD_UNIT: &str = "dao.service";
+const LAUNCHD_LABEL: &str = "io.github.rainmote.qi-agent";
+const SYSTEMD_UNIT: &str = "qi-agent.service";
 
 pub enum ServiceAction {
     Print,
@@ -67,6 +67,8 @@ fn definition(
     config_path: Option<&Path>,
     paths: &RuntimePaths,
 ) -> Result<ServiceDefinition> {
+    let qi_agent_home =
+        env::var_os("QI_AGENT_HOME").map(|value| value.to_string_lossy().into_owned());
     if cfg!(target_os = "macos") {
         let path = home_dir()?
             .join("Library/LaunchAgents")
@@ -82,6 +84,15 @@ fn definition(
             .map(|argument| format!("      <string>{}</string>", xml_escape(argument)))
             .collect::<Vec<_>>()
             .join("\n");
+        let environment_xml = qi_agent_home.as_ref().map_or_else(String::new, |home| {
+            format!(
+                "    <key>EnvironmentVariables</key>\n\
+    <dict>\n\
+      <key>QI_AGENT_HOME</key><string>{}</string>\n\
+    </dict>\n",
+                xml_escape(home)
+            )
+        });
         let contents = format!(
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
 <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
@@ -94,6 +105,7 @@ fn definition(
     <key>RunAtLoad</key><true/>\n\
     <key>KeepAlive</key><true/>\n\
     <key>ProcessType</key><string>Background</string>\n\
+{environment_xml}\
     <key>StandardOutPath</key><string>{}</string>\n\
     <key>StandardErrorPath</key><string>{}</string>\n\
   </dict>\n\
@@ -130,9 +142,15 @@ fn definition(
             arguments.push("--config".into());
             arguments.push(shell_escape(&config.display().to_string()));
         }
+        let environment = qi_agent_home.as_ref().map_or_else(String::new, |home| {
+            format!(
+                "Environment=\"QI_AGENT_HOME={}\"\n",
+                systemd_environment_escape(home)
+            )
+        });
         let contents = format!(
-            "[Unit]\nDescription=DAO local agent supervisor\nAfter=network.target\n\n\
-[Service]\nType=simple\nExecStart={}\nRestart=on-failure\nRestartSec=1\n\
+            "[Unit]\nDescription=qì agent local supervisor\nAfter=network.target\n\n\
+[Service]\nType=simple\n{environment}ExecStart={}\nRestart=on-failure\nRestartSec=1\n\
 StandardOutput=append:{}\nStandardError=append:{}\n\n\
 [Install]\nWantedBy=default.target\n",
             arguments.join(" "),
@@ -234,6 +252,15 @@ fn shell_escape(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
+fn systemd_environment_escape(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('%', "%%")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,5 +269,9 @@ mod tests {
     fn escapes_service_arguments() {
         assert_eq!(xml_escape("a&<b>"), "a&amp;&lt;b&gt;");
         assert_eq!(shell_escape("a'b"), "'a'\\''b'");
+        assert_eq!(
+            systemd_environment_escape("/a b/%x/\"quoted\""),
+            "/a b/%%x/\\\"quoted\\\""
+        );
     }
 }

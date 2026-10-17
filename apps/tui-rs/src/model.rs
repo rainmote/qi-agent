@@ -60,6 +60,8 @@ pub struct Snapshot {
     pub models: Option<ModelList>,
     #[serde(default)]
     pub interactions: Vec<Value>,
+    #[serde(default)]
+    pub interactions_revision: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
@@ -262,6 +264,9 @@ pub struct UiProjection {
     pub cursor: Cursor,
     pub history: Vec<HistoryItem>,
     pub state: AgentState,
+    pub state_revision: Option<u64>,
+    pub snapshot_interaction_revision: Option<u64>,
+    pub interaction_revisions: BTreeMap<String, u64>,
     pub queue: Vec<QueueItem>,
     pub interactions: Vec<Interaction>,
     pub models: Option<ModelList>,

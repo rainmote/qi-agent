@@ -1,57 +1,57 @@
 {:plugins
- [{:ns agent.plugins.session}
+ [{:ns qi.plugins.session}
 
-  {:ns agent.plugins.session-catalog}
+  {:ns qi.plugins.session-catalog}
 
-  {:ns agent.plugins.auth-store}
+  {:ns qi.plugins.auth-store}
 
-  {:ns agent.plugins.model-registry
+  {:ns qi.plugins.model-registry
    :config {:default-provider :chatgpt}}
 
-  {:ns agent.plugins.chatgpt
+  {:ns qi.plugins.chatgpt
    :config {:model "gpt-5.6-sol"
             :timeout-ms 180000
             :extra-body {:reasoning {:effort "medium"}}}}
 
-  {:ns agent.plugins.execution-world
+  {:ns qi.plugins.execution-world
    :config {:root "."}}
 
-  {:ns agent.plugins.tools
+  {:ns qi.plugins.tools
    :config {:max-read-chars 50000}}
 
-  {:ns agent.plugins.bb-repl
+  {:ns qi.plugins.bb-repl
    :config {:root "."
             :sandbox :auto
             :timeout-ms 10000
             :max-output-chars 20000}}
 
-  {:ns agent.plugins.clojure-repl}
+  {:ns qi.plugins.clojure-repl}
 
-  {:ns agent.plugins.math}
+  {:ns qi.plugins.math}
 
-  {:ns agent.plugins.trust
+  {:ns qi.plugins.trust
    :config {:root "." :trusted true}}
 
-  {:ns agent.plugins.resources
+  {:ns qi.plugins.resources
    :config {:root "."}}
 
-  {:ns agent.plugins.approval
+  {:ns qi.plugins.approval
    :config {:mode :allow}}
 
-  {:ns agent.plugins.policy
+  {:ns qi.plugins.policy
    :config {:deny-tools []
             :trusted-tools ["write" "edit" "bash" "bb_repl"]
             :approval-tools ["write" "edit" "bash" "bb_repl"]}}
 
-  {:ns agent.plugins.trace
+  {:ns qi.plugins.trace
    :config {:enabled true
             :show-results true}}
 
-  {:ns agent.plugins.stream-console}
+  {:ns qi.plugins.stream-console}
 
-  {:ns agent.plugins.context-manager}
+  {:ns qi.plugins.context-manager}
 
-  {:ns agent.plugins.runtime
+  {:ns qi.plugins.runtime
    :config {:max-steps 12
             :system-prompt
             "You are a concise coding assistant. Use tools when they improve accuracy. Use bb_repl for exact calculations and Clojure data transformations. Never invent tool results."}}]}

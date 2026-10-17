@@ -1,6 +1,6 @@
 {:plugins
- [{:ns agent.plugins.session}
-  {:ns agent.plugins.mock
+ [{:ns qi.plugins.session}
+  {:ns qi.plugins.mock
    :config
    {:responses
     [{:message
@@ -15,11 +15,11 @@
       :finish-reason "tool_calls"}
      {:message {:role "assistant" :content "approval resolved"}
       :finish-reason "stop"}]}}
-  {:ns agent.plugins.execution-world :config {:root "."}}
-  {:ns agent.plugins.tools}
-  {:ns agent.plugins.remote-registry}
-  {:ns agent.plugins.approval :config {:mode :ask}}
-  {:ns agent.plugins.policy
+  {:ns qi.plugins.execution-world :config {:root "."}}
+  {:ns qi.plugins.tools}
+  {:ns qi.plugins.remote-registry}
+  {:ns qi.plugins.approval :config {:mode :ask}}
+  {:ns qi.plugins.policy
    :config {:approval-tools ["write"] :trusted-tools []}}
-  {:ns agent.plugins.runtime :config {:max-steps 2}}
-  {:ns agent.plugins.remote-api}]}
+  {:ns qi.plugins.runtime :config {:max-steps 2}}
+  {:ns qi.plugins.remote-api}]}

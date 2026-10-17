@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { readFile, realpath, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { homedir } from "node:os";
 import type { Workspace } from "./types.js";
+import { ensurePrivateDirectory, writePrivateFileAtomically } from "./storage.js";
 
 interface WorkspaceState {
   workspaces: Workspace[];
@@ -16,15 +18,32 @@ export class WorkspaceRegistry {
   readonly stateDirectory: string;
   readonly statePath: string;
   #workspaces = new Map<string, Workspace>();
+  #mutations = Promise.resolve();
+  #generations = new Map<string, number>();
+  #revocations = new Set<(id: string) => Promise<void>>();
 
-  constructor(stateDirectory = process.env.BB_AGENT_WEB_STATE_DIR ||
-    join(homedir(), ".bb-agent", "web")) {
+  onRevoke(listener: (id: string) => Promise<void>): () => void {
+    this.#revocations.add(listener);
+    return () => this.#revocations.delete(listener);
+  }
+
+  lease(id: string): () => void {
+    const workspace = this.get(id);
+    const generation = this.#generations.get(id) || 0;
+    return () => {
+      if (this.#workspaces.get(id) !== workspace || (this.#generations.get(id) || 0) !== generation) {
+        throw new Error("Workspace access was revoked");
+      }
+    };
+  }
+
+  constructor(stateDirectory = defaultStateDirectory()) {
     this.stateDirectory = stateDirectory;
     this.statePath = join(stateDirectory, "workspaces.json");
   }
 
   async load(defaultRoot?: string): Promise<void> {
-    await mkdir(this.stateDirectory, { recursive: true, mode: 0o700 });
+    await ensurePrivateDirectory(this.stateDirectory);
     try {
       const parsed = JSON.parse(await readFile(this.statePath, "utf8")) as WorkspaceState;
       for (const workspace of parsed.workspaces || []) {
@@ -60,31 +79,52 @@ export class WorkspaceRegistry {
   async add(path: string): Promise<Workspace> {
     const canonical = await this.canonicalDirectory(path);
     const id = workspaceId(canonical);
-    const existing = this.#workspaces.get(id);
-    if (existing) return existing;
-    const workspace: Workspace = {
-      id,
-      name: basename(canonical) || canonical,
-      path: canonical,
-      addedAt: new Date().toISOString(),
-    };
-    this.#workspaces.set(id, workspace);
-    await this.save();
-    return workspace;
+    return this.mutate(async () => {
+      const existing = this.#workspaces.get(id);
+      if (existing) return existing;
+      const workspace: Workspace = {
+        id,
+        name: basename(canonical) || canonical,
+        path: canonical,
+        addedAt: new Date().toISOString(),
+      };
+      this.#workspaces.set(id, workspace);
+      try {
+        await this.save();
+        return workspace;
+      } catch (error) {
+        this.#workspaces.delete(id);
+        throw error;
+      }
+    });
   }
 
   async remove(id: string): Promise<boolean> {
-    const removed = this.#workspaces.delete(id);
-    if (removed) await this.save();
-    return removed;
+    return this.mutate(async () => {
+      const existing = this.#workspaces.get(id);
+      if (!existing) return false;
+      this.#workspaces.delete(id);
+      this.#generations.set(id, (this.#generations.get(id) || 0) + 1);
+      await Promise.allSettled([...this.#revocations].map((listener) => listener(id)));
+      try {
+        await this.save();
+        return true;
+      } catch (error) {
+        this.#workspaces.set(id, existing);
+        throw error;
+      }
+    });
   }
 
-  async save(): Promise<void> {
-    const temporary = `${this.statePath}.${process.pid}.tmp`;
-    await writeFile(temporary,
-      `${JSON.stringify({ workspaces: this.list() }, null, 2)}\n`,
-      { mode: 0o600 });
-    await import("node:fs/promises").then(({ rename }) => rename(temporary, this.statePath));
+  private async save(): Promise<void> {
+    await writePrivateFileAtomically(this.statePath,
+      `${JSON.stringify({ workspaces: this.list() }, null, 2)}\n`);
+  }
+
+  private mutate<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.#mutations.catch(() => undefined).then(operation);
+    this.#mutations = result.then(() => undefined, () => undefined);
+    return result;
   }
 
   private async canonicalDirectory(path: string): Promise<string> {
@@ -93,4 +133,13 @@ export class WorkspaceRegistry {
     if (!info.isDirectory()) throw new Error("Workspace must be a directory");
     return canonical;
   }
+}
+
+function defaultStateDirectory(): string {
+  if (process.env.QI_AGENT_WEB_STATE_DIR) return process.env.QI_AGENT_WEB_STATE_DIR;
+  if (process.env.BB_AGENT_WEB_STATE_DIR) return process.env.BB_AGENT_WEB_STATE_DIR;
+  if (process.env.QI_AGENT_HOME) return join(process.env.QI_AGENT_HOME, "web");
+  const canonical = join(homedir(), ".qi-agent", "web");
+  const legacy = join(homedir(), ".bb-agent", "web");
+  return existsSync(canonical) || !existsSync(legacy) ? canonical : legacy;
 }

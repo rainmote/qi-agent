@@ -130,38 +130,38 @@ Pi 和当前 Babashka 实现中的插件都与主进程同权限。项目级插�
 
 ## 六、本仓库如何映射这些结论
 
-- `agent.kernel`：service/tool/listener registry、waterfall、effect 和卸载；不含 LLM 或 agent loop。
-- `agent.plugin`：读取 EDN，动态 require namespace，检查 requires/provides，失败回滚。
-- `agent.plugins.session`：append-only event store，并从 `message` event 推导模型 history。
+- `qi.kernel`：service/tool/listener registry、waterfall、effect 和卸载；不含 LLM 或 agent loop。
+- `qi.plugin`：读取 EDN，动态 require namespace，检查 requires/provides，失败回滚。
+- `qi.plugins.session`：append-only event store，并从 `message` event 推导模型 history。
 - session store 会跳过并诊断损坏 JSONL 行；clear、compaction 都是 append-only
   checkpoint；fork 原子创建新文件并生成独立 session id。
-- `agent.plugins.openai`：隔离 OpenAI-compatible/DeepSeek HTTP 协议。
-- `agent.plugins.openai-responses`：默认生产 adapter；限制 API key 只发往 OpenAI 公共
+- `qi.plugins.openai`：隔离 OpenAI-compatible/DeepSeek HTTP 协议。
+- `qi.plugins.openai-responses`：默认生产 adapter；限制 API key 只发往 OpenAI 公共
   Responses endpoint，并保留/replay 完整 output items。
-- `agent.plugins.chatgpt`：隔离 ChatGPT 订阅的 Responses/SSE 协议；每次请求
+- `qi.plugins.chatgpt`：隔离 ChatGPT 订阅的 Responses/SSE 协议；每次请求
   重读 Codex auth cache，只把 access token 放进 Authorization header，并保留、
   replay 完整 response output items 以维持 reasoning/tool-call 连续性。传输默认使用
   HTTP/1.1；TLS/连接错误会轮换 HTTP client 并指数退避，且不会与 runtime 形成乘法重试。
-- 根目录 `agent.edn` 默认选择 `agent.plugins.openai-responses`；实验性 ChatGPT 订阅 adapter
+- 根目录 `agent.edn` 默认选择 `qi.plugins.openai-responses`；实验性 ChatGPT 订阅 adapter
   仍可通过 `/model` 或 `examples/chatgpt.edn` 使用，DeepSeek adapter 保留在
   `examples/deepseek.edn`。模型切换只替换 provider/profile，不修改 kernel 或 loop。
-- `agent.plugins.runtime`：有 step 上限的默认 tool-calling loop；本身通过 `:agent/run` service 可替换。
-- `agent.cancellation` 与 `agent.streaming`：所有 adapter 共享取消 token 和 SSE framing；
+- `qi.plugins.runtime`：有 step 上限的默认 tool-calling loop；本身通过 `:agent/run` service 可替换。
+- `qi.cancellation` 与 `qi.streaming`：所有 adapter 共享取消 token 和 SSE framing；
   `:llm/stream` 对外发布统一 start/delta/completed/error live event。
-- `agent.plugins.bb-repl`：提供 `:execution/repl` capability，管理持久化 Babashka
+- `qi.plugins.bb-repl`：提供 `:execution/repl` capability，管理持久化 Babashka
   子进程、单行 EDN request/response、输出边界和超时重启。
-- `agent.plugins.clojure-repl`：消费执行 capability 并注册模型可见的 `bb_repl`
+- `qi.plugins.clojure-repl`：消费执行 capability 并注册模型可见的 `bb_repl`
   工具；因此未来切换容器或远程执行只需要替换 provider。
-- `agent.plugins.policy`：在 `:tool/pre-execute` waterfall 拒绝工具，不修改 loop。
-- `agent.plugins.trust` 与 `agent.plugins.approval`：把 project trust、allow/deny/ask
+- `qi.plugins.policy`：在 `:tool/pre-execute` waterfall 拒绝工具，不修改 loop。
+- `qi.plugins.trust` 与 `qi.plugins.approval`：把 project trust、allow/deny/ask
   决策和 durable audit 从工具实现中分离。
 - `plugins/example/math.clj`：位于独立 classpath 根下的外置工具插件。
-- `agent.plugins.mock`：离线 deterministic adapter，使整个 harness 不依赖真实 API 即可端到端测试。
+- `qi.plugins.mock`：离线 deterministic adapter，使整个 harness 不依赖真实 API 即可端到端测试。
 
 ## 七、已完成基线与下一步
 
 按 Pi 当前官方版本重新核对后的完整能力矩阵、P0/P1/P2 优先级和验收标准，见
-[bb-agent 与 Pi 当前能力差距](pi-gap-analysis.md)。
+[qì agent 与 Pi 当前能力差距](pi-gap-analysis.md)。
 
 本轮已经补齐此前最关键的三个缺口：
 
@@ -187,7 +187,7 @@ Pi 和当前 Babashka 实现中的插件都与主进程同权限。项目级插�
 - [Pi 官方仓库](https://github.com/earendil-works/pi)
 - [Pi Extension 文档](https://pi.dev/docs/latest/extensions)
 - [Pi Skill 文档](https://pi.dev/docs/latest/skills)
-- [Pi agent loop 源码](https://github.com/earendil-works/pi/blob/main/packages/agent/src/agent-loop.ts)
+- [Pi agent loop 源码](https://github.com/earendil-works/pi/blob/main/packages/agent/src/qi-loop.ts)
 - [DeepSeek Harness 官方仓库](https://github.com/deepseek-ai/deepseek-harness)
 - [DeepSeek Harness 架构](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/architecture.md)
 - [DeepSeek Harness extension cookbook](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/cookbook/extension-cookbook.md)

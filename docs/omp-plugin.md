@@ -12,7 +12,7 @@
 ## 配置
 
 ```clojure
-{:ns agent.plugins.omp
+{:ns qi.plugins.omp
  :config {:max-file-chars 500000
           :max-edits 32
           :default-role :default
@@ -42,7 +42,7 @@
 默认 profile 通过以下配置启用内置 OMP 风格模板：
 
 ```clojure
-{:ns agent.plugins.runtime
+{:ns qi.plugins.runtime
  :config {:max-steps 12
           :system-prompt-template :omp}}
 ```
@@ -54,13 +54,13 @@
 3. 当前工具名、工作目录、日期与项目资源信任状态；
 4. 可选的覆盖层。
 
-支持用户目录（默认 `~/.bb-agent`）、项目根目录和项目 `.bb-agent` 目录中的以下文件：
+支持用户目录（默认 `~/.qi-agent`）、项目根目录和项目 `.qi-agent` 目录中的以下文件：
 
 - `SYSTEM.md`：替换稳定基础模板，但保留动态上下文、技能、工具和环境块；
 - `APPEND_SYSTEM.md`：追加额外指令；存在 `SYSTEM.md` 时紧随自定义模板，否则位于完整生成提示词末尾；
 - `AGENTS.md`：作为项目上下文注入，不会被误当成基础模板。
 
-优先级为项目 `.bb-agent`、项目根目录、用户目录。未信任项目的文件全部忽略，用户目录资源仍可使用。
+优先级为项目 `.qi-agent`、项目根目录、用户目录。未信任项目的文件全部忽略，用户目录资源仍可使用。
 运行时配置的 `:custom-system-prompt` 和 `:append-system-prompt` 分别高于对应文件，方便嵌入式调用做显式覆盖。
 普通的 `:system-prompt` 仍表示稳定基础模板，因此现有 profile 不需要迁移。
 
@@ -72,9 +72,9 @@ Skills 使用 progressive disclosure：system prompt 只列出可由模型调用
 默认目录：
 
 ```text
-~/.bb-agent/skills/<name>/SKILL.md
+~/.qi-agent/skills/<name>/SKILL.md
 ~/.agents/skills/<name>/SKILL.md
-<project>/.bb-agent/skills/<name>/SKILL.md
+<project>/.qi-agent/skills/<name>/SKILL.md
 ```
 
 扫描是递归的，因此也允许 `skills/team/domain/<name>/SKILL.md`。与 OMP 的单层扫描相比，
@@ -83,7 +83,7 @@ Skills 使用 progressive disclosure：system prompt 只列出可由模型调用
 完整配置：
 
 ```clojure
-{:ns agent.plugins.resources
+{:ns qi.plugins.resources
  :config
  {:root "."
   :skills
@@ -104,7 +104,7 @@ Skills 使用 progressive disclosure：system prompt 只列出可由模型调用
 该用户级来源不依赖项目 trust。
 
 相对目录以 workspace 为基准。custom directory 只在项目可信时加载。同名 skill
-按“custom directory、project `.bb-agent`、user `.bb-agent`、agents-user”选择第一个，并在 snapshot 的 `:skill-warnings` 中记录
+按“custom directory、project `.qi-agent`、user `.qi-agent`、agents-user”选择第一个，并在 snapshot 的 `:skill-warnings` 中记录
 被忽略路径；相同 realpath 会直接去重。include/ignore 是对 skill 名称应用的 glob，ignore
 最后生效。
 

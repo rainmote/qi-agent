@@ -10,8 +10,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Unique non-PR groups also avoid replacing an older pending main run.
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
@@ -35,8 +36,8 @@ jobs:
           workspaces: apps/tui-rs
       - name: Install Babashka
         run: |
-          scripts/install-ci-babashka.sh "$RUNNER_TEMP/dao-bin"
-          echo "$RUNNER_TEMP/dao-bin" >> "$GITHUB_PATH"
+          scripts/install-ci-babashka.sh "$RUNNER_TEMP/qi-agent-bin"
+          echo "$RUNNER_TEMP/qi-agent-bin" >> "$GITHUB_PATH"
       - name: Install web dependencies
         run: npm ci --registry=https://registry.npmjs.org
       - name: Check Rust formatting
@@ -51,13 +52,47 @@ jobs:
         run: npm run test:web
       - name: Test web UI
         run: npm run test:web-ui
+      - name: Test ACP editor protocol with isolated workers
+        run: npm run test:acp
+      - name: Build production Web application
+        run: npm run web:build
+      - name: Install pinned Playwright Chromium
+        if: runner.os == 'Linux'
+        run: npx playwright install --with-deps chromium
+      - name: Test production Web in Chromium with isolated API fixtures
+        if: runner.os == 'Linux'
+        run: npm run test:web-browser:ci
+      - name: Test production Web through an isolated daemon and offline worker
+        if: runner.os == 'Linux'
+        run: npm run test:web-e2e
       - name: Test Clojure runtime
         run: bb test
+      - name: Test evaluation fixtures and graders without model calls
+        run: npm run test:eval
+      - name: Test maintenance controller and release gates without model calls
+        run: npm run test:maintenance
       - name: Test a real terminal session
         if: runner.os == 'macOS'
         run: |
           cargo build --release --locked --manifest-path apps/tui-rs/Cargo.toml
           expect apps/tui-rs/tests/pty-smoke.exp
+
+  msrv:
+    name: MSRV 1.88 (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/tui-rs
+          key: msrv-1.88
+      - name: Build all Rust targets at the minimum supported version
+        run: cargo build --locked --all-targets --manifest-path apps/tui-rs/Cargo.toml
 
   dependency-audit:
     name: Dependency audit

@@ -19,19 +19,22 @@ pub struct RuntimePaths {
 
 impl RuntimePaths {
     pub fn discover() -> Result<Self> {
-        let runtime_dir = if let Some(value) = env::var_os("DAO_RUNTIME_DIR") {
+        let runtime_dir = if let Some(value) = env_var_os("QI_AGENT_RUNTIME_DIR", "DAO_RUNTIME_DIR")
+        {
             PathBuf::from(value)
         } else if let Some(value) = env::var_os("XDG_RUNTIME_DIR") {
-            PathBuf::from(value).join("dao")
+            PathBuf::from(value).join("qi-agent")
         } else {
-            env::temp_dir().join(format!("dao-{}", unsafe { libc::geteuid() }))
+            env::temp_dir().join(format!("qi-agent-{}", unsafe { libc::geteuid() }))
         };
-        let state_dir = if let Some(value) = env::var_os("DAO_STATE_DIR") {
+        let state_dir = if let Some(value) = env_var_os("QI_AGENT_STATE_DIR", "DAO_STATE_DIR") {
             PathBuf::from(value)
+        } else if let Some(value) = env::var_os("QI_AGENT_HOME") {
+            PathBuf::from(value).join("state")
         } else if let Some(value) = env::var_os("XDG_STATE_HOME") {
-            PathBuf::from(value).join("dao")
+            PathBuf::from(value).join("qi-agent")
         } else {
-            home_dir()?.join(".local/state/dao")
+            home_dir()?.join(".qi-agent/state")
         };
         let paths = Self {
             public_socket: runtime_dir.join("daemon.sock"),
@@ -88,7 +91,7 @@ pub fn discover_repository_root(explicit: Option<&Path>) -> Result<PathBuf> {
     if let Some(path) = explicit {
         return canonical(path);
     }
-    if let Some(value) = env::var_os("DAO_REPOSITORY_ROOT") {
+    if let Some(value) = env_var_os("QI_AGENT_REPOSITORY_ROOT", "DAO_REPOSITORY_ROOT") {
         return canonical(value);
     }
     let mut starts = Vec::new();
@@ -102,12 +105,20 @@ pub fn discover_repository_root(explicit: Option<&Path>) -> Result<PathBuf> {
     }
     for start in starts {
         for ancestor in start.ancestors() {
-            if ancestor.join("bb.edn").is_file() && ancestor.join("src/agent/cli.clj").is_file() {
+            if ancestor.join("bb.edn").is_file() && ancestor.join("src/qi/cli.clj").is_file() {
                 return canonical(ancestor);
             }
         }
     }
-    bail!("could not locate the dao repository root; set DAO_REPOSITORY_ROOT")
+    bail!("could not locate the qi-agent repository root; set QI_AGENT_REPOSITORY_ROOT")
+}
+
+pub fn env_var(primary: &str, legacy: &str) -> Option<String> {
+    env::var(primary).ok().or_else(|| env::var(legacy).ok())
+}
+
+pub fn env_var_os(primary: &str, legacy: &str) -> Option<std::ffi::OsString> {
+    env::var_os(primary).or_else(|| env::var_os(legacy))
 }
 
 fn home_dir() -> Result<PathBuf> {
@@ -160,14 +171,15 @@ mod tests {
 
     #[test]
     fn worker_socket_stays_below_the_macos_sun_len_limit() {
-        let runtime = PathBuf::from("/var/folders/fg/v9z1bzlj0g96pcgpmg2ht3b80000gn/T/dao-501");
+        let runtime =
+            PathBuf::from("/var/folders/fg/v9z1bzlj0g96pcgpmg2ht3b80000gn/T/qi-agent-501");
         let socket = paths(runtime).worker_socket("worker-e8e646b7-3451-4c9d-97b6-8cecf266ca11");
         assert!(socket.as_os_str().as_bytes().len() < 104, "{socket:?}");
     }
 
     #[test]
     fn worker_socket_names_are_stable_and_distinct() {
-        let paths = paths(PathBuf::from("/tmp/dao-501"));
+        let paths = paths(PathBuf::from("/tmp/qi-agent-501"));
         let first = paths.worker_socket("worker-00000000-0000-0000-0000-000000000001");
         assert_eq!(
             first,

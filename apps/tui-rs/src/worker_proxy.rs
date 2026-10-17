@@ -1,4 +1,4 @@
-use crate::paths::{RuntimePaths, set_owner_only_file};
+use crate::paths::{RuntimePaths, env_var, set_owner_only_file};
 use anyhow::{Context, Result, bail};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
@@ -35,6 +35,8 @@ pub struct WorkerDescriptor {
     pub repository_root: PathBuf,
     pub config_path: PathBuf,
     #[serde(default)]
+    pub preset_id: Option<String>,
+    #[serde(default)]
     pub repl_backend: Option<String>,
     pub socket_path: PathBuf,
     pub token: String,
@@ -70,6 +72,7 @@ impl WorkerDescriptor {
             session_path,
             repository_root,
             config_path,
+            preset_id: None,
             repl_backend: None,
             token,
             generation: 1,
@@ -292,7 +295,7 @@ fn start_babashka(
         .arg("-cp")
         .arg(classpath)
         .arg("-m")
-        .arg("agent.cli")
+        .arg("qi.cli")
         .arg("--config")
         .arg(&snapshot.config_path)
         .arg("--session")
@@ -300,6 +303,12 @@ fn start_babashka(
         .arg("--mode")
         .arg("rpc")
         .current_dir(&snapshot.workspace_path)
+        .env("QI_AGENT_ID", &snapshot.agent_id)
+        .env("QI_AGENT_WORKER_ID", &snapshot.worker_id)
+        .env(
+            "QI_AGENT_WORKER_GENERATION",
+            snapshot.generation.to_string(),
+        )
         .env("DAO_AGENT_ID", &snapshot.agent_id)
         .env("DAO_WORKER_ID", &snapshot.worker_id)
         .env("DAO_WORKER_GENERATION", snapshot.generation.to_string())
@@ -307,10 +316,11 @@ fn start_babashka(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if let Some(backend) = &snapshot.repl_backend {
-        command.env("DAO_REPL_BACKEND", backend);
+        command
+            .env("QI_AGENT_REPL_BACKEND", backend)
+            .env("DAO_REPL_BACKEND", backend);
     }
-    if let Some(seconds) = std::env::var("DAO_WORKER_CPU_SECONDS")
-        .ok()
+    if let Some(seconds) = env_var("QI_AGENT_WORKER_CPU_SECONDS", "DAO_WORKER_CPU_SECONDS")
         .and_then(|value| value.parse::<libc::rlim_t>().ok())
         .filter(|value| *value > 0)
     {
@@ -572,7 +582,8 @@ mod tests {
 
     #[test]
     fn descriptor_round_trips_without_losing_identity() {
-        let root = std::env::temp_dir().join(format!("dao-worker-test-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("qi-agent-worker-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         let paths = RuntimePaths {
             runtime_dir: root.join("run"),
@@ -585,7 +596,7 @@ mod tests {
             client_id: root.join("state/client-id"),
         };
         paths.ensure().unwrap();
-        let value = WorkerDescriptor::new(
+        let mut value = WorkerDescriptor::new(
             &paths,
             "worker-1".into(),
             "agent-1".into(),
@@ -596,10 +607,12 @@ mod tests {
             root.join("agent.edn"),
             "secret".into(),
         );
+        value.preset_id = Some("standard".into());
         let path = paths.worker_descriptor("worker-1");
         write_descriptor(&path, &value).unwrap();
         let loaded = read_descriptor(&path).unwrap();
         assert_eq!(loaded.agent_id, "agent-1");
+        assert_eq!(loaded.preset_id.as_deref(), Some("standard"));
         assert_eq!(loaded.token, "secret");
         fs::remove_dir_all(root).unwrap();
     }
