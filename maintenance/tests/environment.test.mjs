@@ -12,21 +12,23 @@ async function fixture(t) {
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'qi-environment-'));
   t.after(()=>fs.rm(directory,{recursive:true,force:true}));
   const calls=[];
-  let unhealthy=false, ownerUnknown=false, kernel='fixture-kernel';
+  let unhealthy=false, ownerUnknown=false, kernel='fixture-kernel', endpoint='unix:///fixture/docker.sock', engine='fixture-engine';
   const run=async(command,argv,options)=>{
     assert.equal(command,'docker'); assert.ok(options.timeoutMs>0&&options.timeoutMs<=5000);assert.equal(options.maxOutputBytes,65536);
     calls.push(argv);
     if(unhealthy&&argv[0]==='info')return{...result(''),timed_out:true,exit_code:null};
-    if(argv[0]==='context')return result(argv[1]==='show'?'fixture':'unix:///fixture/docker.sock');
+    if(argv[0]==='context')return result(argv[1]==='show'?'fixture':endpoint);
     if(argv[0]==='version')return result({Server:{Version:'fixture-version'}});
-    if(argv[0]==='info')return result({ID:'fixture-engine',KernelVersion:kernel,OperatingSystem:'fixture-vm',Architecture:'arm64',NCPU:2,MemTotal:1024});
+    if(argv[0]==='info')return result({ID:engine,KernelVersion:kernel,OperatingSystem:'fixture-vm',Architecture:'arm64',NCPU:2,MemTotal:1024});
+    assert.equal(options.env.DOCKER_HOST,endpoint);assert.equal(options.env.DOCKER_CONTEXT,undefined);
     if(argv[0]==='image')return result({Id:image});
     if(argv[0]==='inspect')return ownerUnknown?{...result(''),exit_code:1,stderr:'engine disconnected'}:
       {...result(''),exit_code:1,stderr:'No such container: owned'};
     throw new Error('unreviewed command');
   };
   const options={image,directory,run,env:{},deadline:Date.now()+30000};
-  return {options,calls,setUnhealthy:v=>unhealthy=v,setUnknown:v=>ownerUnknown=v,setKernel:v=>kernel=v};
+  return {options,calls,setUnhealthy:v=>unhealthy=v,setUnknown:v=>ownerUnknown=v,setKernel:v=>kernel=v,
+    setEndpoint:v=>endpoint=v,setEngine:v=>engine=v};
 }
 
 test('fingerprints bind engine/kernel/image/resources and bounded raw receipts',async t=>{
@@ -38,8 +40,8 @@ test('fingerprints bind engine/kernel/image/resources and bounded raw receipts',
 });
 
 test('healthy engine cannot clear shared quarantine while old owner is unknown',async t=>{
-  const f=await fixture(t);f.setUnhealthy(true);
-  await assert.rejects(inspectEnvironment({...f.options,owners:[owner]}),/environment-unavailable/);
+  const f=await fixture(t),environment=(await inspectEnvironment(f.options)).binding;f.setUnhealthy(true);
+  await assert.rejects(inspectEnvironment({...f.options,owners:[{...owner,environment}]}),/environment-unavailable/);
   f.setUnhealthy(false);
   await assert.rejects(inspectEnvironment({...f.options,stateRoot:'another-state'}),/quarantined/);
   f.setUnknown(true);
@@ -53,8 +55,8 @@ test('healthy engine cannot clear shared quarantine while old owner is unknown',
 });
 
 test('unknown cleanup is quarantined even if engine probes succeed',async t=>{
-  const f=await fixture(t);
-  await assert.rejects(inspectEnvironment({...f.options,owners:[owner],failure:'owned cleanup unknown'}),/owned cleanup unknown/);
+  const f=await fixture(t),environment=(await inspectEnvironment(f.options)).binding;
+  await assert.rejects(inspectEnvironment({...f.options,owners:[{...owner,environment}],failure:'owned cleanup unknown'}),/owned cleanup unknown/);
   await assert.rejects(inspectEnvironment(f.options),/quarantined/);
 });
 
@@ -65,4 +67,25 @@ test('expired deadlines dispatch no probe and endpoint lookup failure blocks ano
   await assert.rejects(inspectEnvironment(f.options),/unresolved endpoint/);
   assert.equal(f.calls.length,0);
   await inspectEnvironment({...f.options,reconcile:true});
+});
+
+test('switching endpoint or replacing its engine cannot reconcile an original owner',async t=>{
+  for(const replacement of ['endpoint','engine']){
+    const f=await fixture(t),environment=(await inspectEnvironment(f.options)).binding;
+    f.setUnhealthy(true);
+    await assert.rejects(inspectEnvironment({...f.options,owners:[{...owner,environment}]}),/environment-unavailable/);
+    f.setUnhealthy(false);
+    if(replacement==='endpoint')f.setEndpoint('unix:///another.sock');else f.setEngine('replacement-engine');
+    await assert.rejects(inspectEnvironment({...f.options,reconcile:true}),/original (endpoint|engine)/);
+    assert.equal(f.calls.some(argv=>argv[0]==='inspect'),false);
+    f.setEndpoint('unix:///fixture/docker.sock');f.setEngine('fixture-engine');
+    assert.equal((await inspectEnvironment({...f.options,reconcile:true})).status,'PASS');
+  }
+});
+
+test('legacy owner without an original binding stays quarantined',async t=>{
+  const f=await fixture(t);
+  await fs.writeFile(path.join(f.options.directory,'unresolved.json'),JSON.stringify({owners:[owner]}));
+  await assert.rejects(inspectEnvironment({...f.options,reconcile:true}),/original engine identity binding missing/);
+  assert.equal(f.calls.some(argv=>argv[0]==='inspect'),false);
 });

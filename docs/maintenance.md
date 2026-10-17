@@ -86,7 +86,10 @@ Web 宿主固定私有回执目录与可信控制器 SHA，在读取时对账完
 宿主 `~/.qi-agent/maintenance-environments/` 的故障记录跨 state 目录共享；引擎不可达或
 自有容器清理结果未知时停止接纳。成功的普通探针不会清除隔离状态。已审查控制器可显式执行
 `node maintenance/doctor.mjs --environment-only --reconcile-environment --image EXACT_DIGEST`，
-先核对保存的每个容器 owner／身份和停止状态，再通过全部探针解除隔离。未知身份继续阻断，
+每个容器在启动前保存原 endpoint 摘要、engine ID 与固定路由；执行和清理使用该路由，
+引擎身份变化时拒绝执行或清理。对账须选回原端点和引擎，先核对每个 owner／身份和停止状态，
+再通过全部探针解除隔离。切换引擎后的“No such container”不能清除旧隔离；缺少原引擎绑定的
+旧所有权回执仍需人工核对。未知身份继续阻断，
 不按 TTL 抢锁、不自动重放任务、不重启／升级 VM，也不删除容器。该控制器变更需独立审查后部署；
 候选验收仍使用原可信控制器，不自动启用候选的新闸门。
 

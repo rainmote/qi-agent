@@ -188,9 +188,11 @@ async function executeCheck({ root, lock, state, task, check, workspace, phase, 
   if (await operatorPaused(root)) return { id: check.id, phase, status: 'CANCELLED', reason: 'operator-paused' };
   const remaining = deadline - Date.now();
   if (remaining <= 0) return { id: check.id, phase, status: 'NOT_RUN', reason: 'wall-budget' };
+  let environment;
   if (execute === containerCommand) {
     try {
       const receipt = await inspectEnvironment({ image: task.image, resources: task.resources, deadline });
+      environment = receipt.binding;
       await lock.append('environment/probe', { task_id: task.task_id, receipt: await putArtifact(root, encode(receipt)) });
       if (state.environment_fingerprint && state.environment_fingerprint !== receipt.fingerprint) throw new Error('environment-unavailable: baseline environment changed');
     } catch (error) {
@@ -203,15 +205,16 @@ async function executeCheck({ root, lock, state, task, check, workspace, phase, 
   const started = new Date().toISOString();
   const name = 'qi-maint-check-' + randomUUID();
   const owner = randomUUID();
-  await lock.append('check/start', { task_id: task.task_id, check_id: check.id, phase, container: name, container_owner: owner });
+  const ownership = { container: name, container_owner: owner, ...(environment ? { environment } : {}) };
+  await lock.append('check/start', { task_id: task.task_id, check_id: check.id, phase, ...ownership });
   let result;
   try { result = await execute({ image: task.image, argv: check.argv, workspace, readonly: true,
     mounts: [{ source: path.join(state.material, 'verifier'), target: '/acceptance' }],
-    timeoutMs: Math.min(executionRemaining, check.timeout_seconds * 1000), name, owner, resources: task.resources,
+    timeoutMs: Math.min(executionRemaining, check.timeout_seconds * 1000), name, owner, environment, resources: task.resources,
     shouldStop: () => operatorPaused(root) }); }
   catch (error) {
     if (execute === containerCommand) await inspectEnvironment({ image: task.image, resources: task.resources, deadline,
-      owners: [{ container: name, container_owner: owner }], failure: error.message }).catch(async fault => {
+      owners: [ownership], failure: error.message }).catch(async fault => {
         if (fault.receipt) await lock.append('environment/probe', { task_id: task.task_id, receipt: await putArtifact(root, encode(fault.receipt)) });
         throw fault;
       });
@@ -220,7 +223,7 @@ async function executeCheck({ root, lock, state, task, check, workspace, phase, 
   if (execute === containerCommand) {
     try {
       const receipt = await inspectEnvironment({ image: task.image, resources: task.resources, deadline,
-        owners: [{ container: name, container_owner: owner }] });
+        owners: [ownership] });
       await lock.append('environment/probe', { task_id: task.task_id, receipt: await putArtifact(root, encode(receipt)) });
       if (state.environment_fingerprint && state.environment_fingerprint !== receipt.fingerprint) throw new Error('environment-unavailable: baseline environment changed');
     } catch (error) {
@@ -272,6 +275,7 @@ export async function preflight({ root, id, lock, execute = containerCommand,
       await lock.append('environment/probe', { task_id: id, receipt: await putArtifact(root, encode(receipt)) });
       if (state.environment_fingerprint && state.environment_fingerprint !== receipt.fingerprint) throw new Error('environment-unavailable: baseline environment changed');
       state.environment_fingerprint = receipt.fingerprint;
+      state.environment_binding = receipt.binding;
     } catch (error) {
       if (error.receipt) await lock.append('environment/probe', { task_id: id, receipt: await putArtifact(root, encode(error.receipt)) });
       return transition(root, lock, id, state.revision, 'uncertain', { reason: error.message, checks: state.checks ?? [] });
@@ -306,7 +310,8 @@ export async function preflight({ root, id, lock, execute = containerCommand,
       }
     }
     await lock.append('task/preflight', { task_id: id, preflight_passed: true, checks,
-      ...(state.environment_fingerprint ? { environment_fingerprint: state.environment_fingerprint } : {}) });
+      ...(state.environment_fingerprint ? { environment_fingerprint: state.environment_fingerprint,
+        environment_binding: state.environment_binding } : {}) });
     return taskState(await readJournal(root), id);
   } catch (error) {
     return transition(root, lock, id, state.revision, 'uncertain', { reason: error.message, checks });
@@ -384,7 +389,8 @@ export async function implement({ root, id, lock, driver, budget, execute = cont
   const runId = randomUUID();
   const driverArtifact = await putArtifact(root, encode(driver));
   state = await transition(root, lock, id, state.revision, 'implementing', { run_id: runId, attempts: state.attempts + 1,
-    container: 'qi-maint-' + runId, container_owner: randomUUID(), driver: driverArtifact });
+    container: 'qi-maint-' + runId, container_owner: randomUUID(), driver: driverArtifact,
+    ...(state.environment_binding ? { environment: state.environment_binding } : {}) });
   const deadline = state.started_at + (policy.wall_seconds - policy.verification_reserve_seconds) * 1000;
   let argv = driver.mode !== 'offline' ? ['bb', '--classpath', '/controller/src:/controller/plugins', '/controller/maintenance/worker.clj',
     '/profile/agent.edn', task.goal + '\nAllowed deliverables: ' + task.allowed_files.join(', ')] : driver.argv;
@@ -401,8 +407,16 @@ export async function implement({ root, id, lock, driver, budget, execute = cont
     execution = await execute({ image: task.image, argv, workspace: state.workspace, readonly: false, mounts,
       timeoutMs: Math.max(1, deadline - Date.now()), network: driver.paid === true && !brokered,
       envNames: driver.paid === true && !brokered ? ['OPENAI_API_KEY'] : [], name: state.container, owner: state.container_owner,
-      resources: task.resources, shouldStop: async () => !!broker?.failure() || await paused() });
+      environment: state.environment_binding, resources: task.resources, shouldStop: async () => !!broker?.failure() || await paused() });
   } catch (error) {
+    if (execute === containerCommand) {
+      try {
+        await inspectEnvironment({ image: task.image, resources: task.resources, deadline,
+          owners: [{ container: state.container, container_owner: state.container_owner, environment: state.environment_binding }], failure: error.message });
+      } catch (fault) {
+        if (fault.receipt) await lock.append('environment/probe', { task_id: id, receipt: await putArtifact(root, encode(fault.receipt)) });
+      }
+    }
     return transition(root, lock, id, state.revision, 'uncertain', { reason: 'execution-uncertain: ' + error.message });
   } finally { if (broker) await broker.close(); }
   const artifact = await putArtifact(root, encode(execution));
@@ -477,7 +491,8 @@ export async function recover({ root, lock, cleanup = cleanupContainer }) {
     if (['queued', 'scoped', 'implementing', 'verifying'].includes(state.status)) {
       const receipts = events.filter((e) => e.data.task_id === id && e.data.container_owner).map((e) => e.data);
       for (const receipt of receipts) {
-        const result = await cleanup(receipt.container, receipt.container_owner);
+        if (cleanup === cleanupContainer && !receipt.environment) throw new Error('Original engine binding missing; manual container reconciliation required');
+        const result = await cleanup(receipt.container, receipt.container_owner, undefined, receipt.environment);
         await lock.append('resource/reconciled', { task_id: id, ...result });
       }
       states.push(await transition(root, lock, id, state.revision, 'uncertain', { reason: 'interrupted-process-reconcile-before-new-task' }));

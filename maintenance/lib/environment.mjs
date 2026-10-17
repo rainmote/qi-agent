@@ -14,13 +14,14 @@ export async function inspectEnvironment({ image, resources, deadline, directory
   run = runProcess, reconcile = false, owners = [], failure = null, env = process.env }) {
   immutableImage(image);
   const limits = resourceLimits(resources), probes = [];
-  let endpoint, key, lock;
+  let endpoint, key, lock, globalFault, oldFault;
+  const dockerEnv = { ...env };
   const record = { started_at: new Date().toISOString(), image, resources: limits, probes, owners, status: 'UNKNOWN' };
   const probe = async argv => {
     const remaining = deadline - Date.now();
     if (!Number.isFinite(remaining) || remaining <= 0) throw new Error('original deadline exhausted');
     const started_at = new Date().toISOString();
-    const result = await run('docker', argv, { timeoutMs: Math.min(5000, remaining), maxOutputBytes: 65536 });
+    const result = await run('docker', argv, { env: dockerEnv, timeoutMs: Math.min(5000, remaining), maxOutputBytes: 65536 });
     probes.push({ argv, started_at, ended_at: new Date().toISOString(),
       output_sha256: digest(encode(result)), result });
     if (!ok(result)) throw new Error('bounded Docker probe failed');
@@ -30,21 +31,39 @@ export async function inspectEnvironment({ image, resources, deadline, directory
   lock = await lockStore(directory, { recover: reconcile });
   try {
     // A failed endpoint lookup conservatively blocks all endpoints on this host.
-    const globalFault = await read(path.join(directory, 'unresolved.json'));
-    if (globalFault && !reconcile) throw new Error('unresolved endpoint requires explicit reconciliation');
+    globalFault = await read(path.join(directory, 'unresolved.json'));
+    if (globalFault && !reconcile) throw new Error('unresolved endpoint quarantined; requires explicit reconciliation');
     const context = await probe(['context', 'show']);
     endpoint = env.DOCKER_HOST && !env.DOCKER_CONTEXT ? env.DOCKER_HOST :
       await probe(['context', 'inspect', context, '--format', '{{.Endpoints.docker.Host}}']);
-    if (!endpoint || endpoint.length > 4096) throw new Error('invalid engine endpoint');
+    if (!endpoint || endpoint.length > 4096 || /[\0\r\n]/.test(endpoint)) throw new Error('invalid engine endpoint');
     key = digest(endpoint);
     record.endpoint = { context, identity: key };
+    // Freeze routing after context discovery; later context changes cannot send
+    // an original owner's inspection to a different daemon.
+    dockerEnv.DOCKER_HOST = endpoint;
+    delete dockerEnv.DOCKER_CONTEXT;
     const faultFile = path.join(directory, 'fault-' + key + '.json');
-    const oldFault = await read(faultFile);
+    oldFault = await read(faultFile);
     if (oldFault && !reconcile) throw new Error('endpoint quarantined; reconcile owned containers first');
+    const version = JSON.parse(await probe(['version', '--format', '{{json .}}']));
+    const info = JSON.parse(await probe(['info', '--format',
+      '{"ID":{{json .ID}},"KernelVersion":{{json .KernelVersion}},"OperatingSystem":{{json .OperatingSystem}},"Architecture":{{json .Architecture}},"NCPU":{{json .NCPU}},"MemTotal":{{json .MemTotal}}}']));
+    if (!version.Server?.Version || !info.ID || !info.KernelVersion || !info.OperatingSystem) throw new Error('incomplete environment identity');
+    record.binding = { endpoint: key, engine: info.ID, host: endpoint };
+    const assertOrigin = owner => {
+      const origin = owner.environment;
+      if (!/^[a-f0-9]{64}$/.test(origin?.endpoint ?? '') || typeof origin?.engine !== 'string' || !origin.engine)
+        throw new Error('original engine identity binding missing; manual reconciliation required');
+      if (origin.endpoint !== key) throw new Error('original endpoint must be selected for reconciliation');
+      if (origin.engine !== info.ID) throw new Error('original engine must be selected for reconciliation');
+    };
+    owners.forEach(assertOrigin);
     if (reconcile) {
       const receipts = [...(globalFault?.owners ?? []), ...(oldFault?.owners ?? [])];
       const seen = new Map();
       for (const owner of receipts) {
+        assertOrigin(owner);
         if (!/^qi-maint-(?:check-)?[a-f0-9-]{36}$/.test(owner.container ?? '') ||
           !/^[a-f0-9-]{36}$/.test(owner.container_owner ?? '')) throw new Error('unknown container ownership receipt');
         const previous = seen.get(owner.container);
@@ -56,7 +75,7 @@ export async function inspectEnvironment({ image, resources, deadline, directory
           '{"Id":{{json .Id}},"owner":{{json (index .Config.Labels "qi.maintenance.owner")}},"running":{{json .State.Running}}}', owner.container];
         const started_at = new Date().toISOString();
         const result = await run('docker', argv,
-          { timeoutMs: Math.min(5000, remaining), maxOutputBytes: 65536 });
+          { env: dockerEnv, timeoutMs: Math.min(5000, remaining), maxOutputBytes: 65536 });
         probes.push({ argv, started_at, ended_at: new Date().toISOString(),
           output_sha256: digest(encode(result)), result });
         if (result.timed_out || result.error || result.signal || result.output_limited) throw new Error('container identity unknown');
@@ -69,9 +88,6 @@ export async function inspectEnvironment({ image, resources, deadline, directory
         }
       }
     }
-    const version = JSON.parse(await probe(['version', '--format', '{{json .}}']));
-    const info = JSON.parse(await probe(['info', '--format',
-      '{"ID":{{json .ID}},"KernelVersion":{{json .KernelVersion}},"OperatingSystem":{{json .OperatingSystem}},"Architecture":{{json .Architecture}},"NCPU":{{json .NCPU}},"MemTotal":{{json .MemTotal}}}']));
     const actualImage = JSON.parse(await probe(['image', 'inspect', '--format',
       '{"Id":{{json .Id}},"RepoDigests":{{json .RepoDigests}}}', image]));
     if (!version.Server?.Version || !info.ID || !info.KernelVersion || !info.OperatingSystem || !actualImage.Id ||
@@ -90,9 +106,12 @@ export async function inspectEnvironment({ image, resources, deadline, directory
     return record;
   } catch (error) {
     record.reason = error.message; record.ended_at = new Date().toISOString();
-    const file = path.join(directory, key ? 'fault-' + key + '.json' : 'unresolved.json');
+    // Every unknown cleanup blocks the host, including a switch to another
+    // endpoint. Preserve each original binding even when discovery now fails.
+    const file = path.join(directory, 'unresolved.json');
     const previous = await read(file);
-    record.owners = [...(previous?.owners ?? []), ...owners];
+    record.owners = [...new Map([...(previous?.owners ?? []), ...(oldFault?.owners ?? []), ...owners]
+      .map(owner => [encode(owner), owner])).values()];
     await durableWrite(file, encode(record));
     throw Object.assign(new Error('environment-unavailable: ' + error.message), { receipt: record });
   } finally { await lock.close(); }
