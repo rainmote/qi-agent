@@ -120,7 +120,71 @@ worker 重启把已领取任务转为 `needs_review`。父会话必须提供核�
 | `team.mailbox` | 无 | 实际调用成员的消息 |
 | `team.ack` | `message_ids` | 已确认 id |
 
+## 任务树用量边界
+
+原生父子 run 保留各自的 `request-usage` 会话小计，父结果另给 `root-request-usage`。子会话在原根会话
+日志持久写入最小请求索引；只按真实 root-run 身份聚合，不扫描用户目录、不把两个小计再相加收费。
+登记但未结束的子 run、未结算请求、不能关联原生执行身份的外部 provider 都使任务树完整性为 false。
+外部 CLI 的自报 usage 不被推断为本地逻辑请求账本。独立人工压缩不猜测归属；完整费用继续为 null。
+索引依赖原来的会话写入与取消边界，不增加子代理权限或自动重放。详见 [任务树记账](runtime-integrity.md)。
+
 ## 离线验证
+
+### 可选外部 CLI 契约 PoC
+
+`qi.plugins.subagent-external-cli` 可向现有 registry 注册 `:external-cli`，默认 profile 不装配它。配置必须显式提供 `:enabled true`、专用 `:workspace-root` 和以绝对可执行文件开头的 `:command` argv；可选 `:node` 指定 Node 路径。每次运行建立独立 work/home 目录，只向 CLI 传入 PATH、HOME、TMPDIR，不继承个人认证、环境密钥或用户启动文件。请求正文通过 stdin 发送，不拼入 shell。
+
+这是 POSIX 离线契约实验。CLI 从 stdin 接收 `{type:"start",prompt,run_id}`，stdout 输出 JSONL `progress` 或唯一 `result`（status、output、可选 usage）。只有有效终态和零退出码共同成立才可 completed；缺失终态、超时分别记 uncertain。interrupt/stop 先固定取消结果，再终止整个进程组，迟到的 completed 不能覆盖它；输出和 stderr 尾部有上限。verification 固定 not-run，accounting_complete=false、total_cost_usd=null，外部声明不构成独立验收。
+
+该实验没有把工作目录隔离当作操作系统沙箱。仅在专用外层隔离环境启用；它不宣称支持真实 Codex/Claude 协议、审批或费用。真实接入还须固定 CLI 版本、独立 profile 与显式实验授权；现有默认只读子代理保持原有装配。
+
+`node --test evals/tests/external-cli.test.mjs` 使用 fake executable 检查 JSONL、独立 cwd、环境隔离、有界日志、非零退出、缺失/重复终态、取消竞态和不响应 TERM 的子孙进程回收，并经 Babashka registry 验证调用契约。无模型调用。
+
+### 固定 Codex exec 协议离线回放
+
+#### 两种用途的冻结兼容表（2026-10-17）
+
+| 用途 | CLI / 二进制绑定 | 认证与 sandbox | 控制和证据 |
+| --- | --- | --- | --- |
+| 外部只读 subagent | 0.157.1；每次 dispatch 必须提供绝对 executable 的 SHA-256，语料本身不选择生产二进制 | 新空 HOME/CODEX_HOME，无认证发现；read-only | start/wait/interrupt/stop；文档构造成功、已观察失败和离线进程控制；真实成功/中止/恢复 NOT_RUN |
+| 受监督维护 writer/reviewer | 0.162.0-alpha.17.2；显式绝对 `--codex` 的逐次 identity 保存哈希，历史小探针未记录哈希，保留 null | CLI 管理既有 ChatGPT 登录；writer workspace-write、reviewer read-only，shell 网络关闭 | 原期限和最多三次实现、pause/进程组终止/明确对账；已有只读接入成功，严格容器任务另有 baseline uncertain |
+
+机器清单在 `evals/fixtures/codex-compatibility.json`。两个入口只共享脱敏事件和规范化结果，
+不共享认证环境或发现代码。`codex-compatibility.test.mjs` 将历史失败和 alpha 版本只读成功
+回放给两个纯 decoder；这不允许 subagent 的进程入口改用 alpha 版本，也不补证它的真实成功。
+新成功 fixture 保留原 artifact 和启动 metadata 的哈希，thread ID／答复文字明确脱敏；
+缺失的历史 executable 哈希、真实中止与恢复仍未知，不重跑模型补造证据。
+事件说明依据 [OpenAI Docs 非交互协议](https://learn.chatgpt.com/docs/non-interactive-mode)。
+
+可在同一桥接器显式选择 `:protocol :codex-exec-jsonl-v1`；当前版本合同只接受
+`:cli-version "0.157.1"`、`:cli-sha256`（绝对可执行文件的 SHA-256）、单元素
+`:command ["/absolute/codex"]` 及显式 `:model`。宿主先独立核对版本/帮助并冻结二进制；
+适配器在启动前检查该文件摘要。版本是宿主声明，不是适配器的语义互操作认证。
+不提供可直接启用的含认证示例，也不会选择模型或加载个人凭据。
+
+argv 固定为 non-interactive exec、JSONL、ephemeral、ignore-user-config、
+read-only sandbox 和无交互审批；提示词原样经 stdin，HOME/CODEX_HOME 指向同一个
+私有新目录。只读参数和 cwd 仍不等于外层进程/网络隔离。认证与真实试跑需要后续独立
+profile、明确预算和授权，本次没有执行真实 `codex exec`。
+
+按 [OpenAI Docs 非交互模式](https://learn.chatgpt.com/docs/non-interactive-mode)
+解码 thread/turn/item 事件，保留有界工具进度和未知原始事件类型。完成还须唯一有效终态
+及零退出码；中断、错误、重复/缺失终态和超时保守失败或未知，取消先于晚到完成。
+能力 descriptor 声明不支持多轮、persona、tool-filter、output-schema 或审批对话。
+usage_scope 为 external-turn-reported：cached_input_tokens 是 input_tokens 的子集，
+reasoning_output_tokens 也不再叠加到 output_tokens；它不是本地逻辑请求账本，完整费用仍 null。
+
+`evals/fixtures/codex-exec-0.157.1.documented.json` 是**文档格式构造的离线 fixture**，
+不是已观察真实 transcript。本机只在隔离 HOME 中检查了0.157.1版本和帮助；ID、工具命令、
+回答及 token 数均为合成值。`evals/tests/codex-cli.test.mjs` 与原通用 CLI 测试共同验证
+解码和生命周期；真实脱敏 transcript 与授权后的模型互操作实验仍为 NOT_RUN。
+
+另有 `codex-exec-0.157.1.observed-failure.json`，来自 2026-10-16 已观察到的
+provider 拒绝日志；metadata 固定原始 artifact 的 SHA-256，仅替换 thread ID。
+它证明失败序列的兼容性，不证明当前模型可用性或成功互操作。只允许已开始 thread 的
+turn 前 `item.completed(error)` 诊断；顶层 error 暂存，由 turn.failed 收口并保留最多
+2048 字符原因。仅有 error 的 EOF 记失败；无 error、无终态仍未知。已知失败在非零退出时
+保留原因，成功终态遇到非零退出仍失败；取消、重复终态、畸形诊断和非法 usage 的围栏继续生效。
 
 `qi.orchestration-test` 覆盖计划批准/拒绝/取消/版本失效、执行前复检、工作流并发/依赖失败/结构化结果、任务 CAS 与身份隔离、邮箱以及 RPC schema。`qi.orchestration-recovery-test` 覆盖未知 provider 准入、worker dispose、恢复不重放、人工核对后局部续跑、直接 RPC 的计划限制与依赖取消一致性。
 

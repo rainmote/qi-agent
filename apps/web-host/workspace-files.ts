@@ -5,6 +5,7 @@ import { basename, extname, isAbsolute, join, relative, resolve, sep } from "nod
 import { homedir } from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { readWorkspaceVerification, type VerificationConfig, type WorkspaceVerification } from "../shared/workspace-verification.mjs";
 import type { WorkspaceRegistry } from "./workspaces.js";
 import { ensurePrivateDirectory, writePrivateFileAtomically } from "./storage.js";
 
@@ -23,7 +24,8 @@ export interface FileEntry { name: string; path: string; kind: "directory" | "fi
 export interface FileListing { path: string; entries: FileEntry[]; truncated: boolean }
 export interface FilePreview { path: string; name: string; mime: string; size: number; kind: "text" | "image" | "pdf" | "html" | "unsupported"; text?: string; notice?: string }
 export interface FileChange { path: string; status: "added" | "modified" | "deleted"; before: string; after: string; diff: string }
-export interface ChangeSet { turnId: string; files: FileChange[]; partial: boolean; notice?: string }
+export interface TurnExecution { status: "completed" | "failed" | "cancelled" | "uncertain"; reason?: string }
+export interface ChangeSet { turnId: string; files: FileChange[]; partial: boolean; notice?: string; verification?: WorkspaceVerification; execution?: TurnExecution }
 interface Snapshot { workspaceId: string; sessionId?: string; files: Record<string, string>; partial: boolean }
 export interface ServedFile { body: Buffer; headers: Record<string, string> }
 
@@ -55,7 +57,12 @@ function diff(path: string, before: string, after: string): string {
 export class WorkspaceFiles {
   readonly attachmentDirectory: string;
   readonly snapshotDirectory: string;
-  constructor(private readonly workspaces: WorkspaceRegistry, options: { attachmentDirectory?: string; snapshotDirectory?: string } = {}) {
+  private readonly verification: VerificationConfig | undefined;
+  private candidateReader?: (workspaceId: string, changes: ChangeSet) => Promise<WorkspaceVerification | undefined>;
+  useCandidateVerification(reader: (workspaceId: string, changes: ChangeSet) => Promise<WorkspaceVerification | undefined>): void { this.candidateReader = reader; }
+  constructor(private readonly workspaces: WorkspaceRegistry, options: { attachmentDirectory?: string; snapshotDirectory?: string; verification?: VerificationConfig } = {}) {
+    this.verification = options.verification;
+    if (this.verification && (!isAbsolute(this.verification.directory) || !/^[a-f0-9]{40}$/.test(this.verification.controllerSha))) throw new Error("Pin an absolute verifier directory and trusted controller SHA");
     this.attachmentDirectory = options.attachmentDirectory || process.env.QI_AGENT_ATTACHMENT_DIR || join(process.env.QI_AGENT_HOME || join(homedir(), ".qi-agent"), "attachments");
     this.snapshotDirectory = options.snapshotDirectory || join(workspaces.stateDirectory, "snapshots");
   }
@@ -208,7 +215,7 @@ export class WorkspaceFiles {
     return true;
   }
 
-  async finishTurn(workspaceId: string, turnId: string, options: { aborted?: boolean; partialReason?: string } = {}): Promise<ChangeSet> {
+  async finishTurn(workspaceId: string, turnId: string, options: { aborted?: boolean; partialReason?: string; execution?: TurnExecution } = {}): Promise<ChangeSet> {
     validId(turnId); const check = this.workspaces.lease(workspaceId);
     try { return await this.changes(workspaceId, turnId); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     const before: Snapshot = JSON.parse((await this.privateRead(this.snapshotDirectory, `${workspaceId}-${turnId}.before.json`, MAX_SNAPSHOT_BYTES * 3)).toString());
@@ -220,6 +227,7 @@ export class WorkspaceFiles {
       files.push({ path, status: old === undefined ? "added" : next === undefined ? "deleted" : "modified", before: old || "", after: next || "", diff: diff(path, old || "", next || "") });
     }
     const result: ChangeSet = { turnId, files, partial: options.aborted === true || !!options.partialReason || before.partial || after.partial, notice: `${options.partialReason || (options.aborted ? "回合已中断，保留已发生的文件变化。 " : "")}仅对比可读取的文本文件；忽略隐藏、敏感、构建目录及 Git 忽略文件，最多 200 个文件 / 4 MiB。并发工作区操作也可能计入变化。` };
+    if (options.execution) result.execution = options.execution;
     check();
     try { await writeFile(join(this.snapshotDirectory, `${workspaceId}-${turnId}.changes.json`), JSON.stringify(result), { mode: 0o600, flag: "wx" }); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "EEXIST") return await this.changes(workspaceId, turnId); throw error; }
@@ -248,7 +256,13 @@ export class WorkspaceFiles {
     const check = this.workspaces.lease(workspaceId), key = createHash("sha256").update(sessionId).digest("hex");
     try {
       const latest = JSON.parse((await this.privateRead(this.snapshotDirectory, `${workspaceId}-${key}.latest.json`, 4096)).toString());
-      const result = await this.changes(workspaceId, latest.turnId); check(); return result;
+      const result = await this.changes(workspaceId, latest.turnId);
+      // Snapshot JSON cannot assert its own acceptance, including old cached projections.
+      delete result.verification;
+      const candidate = await this.candidateReader?.(workspaceId, result);
+      if (candidate) result.verification = candidate;
+      else if (this.verification) result.verification = await readWorkspaceVerification(this.verification, this.workspaces.get(workspaceId).path, result);
+      check(); return result;
     } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
   }
 

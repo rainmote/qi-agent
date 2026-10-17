@@ -53,6 +53,11 @@ export interface ContextStatus {
   system_tokens: number;
   tool_tokens: number;
   message_tokens: number;
+  basis?: "last-request" | "next-request" | null;
+  reserve_tokens?: number | null;
+  input_limit?: number | null;
+  option_tokens?: number | null;
+  fits?: boolean | null;
 }
 
 export type ProviderProtocol = "openai-completions" | "openai-responses" | "anthropic-messages"
@@ -133,6 +138,23 @@ export interface PolicyStatus {
   modes: Array<{ id: "deny" | "ask" | "allow"; label: string }>;
 }
 
+export interface RunOutcome {
+  "run-id": string;
+  status: "completed" | "failed" | "cancelled" | "uncertain";
+  reason?: string;
+  error?: string;
+  verification?: string | { status?: string } | null;
+}
+
+export interface CompactionProgress {
+  "compaction-id": string;
+  "run-id"?: string;
+  "completed-chunks": number;
+  "total-chunks": number;
+  "elapsed-ms": number;
+  status: string;
+}
+
 export interface AgentState {
   revision?: number;
   phase: "idle" | "model" | "tool" | "retry" | "compacting" | string;
@@ -143,6 +165,8 @@ export interface AgentState {
   "partial-reasoning"?: string;
   attempt?: number | null;
   "last-error"?: string;
+  "last-outcome"?: RunOutcome | null;
+  compaction?: CompactionProgress | null;
 }
 
 export interface HostEvent {

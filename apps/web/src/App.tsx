@@ -8,6 +8,7 @@ import { ApprovalPanel, FullAccessDialog, SettingsDialog, WorkspaceDialog } from
 import { Icon } from "./icons";
 import { applyHostEvent, fromSnapshot, type Projection } from "./projection";
 import { Timeline } from "./Timeline";
+import { RunOverview } from "./RunOverview";
 import { Trajectory } from "./Trajectory";
 import { WorkspacePanel } from "./WorkspacePanel";
 import { ComposerAttachments, ComposerReferences, type AttachmentRef } from "./ComposerAttachments";
@@ -197,9 +198,9 @@ export function App() {
       : (a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
   }, [allSessions, search, sortBy]);
   const runSummary = useMemo(() => {
-    const { turns, steps, calls, durationMs } = projection?.summary || { turns: 0, steps: 0, calls: 0, durationMs: 0 };
-    const timing = durationMs > 0 ? ` · 工具调用 ${(durationMs / 1_000).toFixed(1)}s` : "";
-    return `${turns} 轮 · ${steps} 步 | ${calls} 次工具调用${timing} | ${projection?.events.length || 0} 条轨迹`;
+    const durationMs = projection?.summary.durationMs || 0;
+    const timing = durationMs > 0 ? `工具累计耗时 ${(durationMs / 1_000).toFixed(1)}s · ` : "";
+    return `${timing}${projection?.events.length || 0} 条轨迹`;
   }, [projection?.summary, projection?.events.length]);
 
   const flashNotice = useCallback((message: string, timeout = 4_000) => {
@@ -482,6 +483,7 @@ export function App() {
         if (current()) trust.setStatus(trustStatus);
       } else if (mode === "steer") {
         await api.rpc(session.id, "turn.steer", { message: content });
+        if (current()) flashNotice("已接收，下一模型请求前生效");
       } else if (projection?.state.phase && projection.state.phase !== "idle") {
         await api.rpc(session.id, "turn.follow-up", { message: content });
       } else {
@@ -837,8 +839,8 @@ export function App() {
       </div>
       </ComposerAttachments>
     </div>
-    <div className={`composer-hint ${phase !== "idle" || stopping ? "has-run" : ""}`}><span role="status">{stopping ? "正在停止，请等待运行结束…" : projection?.interactions.length ? "先确认上方操作 · 可继续编辑草稿" : phase !== "idle" ? `${phaseLabel(phase)} · Enter 排队发送` : "Enter 发送 · Shift + Enter 换行"}</span>
-      {phase !== "idle" && !projection?.interactions.length && composer.trim() && <button type="button" className="steer-button" disabled={busy || uploading || stopping || !!pendingOperation} onClick={() => void send("steer")}>立即引导</button>}
+    <div className={`composer-hint ${phase !== "idle" || stopping ? "has-run" : ""}`}><span>{stopping ? "请等待运行结束…" : projection?.interactions.length ? "先确认上方操作 · 可继续编辑草稿" : phase !== "idle" ? "Enter 排队发送 · Shift + Enter 换行" : "Enter 发送 · Shift + Enter 换行"}</span>
+      {phase !== "idle" && !projection?.interactions.length && composer.trim() && <button type="button" className="steer-button" disabled={busy || uploading || stopping || !!pendingOperation} onClick={() => void send("steer")}>下一步引导</button>}
     </div>
     {stopError && !projection?.interactions.length && <p className="composer-error" role="alert">{stopError} <button type="button" onClick={() => void stopRun()}>重试停止</button></p>}
   </div>;
@@ -938,6 +940,12 @@ export function App() {
               aria-expanded={detailsOpen} onClick={() => setDetailsOpen((value) => !value)}><Icon name="panel" /></button>
           </div>
         </header>
+        <RunOverview phase={pendingOperation ? `${stopping ? "正在停止" : phaseLabel(phase)} · 操作结果待核对`
+          : stopping ? "stopping" : phase === "compacting" && projection?.state.compaction
+            ? `${phaseLabel(phase)} ${projection.state.compaction["completed-chunks"]}/${projection.state.compaction["total-chunks"]}` : phase}
+          turns={projection?.summary.turns ?? 0} steps={projection?.summary.steps ?? 0}
+          calls={projection?.summary.calls ?? 0} waitingCount={projection?.interactions.length ?? 0}
+          context={contextStatus} />
         <div className={`timeline ${conversationView === "trajectory" ? "trajectory-mode" : ""}`} ref={timeline} tabIndex={0} aria-label="会话内容">
           {conversationView === "chat" && projection && <Timeline key={activeSession.id} projection={projection} scrollRef={timeline} pluginSlots={pluginSlots} />}
           {conversationView === "trajectory" && <Trajectory key={activeSession.id} events={projection?.events || []} />}
@@ -957,7 +965,14 @@ export function App() {
     </aside>}
 
     {workbench && workspaceId && <section className="workbench-drawer" aria-label="工作台" onKeyDown={event => { if (event.key === "Escape") setWorkbench(null); }}>
-      <div className="workbench-content">{workbench === "files" ? <WorkspacePanel workspaceId={workspaceId} sessionId={activeSession?.id} api={api.workspaceFiles}
+      <div className="workbench-content">{workbench === "files" ? <WorkspacePanel key={activeSession?.id || workspaceId} workspaceId={workspaceId} sessionId={activeSession?.id} api={api.workspaceFiles}
+        responseDetail={([...projection?.events || []].reverse().find(event => event.type === "session/preferences")?.data.response_detail as "short" | "auto" | "detailed") || "auto"}
+        onResponseDetail={async value => {
+          const id = activeSession?.id; if (!id) throw new Error("请先开始一个会话");
+          const current = captureOperation();
+          await api.rpc(id, "session.preferences.set", { response_detail: value });
+          if (current()) await refreshSnapshot(id);
+        }}
         onClose={() => setWorkbench(null)} onReference={reference => { setComposer(value => `${value}${value ? " " : ""}${reference} `); setWorkbench(null); composerInput.current?.focus(); }} />
         : <><header className="workbench-heading"><strong>{workbench === "automation" ? "自动化" : workbench === "plugins" ? "插件" : "计划与协作"}</strong>
           <button type="button" onClick={() => setWorkbench(null)} aria-label="关闭工作台">×</button></header>

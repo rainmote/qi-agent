@@ -1,0 +1,25 @@
+{:plugins
+ [{:ns qi.plugins.session :config {:path nil}}
+  {:ns qi.plugins.model-registry :config {:default-provider :openai}}
+  {:ns qi.plugins.openai-responses
+   :config {:model "gpt-5.6-sol" :api-key-env "OPENAI_API_KEY"
+            :timeout-ms 180000 :max-retries 0 :retry-delay-ms 500
+            :extra-body {:max_output_tokens 16384 :reasoning {:effort "medium"}}}}
+  {:ns qi.plugins.execution-world
+   :config {:root "." :sandbox :auto :timeout-ms 30000 :max-timeout-ms 300000
+            :max-output-chars 50000}}
+  {:ns qi.plugins.trust :config {:root "."}}
+  {:ns qi.plugins.tools :config {:max-read-chars 50000}}
+  {:ns qi.plugins.approval :config {:mode :deny}}
+  {:ns qi.plugins.policy
+   :config {:deny-tools ["write" "edit" "bash"]
+            :trusted-tools ["write" "edit" "bash"]
+            :approval-tools ["write" "edit" "bash"]}}
+  {:ns qi.plugins.context-manager
+   :config {:context-window 128000 :reserve-tokens 16384 :retain-messages 12}}
+  {:ns qi.plugins.runtime
+   :config {:max-steps 32 :max-model-requests 64 :max-wall-ms 2100000 :max-parallel-tools 4
+            :system-prompt-template :omp}}
+  {:ns qi.plugins.effective-limits}
+  {:ns qi.plugins.remote-registry}
+  {:ns qi.plugins.remote-api}]}

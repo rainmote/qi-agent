@@ -431,7 +431,7 @@
                           (:plugins creator))
         creator-runtime (some #(when (= 'qi.plugins.runtime (:ns %)) %)
                               (:plugins creator))]
-    (is (= ["standard" "creator"] (mapv :id listed)))
+    (is (= ["standard" "creator" "production"] (mapv :id listed)))
     (is (every? nil? (map :broken listed)))
     (is (= (into (set standard-ns)
                  ['qi.plugins.runtime-inspect 'qi.plugins.runtime-lab
