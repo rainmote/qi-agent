@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "cli_version": "0.162.0-alpha.17.2",
+  "transcript_origin": "observed-supervised-readonly-probe",
+  "observed_live_transcript": true,
+  "raw_artifact_sha256": "142cc07f5d36a49cc011491364d9600eb42582e3eb3aa790cc99718ebe1e71c6",
+  "metadata_sha256": "77b7b194aed1943a928f22805fd31d89e870515141e9f2825fd33696c5ae8f22",
+  "redactions": [
+    "thread_id",
+    "agent_message.text"
+  ],
+  "executable_sha256": null,
+  "executable_hash_status": "NOT_RECORDED in the historical probe",
+  "exit_code": 0,
+  "events": [
+    {
+      "type": "thread.started",
+      "thread_id": "observed-alpha-redacted-thread"
+    },
+    {
+      "type": "turn.started"
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_0",
+        "type": "agent_message",
+        "text": "[redacted observed probe response]"
+      }
+    },
+    {
+      "type": "turn.completed",
+      "usage": {
+        "input_tokens": 16113,
+        "cached_input_tokens": 12288,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 5,
+        "reasoning_output_tokens": 0
+      }
+    }
+  ]
+}

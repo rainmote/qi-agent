@@ -4,10 +4,11 @@ use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     fs::{self, OpenOptions},
     io::{BufRead, BufReader, BufWriter, Read, Write},
     os::unix::{
+        fs::OpenOptionsExt,
         net::{UnixListener, UnixStream},
         process::CommandExt,
     },
@@ -43,6 +44,8 @@ pub struct WorkerDescriptor {
     pub generation: u64,
     pub pid: Option<u32>,
     pub child_pid: Option<u32>,
+    #[serde(default)]
+    pub child_process_group: Option<u32>,
     pub session_id: Option<String>,
     pub status: String,
     pub started_at_ms: u128,
@@ -78,6 +81,7 @@ impl WorkerDescriptor {
             generation: 1,
             pid: None,
             child_pid: None,
+            child_process_group: None,
             session_id: None,
             status: "starting".into(),
             started_at_ms: now_ms(),
@@ -87,6 +91,245 @@ impl WorkerDescriptor {
 
 type ActiveWriter = Arc<Mutex<Option<(u64, UnixStream)>>>;
 type ActiveStdin = Arc<Mutex<Option<BufWriter<ChildStdin>>>>;
+
+/// Host policy, measured with a monotonic clock and independent of provider cooperation.
+struct RunDeadline {
+    start: Instant,
+    started_at_ms: u128,
+    deadline_at_ms: u128,
+    agent_id: Option<String>,
+    session_id: Option<String>,
+}
+
+struct RunWatchdog {
+    limit: Option<Duration>,
+    runs: BTreeMap<String, RunDeadline>,
+    generation: u64,
+    cancel_started: Option<Instant>,
+    grace: Duration,
+}
+
+impl RunWatchdog {
+    fn new(limit: Option<Duration>) -> Self {
+        Self {
+            limit,
+            runs: BTreeMap::new(),
+            generation: 0,
+            cancel_started: None,
+            grace: Duration::from_millis(250),
+        }
+    }
+
+    fn observe(&mut self, value: &Value, now: Instant, generation: u64) -> bool {
+        if generation != self.generation
+            || self.limit.is_none()
+            || value.get("type").and_then(Value::as_str) != Some("event")
+        {
+            return false;
+        }
+        let Some(id) = value.get("run_id").and_then(Value::as_str) else {
+            return false;
+        };
+        match value.get("event").and_then(Value::as_str) {
+            Some("agent/run/start") => {
+                if self.runs.contains_key(id) || self.expired(now) {
+                    return false;
+                }
+                let started_at_ms = now_ms();
+                self.runs.insert(
+                    id.to_owned(),
+                    RunDeadline {
+                        start: now,
+                        started_at_ms,
+                        deadline_at_ms: started_at_ms
+                            .saturating_add(self.limit.unwrap().as_millis()),
+                        agent_id: value
+                            .get("agent_id")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned),
+                        session_id: value
+                            .get("session_id")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned),
+                    },
+                );
+                true
+            }
+            Some("agent/run/end") => {
+                // A terminal delivered at/after the deadline cannot disarm it,
+                // even when the timer thread has not yet observed expiry.
+                if self.expired(now) {
+                    return false;
+                }
+                self.runs.remove(id).is_some()
+            }
+            _ => false,
+        }
+    }
+
+    fn expired(&self, now: Instant) -> bool {
+        self.cancel_started.is_some()
+            || self.limit.is_some_and(|limit| {
+                self.runs
+                    .values()
+                    .any(|run| now.saturating_duration_since(run.start) >= limit)
+            })
+    }
+
+    fn records(&self) -> Vec<Value> {
+        self.runs
+            .iter()
+            .map(|(id, run)| {
+                json!({
+                    "run_id": id, "agent_id": run.agent_id, "session_id": run.session_id,
+                    "started_at_ms": run.started_at_ms, "deadline_at_ms": run.deadline_at_ms,
+                })
+            })
+            .collect()
+    }
+
+    fn journal(&self, descriptor: &WorkerDescriptor) -> Value {
+        json!({"schema_version":1, "worker_id":descriptor.worker_id,
+            "generation":self.generation,
+            "phase":if self.cancel_started.is_some() {"cancelling"} else {"running"},
+            "runs":self.records(), "cancel_grace_ms":self.grace.as_millis()})
+    }
+
+    fn fence(&self, value: &mut Value, now: Instant) -> bool {
+        if !self.expired(now) {
+            return false;
+        }
+        let terminal = matches!(
+            value.get("event").and_then(Value::as_str),
+            Some("agent/run/end" | "agent.run/end" | "remote/run-result")
+        ) || matches!(
+            value.get("type").and_then(Value::as_str),
+            Some("run-result" | "result")
+        );
+        // Read-only snapshots can arrive during cancellation. A matching run
+        // outcome cannot expose completed while host arbitration is unresolved.
+        self.fence_outcomes(value);
+        terminal
+    }
+
+    fn fence_outcomes(&self, value: &mut Value) {
+        match value {
+            Value::Object(object) => {
+                let id = object
+                    .get("run-id")
+                    .or_else(|| object.get("run_id"))
+                    .and_then(Value::as_str);
+                if id.is_some_and(|id| self.runs.contains_key(id)) && object.contains_key("status")
+                {
+                    object.insert("status".into(), json!("uncertain"));
+                    object.insert("reason".into(), json!("hard-wall-timeout"));
+                    object.insert("stop-reason".into(), json!("restored"));
+                    object.insert("verification".into(), json!("not-run"));
+                    object.insert("host_arbitrated".into(), json!(true));
+                }
+                for child in object.values_mut() {
+                    self.fence_outcomes(child);
+                }
+            }
+            Value::Array(values) => {
+                for child in values {
+                    self.fence_outcomes(child);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+type SharedWatchdog = Arc<Mutex<RunWatchdog>>;
+
+fn run_wall_limit(value: Option<String>) -> Result<Option<Duration>> {
+    value
+        .map(|value| {
+            let milliseconds = value
+                .parse::<u64>()
+                .context("QI_AGENT_RUN_WALL_MS must be a positive integer")?;
+            if milliseconds == 0 {
+                bail!("QI_AGENT_RUN_WALL_MS must be a positive integer");
+            }
+            Ok(Duration::from_millis(milliseconds))
+        })
+        .transpose()
+}
+
+fn write_worker_record(descriptor_path: &Path, extension: &str, value: &Value) -> Result<()> {
+    let path = descriptor_path.with_extension(extension);
+    let temporary =
+        descriptor_path.with_extension(format!("watchdog-{}.tmp", uuid::Uuid::new_v4()));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&temporary)?;
+    set_owner_only_file(&temporary)?;
+    serde_json::to_writer_pretty(&mut file, value)?;
+    file.sync_all()?;
+    fs::rename(&temporary, &path)?;
+    fs::File::open(path.parent().context("watchdog receipt has no parent")?)?.sync_all()?;
+    Ok(())
+}
+
+fn write_watchdog_receipt(descriptor_path: &Path, value: &Value) -> Result<()> {
+    write_worker_record(descriptor_path, "watchdog.json", value)
+}
+
+fn cancel_grace(value: Option<String>) -> Result<Duration> {
+    let milliseconds = value
+        .unwrap_or_else(|| "250".into())
+        .parse::<u64>()
+        .context("QI_AGENT_RUN_CANCEL_GRACE_MS must be an integer from 1 to 1000")?;
+    if !(1..=1000).contains(&milliseconds) {
+        bail!("QI_AGENT_RUN_CANCEL_GRACE_MS must be an integer from 1 to 1000");
+    }
+    Ok(Duration::from_millis(milliseconds))
+}
+
+fn request_deadline_cancel(
+    stdin: ActiveStdin,
+    descriptor: Arc<Mutex<WorkerDescriptor>>,
+    generation: u64,
+    agents: Vec<String>,
+) {
+    // A full/busy RPC pipe must not block host enforcement. The old pipe closes
+    // on retirement, and the generation check forbids writing into its replacement.
+    thread::spawn(move || {
+        let mut current = stdin.lock().expect("worker stdin mutex poisoned");
+        if descriptor
+            .lock()
+            .expect("descriptor mutex poisoned")
+            .generation
+            != generation
+        {
+            return;
+        }
+        if let Some(writer) = current.as_mut() {
+            for agent in agents {
+                let root = descriptor
+                    .lock()
+                    .expect("descriptor mutex poisoned")
+                    .agent_id
+                    .clone();
+                let request = if agent == root {
+                    json!({"id":format!("watchdog-{}", uuid::Uuid::new_v4()),"method":"turn.abort","params":{}})
+                } else {
+                    json!({"id":format!("watchdog-{}", uuid::Uuid::new_v4()),"method":"subagent.invoke",
+                        "params":{"agent_id":agent,"method":"turn.abort","params":{}}})
+                };
+                if serde_json::to_writer(&mut *writer, &request).is_err()
+                    || writer.write_all(b"\n").is_err()
+                    || writer.flush().is_err()
+                {
+                    break;
+                }
+            }
+        }
+    });
+}
 
 pub fn read_descriptor(path: &Path) -> Result<WorkerDescriptor> {
     serde_json::from_slice(
@@ -111,6 +354,18 @@ pub fn write_descriptor(path: &Path, descriptor: &WorkerDescriptor) -> Result<()
 }
 
 pub fn serve(descriptor_path: &Path) -> Result<()> {
+    let wall_limit = match std::env::var("QI_AGENT_RUN_WALL_MS") {
+        Ok(value) => run_wall_limit(Some(value))?,
+        Err(std::env::VarError::NotPresent) => None,
+        Err(error) => return Err(error).context("invalid QI_AGENT_RUN_WALL_MS"),
+    };
+    let watchdog = Arc::new(Mutex::new(RunWatchdog::new(wall_limit)));
+    watchdog.lock().expect("watchdog mutex poisoned").grace =
+        match std::env::var("QI_AGENT_RUN_CANCEL_GRACE_MS") {
+            Ok(value) => cancel_grace(Some(value))?,
+            Err(std::env::VarError::NotPresent) => cancel_grace(None)?,
+            Err(error) => return Err(error).context("invalid QI_AGENT_RUN_CANCEL_GRACE_MS"),
+        };
     let descriptor_path = descriptor_path.to_path_buf();
     let descriptor = read_descriptor(&descriptor_path)?;
     let log_directory = RuntimePaths::discover()?.logs_dir;
@@ -158,38 +413,137 @@ pub fn serve(descriptor_path: &Path) -> Result<()> {
         Arc::clone(&sequence),
         Arc::clone(&stdin),
         &descriptor_path,
+        Arc::clone(&watchdog),
     )?;
     let mut child_started = Instant::now();
     let mut restart_attempts = 0u32;
 
-    let connection_epoch = AtomicU64::new(0);
+    let connection_epoch = Arc::new(AtomicU64::new(0));
+    let mut hard_timeout = false;
     loop {
         match listener.accept() {
             Ok((stream, _)) => {
                 stream.set_nonblocking(false)?;
                 let epoch = connection_epoch.fetch_add(1, Ordering::SeqCst) + 1;
-                if let Err(error) = authenticate_and_attach(
-                    stream,
-                    epoch,
-                    &descriptor.token,
-                    Arc::clone(&active),
-                    Arc::clone(&stdin),
-                    Arc::clone(&event_buffer),
-                    Arc::clone(&live_descriptor),
-                    Arc::clone(&shutdown_requested),
-                ) {
-                    append_log(
-                        &log_directory,
-                        &descriptor.worker_id,
-                        &format!("private connection rejected: {error:#}\n"),
-                    );
-                }
+                // Authentication has its own bounded read; it must not stall the host timer.
+                let token = descriptor.token.clone();
+                let latest_epoch = Arc::clone(&connection_epoch);
+                let active = Arc::clone(&active);
+                let stdin = Arc::clone(&stdin);
+                let events = Arc::clone(&event_buffer);
+                let descriptor = Arc::clone(&live_descriptor);
+                let shutdown = Arc::clone(&shutdown_requested);
+                let watchdog = Arc::clone(&watchdog);
+                let log_directory = log_directory.clone();
+                thread::spawn(move || {
+                    if let Err(error) = authenticate_and_attach(
+                        stream,
+                        epoch,
+                        &token,
+                        active,
+                        stdin,
+                        events,
+                        Arc::clone(&descriptor),
+                        shutdown,
+                        latest_epoch,
+                        watchdog,
+                    ) {
+                        let worker_id = &descriptor
+                            .lock()
+                            .expect("descriptor mutex poisoned")
+                            .worker_id;
+                        append_log(
+                            &log_directory,
+                            worker_id,
+                            &format!("private connection rejected: {error:#}\n"),
+                        );
+                    }
+                });
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
             Err(error) => return Err(error).context("worker private socket failed"),
         }
 
+        {
+            let mut timer = watchdog.lock().expect("watchdog mutex poisoned");
+            let now = Instant::now();
+            if timer.expired(now) && timer.cancel_started.is_none() {
+                timer.cancel_started = Some(now);
+                let current = live_descriptor.lock().expect("descriptor mutex poisoned");
+                if let Err(error) = write_worker_record(
+                    &descriptor_path,
+                    "deadlines.json",
+                    &timer.journal(&current),
+                ) {
+                    append_log(
+                        &log_directory,
+                        &descriptor.worker_id,
+                        &format!("deadline cancellation persistence failed: {error:#}\n"),
+                    );
+                }
+                let mut agents = vec![current.agent_id.clone()];
+                agents.extend(timer.runs.values().filter_map(|run| run.agent_id.clone()));
+                agents.sort();
+                agents.dedup();
+                request_deadline_cancel(
+                    Arc::clone(&stdin),
+                    Arc::clone(&live_descriptor),
+                    current.generation,
+                    agents,
+                );
+            }
+            if !hard_timeout
+                && timer
+                    .cancel_started
+                    .is_some_and(|start| now.saturating_duration_since(start) >= timer.grace)
+            {
+                let current = live_descriptor.lock().expect("descriptor mutex poisoned");
+                let mut receipt = json!({
+                    "schema_version":1, "reason": "hard-wall-timeout", "status": "uncertain",
+                    "verification": "not-run", "generation": current.generation,
+                    "worker_id": current.worker_id, "child_pid": child.id(),
+                    "run_ids": timer.runs.keys().collect::<Vec<_>>(),
+                    "runs":timer.records(), "cancel_requested":true, "cancel_grace_ms":timer.grace.as_millis(),
+                    "at_ms": now_ms(), "limit_ms": wall_limit.map(|limit| limit.as_millis()),
+                    "signal_sent": false
+                });
+                drop(current);
+                if let Err(error) = write_watchdog_receipt(&descriptor_path, &receipt) {
+                    append_log(
+                        &log_directory,
+                        &descriptor.worker_id,
+                        &format!("watchdog intent persistence failed: {error:#}\n"),
+                    );
+                }
+                // The unreaped Child owns this PID and its separate process group.
+                let signal = unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL) };
+                receipt["signal_sent"] = json!(signal == 0);
+                if signal != 0 {
+                    receipt["signal_error"] = json!(std::io::Error::last_os_error().to_string());
+                    let _ = child.kill();
+                }
+                if let Err(error) = write_watchdog_receipt(&descriptor_path, &receipt) {
+                    append_log(
+                        &log_directory,
+                        &descriptor.worker_id,
+                        &format!("watchdog result persistence failed: {error:#}\n"),
+                    );
+                }
+                append_log(
+                    &log_directory,
+                    &descriptor.worker_id,
+                    &format!("{receipt}\n"),
+                );
+                timer.runs.clear();
+                hard_timeout = true;
+            }
+        }
         if let Some(status) = child.try_wait()? {
+            watchdog
+                .lock()
+                .expect("watchdog mutex poisoned")
+                .runs
+                .clear();
             *stdin.lock().expect("worker stdin mutex poisoned") = None;
             let mut current = live_descriptor.lock().expect("descriptor mutex poisoned");
             let intentional = shutdown_requested.load(Ordering::SeqCst);
@@ -198,6 +552,12 @@ pub fn serve(descriptor_path: &Path) -> Result<()> {
             } else {
                 "failed".into()
             };
+            // Retire any members left in the owned generation's group before replacement.
+            if let Some(group) = current.child_process_group {
+                unsafe {
+                    libc::kill(-(group as libc::pid_t), libc::SIGKILL);
+                }
+            }
             current.child_pid = None;
             write_descriptor(&descriptor_path, &current)?;
             let exit_event = json!({
@@ -210,7 +570,9 @@ pub fn serve(descriptor_path: &Path) -> Result<()> {
                     "generation": current.generation,
                     "sequence": sequence.fetch_add(1, Ordering::SeqCst) + 1
                 },
-                "data": {"status": status.code(), "worker_id": current.worker_id}
+                "data": {"status": status.code(), "worker_id": current.worker_id,
+                         "reason": if hard_timeout { "hard-wall-timeout" } else { "process-exit" },
+                         "outcome": "uncertain"}
             });
             send_active(&active, &exit_event);
             if intentional {
@@ -263,8 +625,10 @@ pub fn serve(descriptor_path: &Path) -> Result<()> {
                 Arc::clone(&sequence),
                 Arc::clone(&stdin),
                 &descriptor_path,
+                Arc::clone(&watchdog),
             )?;
             child_started = Instant::now();
+            hard_timeout = false;
         }
         thread::sleep(Duration::from_millis(40));
     }
@@ -281,11 +645,26 @@ fn start_babashka(
     sequence: Arc<AtomicU64>,
     stdin: ActiveStdin,
     descriptor_path: &Path,
+    watchdog: SharedWatchdog,
 ) -> Result<std::process::Child> {
     let snapshot = descriptor
         .lock()
         .expect("descriptor mutex poisoned")
         .clone();
+    {
+        let mut timer = watchdog.lock().expect("watchdog mutex poisoned");
+        timer.runs.clear();
+        timer.generation = snapshot.generation;
+        timer.cancel_started = None;
+        if timer.limit.is_some() {
+            write_worker_record(descriptor_path, "deadlines.json", &timer.journal(&snapshot))?;
+        }
+    }
+    let own_process_group = watchdog
+        .lock()
+        .expect("watchdog mutex poisoned")
+        .limit
+        .is_some();
     let classpath = std::env::join_paths([
         snapshot.repository_root.join("src"),
         snapshot.repository_root.join("plugins"),
@@ -315,6 +694,13 @@ fn start_babashka(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if own_process_group {
+        command.process_group(0);
+        command.env(
+            "QI_AGENT_HOST_DEADLINE_RECEIPT",
+            descriptor_path.with_extension("watchdog.json"),
+        );
+    }
     if let Some(backend) = &snapshot.repl_backend {
         command
             .env("QI_AGENT_REPL_BACKEND", backend)
@@ -347,6 +733,7 @@ fn start_babashka(
         let mut current = descriptor.lock().expect("descriptor mutex poisoned");
         current.pid = Some(std::process::id());
         current.child_pid = Some(child.id());
+        current.child_process_group = own_process_group.then_some(child.id());
         current.status = "running".into();
         current.started_at_ms = now_ms();
         write_descriptor(descriptor_path, &current)?;
@@ -361,6 +748,8 @@ fn start_babashka(
         sequence,
         Arc::clone(descriptor),
         descriptor_path.to_path_buf(),
+        watchdog,
+        snapshot.generation,
     );
     spawn_stderr_reader(
         child
@@ -383,6 +772,8 @@ fn authenticate_and_attach(
     event_buffer: Arc<Mutex<VecDeque<Value>>>,
     descriptor: Arc<Mutex<WorkerDescriptor>>,
     shutdown_requested: Arc<AtomicBool>,
+    latest_epoch: Arc<AtomicU64>,
+    watchdog: SharedWatchdog,
 ) -> Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(3)))?;
     let mut reader = BufReader::new(stream.try_clone()?);
@@ -416,6 +807,9 @@ fn authenticate_and_attach(
     registration_stream.flush()?;
     {
         let mut current = active.lock().expect("active writer mutex poisoned");
+        if latest_epoch.load(Ordering::SeqCst) != epoch {
+            bail!("worker connection superseded during authentication");
+        }
         *current = Some((epoch, stream.try_clone()?));
     }
     for event in event_buffer
@@ -430,6 +824,36 @@ fn authenticate_and_attach(
         for line in reader.lines() {
             let Ok(line) = line else { break };
             if line.trim().is_empty() {
+                continue;
+            }
+            let request = serde_json::from_str::<Value>(&line).unwrap_or(Value::Null);
+            let method = request
+                .get("method")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let allowed_during_cancel = matches!(
+                method,
+                "shutdown"
+                    | "turn.abort"
+                    | "turn.state"
+                    | "session.snapshot"
+                    | "session.events"
+                    | "runtime.status"
+                    | "remote.methods"
+            ) || (method == "subagent.invoke"
+                && request.pointer("/params/method").and_then(Value::as_str) == Some("turn.abort"));
+            if !allowed_during_cancel
+                && watchdog
+                    .lock()
+                    .expect("watchdog mutex poisoned")
+                    .expired(Instant::now())
+            {
+                send_active(
+                    &active,
+                    &json!({"version":1,"type":"response","id":request.get("id"),"ok":false,
+                    "error":{"message":"Worker deadline expired; reconcile before resubmitting",
+                        "data":{"type":"deadline_cancelling"}}}),
+                );
                 continue;
             }
             if serde_json::from_str::<Value>(&line)
@@ -470,6 +894,7 @@ fn authenticate_and_attach(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_stdout_reader(
     stdout: impl Read + Send + 'static,
     active: ActiveWriter,
@@ -477,6 +902,8 @@ fn spawn_stdout_reader(
     sequence: Arc<AtomicU64>,
     descriptor: Arc<Mutex<WorkerDescriptor>>,
     descriptor_path: PathBuf,
+    watchdog: SharedWatchdog,
+    generation: u64,
 ) {
     thread::spawn(move || {
         for line in BufReader::new(stdout).lines() {
@@ -484,6 +911,32 @@ fn spawn_stdout_reader(
             let Ok(mut value) = serde_json::from_str::<Value>(&line) else {
                 continue;
             };
+            // An old pipe may drain after replacement; it cannot arm or finish a new run.
+            if descriptor
+                .lock()
+                .expect("descriptor mutex poisoned")
+                .generation
+                != generation
+            {
+                break;
+            }
+            {
+                let mut timer = watchdog.lock().expect("watchdog mutex poisoned");
+                let now = Instant::now();
+                if timer.observe(&value, now, generation) {
+                    let current = descriptor.lock().expect("descriptor mutex poisoned");
+                    if let Err(error) = write_worker_record(
+                        &descriptor_path,
+                        "deadlines.json",
+                        &timer.journal(&current),
+                    ) {
+                        eprintln!("worker deadline journal persistence failed: {error:#}");
+                    }
+                }
+                if timer.fence(&mut value, now) {
+                    continue;
+                }
+            }
             let kind = value
                 .get("type")
                 .and_then(Value::as_str)
@@ -579,6 +1032,92 @@ fn now_ms() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn watchdog_uses_first_start_and_ignores_stale_generations() {
+        let mut timer = RunWatchdog::new(Some(Duration::from_millis(100)));
+        timer.generation = 2;
+        let start = Instant::now();
+        let event = |kind, id| json!({"type":"event", "event":kind, "run_id":id});
+        timer.observe(&event("agent/run/start", "current"), start, 2);
+        timer.observe(
+            &event("agent/run/start", "current"),
+            start + Duration::from_millis(90),
+            2,
+        );
+        timer.observe(
+            &event("agent/run/end", "current"),
+            start + Duration::from_millis(95),
+            1,
+        );
+        assert!(!timer.expired(start + Duration::from_millis(99)));
+        assert!(timer.expired(start + Duration::from_millis(100)));
+        timer.observe(
+            &event("agent/run/end", "current"),
+            start + Duration::from_millis(100),
+            2,
+        );
+        timer.observe(&event("agent/run/start", "old"), start, 1);
+        assert!(timer.expired(start + Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn watchdog_policy_is_explicit_and_invalid_values_fail_closed() {
+        assert!(run_wall_limit(None).unwrap().is_none());
+        assert_eq!(
+            run_wall_limit(Some("180".into())).unwrap(),
+            Some(Duration::from_millis(180))
+        );
+        for invalid in ["", "0", "-1", "1.5", "99999999999999999999999"] {
+            assert!(run_wall_limit(Some(invalid.into())).is_err());
+        }
+        assert_eq!(cancel_grace(None).unwrap(), Duration::from_millis(250));
+        for invalid in ["0", "-1", "1001", "x"] {
+            assert!(cancel_grace(Some(invalid.into())).is_err());
+        }
+    }
+
+    #[test]
+    fn deadline_wins_equal_and_late_terminal_races_and_fences_snapshots() {
+        let start = Instant::now();
+        for offset in [100, 101] {
+            let mut timer = RunWatchdog::new(Some(Duration::from_millis(100)));
+            timer.generation = 1;
+            timer.observe(
+                &json!({"type":"event","event":"agent/run/start","run_id":"r"}),
+                start,
+                1,
+            );
+            let now = start + Duration::from_millis(offset);
+            timer.observe(
+                &json!({"type":"event","event":"agent/run/end","run_id":"r"}),
+                now,
+                1,
+            );
+            assert!(timer.expired(now));
+            let mut terminal = json!({"type":"event","event":"agent/run/end","run_id":"r"});
+            assert!(timer.fence(&mut terminal, now));
+            let mut snapshot = json!({"type":"response","result":{"last-outcome":{"run-id":"r","status":"completed"}}});
+            assert!(!timer.fence(&mut snapshot, now));
+            assert_eq!(
+                snapshot.pointer("/result/last-outcome/status"),
+                Some(&json!("uncertain"))
+            );
+        }
+        let mut timer = RunWatchdog::new(Some(Duration::from_millis(100)));
+        timer.generation = 1;
+        timer.observe(
+            &json!({"type":"event","event":"agent/run/start","run_id":"r"}),
+            start,
+            1,
+        );
+        timer.observe(
+            &json!({"type":"event","event":"agent/run/end","run_id":"r"}),
+            start + Duration::from_millis(99),
+            1,
+        );
+        assert!(!timer.expired(start + Duration::from_millis(200)));
+    }
 
     #[test]
     fn descriptor_round_trips_without_losing_identity() {

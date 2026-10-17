@@ -1,0 +1,8 @@
+{
+  "role": "human",
+  "reviewer": "REPLACE_WITH_ACTUAL_AUTHORIZING_PERSON",
+  "task_id": "REPLACE_WITH_EXACT_TASK_ID",
+  "scope": "candidate-only",
+  "expires_at": "REPLACE_WITH_EXPLICIT_EXPIRY_ISO_DATE",
+  "note": "The enqueue command binds this authorization to the exact task, controller, profile, verifier and budget. It never authorizes merge or release."
+}

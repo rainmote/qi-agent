@@ -1,0 +1,16 @@
+{:experiment true
+ :plugins
+ [{:ns qi.plugins.session :config {:ephemeral true}}
+  {:ns qi.plugins.model-registry :config {:default-provider :offline-fixture}}
+  {:ns qi.plugins.execution-world :config {:root "." :sandbox :auto}}
+  {:ns qi.plugins.trust :config {:root "."}}
+  {:ns qi.plugins.approval :config {:mode :ask}}
+  {:ns qi.plugins.policy
+   :config {:trusted-tools ["write" "edit" "bash"]
+            :approval-tools ["write" "edit" "bash"]}}
+  {:ns qi.plugins.tools
+   :config {:allow-tools ["current_time" "read" "ls" "find" "grep"]}}
+  {:ns qi.plugins.context-manager :config {:context-window 128000 :reserve-tokens 16384}}
+  {:ns qi.plugins.runtime
+   :config {:max-steps 8 :max-model-requests 12 :max-wall-ms 30000
+            :system-prompt "Complete the task with the available tools; execution is not verification."}}]}

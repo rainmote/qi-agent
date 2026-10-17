@@ -13,18 +13,51 @@ export interface WorkspacePanelApi {
 export interface WorkspacePanelProps {
   workspaceId: string; sessionId?: string; api: WorkspacePanelApi;
   onReference?: (text: string) => void; onClose?: () => void;
+  responseDetail?: "short" | "auto" | "detailed";
+  onResponseDetail?: (value: "short" | "auto" | "detailed") => Promise<void>;
 }
 
 export function sandboxedHtml(text: string): string {
   return `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">${text}`;
 }
 
+export function WorkspaceVerificationSummary({ changes }: { changes: ChangeSet }) {
+  const passed = !changes.partial && changes.verification?.status === "PASS" && !!changes.verification.checks?.length && changes.verification.checks.every(check => check.status === "PASS");
+  const status = passed ? "PASS" : changes.verification?.status === "PASS" ? "UNKNOWN" : changes.verification?.status || "NOT_RUN";
+  const labels = { NOT_RUN: "尚未关联本轮文件指纹的独立验收记录", VERIFYING: "正在独立验收，结果尚未确定",
+    PASS: `独立验收通过 · ${changes.verification?.checks?.length || 0} 项检查`, FAIL: "独立验收未通过，请查看失败检查",
+    STALE: "验收已过期，源码已变化", UNKNOWN: "验收结果未确认，文件或验收材料需要核对" };
+  const execution = changes.execution && { completed: "执行已完成", failed: "执行失败", cancelled: "执行已取消", uncertain: "执行结果未确认" }[changes.execution.status];
+  return <div className="workspace-result-summary" aria-label="本轮结果摘要" role="status" aria-live="polite" aria-atomic="true">
+          <p><strong>变更</strong> · {changes.files.length} 个文本文件{changes.partial ? " · 部分记录" : " · 限定范围内的快照"}{execution ? ` · ${execution}` : ""}</p>
+          <p><strong>验收</strong> · {labels[status]}</p>
+          <p><strong>下一步</strong> · {passed ? "审查已验证快照；合入与发布仍需明确授权" : status === "VERIFYING" ? "等待独立验收完成，可继续阅读差异" : status === "FAIL" ? "查看失败检查，修复后再验收" : status === "STALE" ? "核对新差异，建立新候选再验收" : changes.partial ? "核对遗漏与差异，再运行验收" : "核对差异并运行验收"}</p>
+          {!!changes.verification?.checks?.length && <details open={status === "FAIL" || status === "UNKNOWN"}>
+            <summary>检查详情 · {changes.verification.checks.length} 项</summary>
+            <ul>{changes.verification.checks.map(check => <li key={check.id}>{check.id} · {check.status}
+              {check.detailsUrl && /^\/api\/candidates\/coding-[a-f0-9]{32}\/checks\/[A-Za-z0-9_-]{1,100}$/.test(check.detailsUrl)
+                && <> · <a href={check.detailsUrl} target="_blank" rel="noreferrer noopener">查看检查记录</a></>}</li>)}</ul>
+          </details>}
+  </div>;
+
+}
+
 /** File access is server-authorized; changing workspace aborts and discards all prior reads. */
-export function WorkspacePanel({ workspaceId, sessionId, api, onReference, onClose }: WorkspacePanelProps) {
+export function WorkspacePanel({ workspaceId, sessionId, api, onReference, onClose, responseDetail = "auto", onResponseDetail }: WorkspacePanelProps) {
   const [path, setPath] = useState(""), [query, setQuery] = useState(""), [listing, setListing] = useState<FileListing | null>(null);
   const [preview, setPreview] = useState<FilePreview | null>(null), [changes, setChanges] = useState<ChangeSet | null>(null);
   const [tab, setTab] = useState<"files" | "changes">("files"), [busy, setBusy] = useState(false), [error, setError] = useState("");
   const [revision, setRevision] = useState(0), read = useRef<AbortController | null>(null), view = useRef<AbortController | null>(null);
+  const [savingDetail, setSavingDetail] = useState(false), [detailError, setDetailError] = useState("");
+  const detailScope = useRef(0);
+  useEffect(() => { detailScope.current++; setSavingDetail(false); setDetailError(""); return () => { detailScope.current++; }; }, [workspaceId, sessionId]);
+  const saveDetail = async (value: "short" | "auto" | "detailed") => {
+    if (!onResponseDetail || savingDetail) return;
+    const scope = detailScope.current; setSavingDetail(true); setDetailError("");
+    try { await onResponseDetail(value); }
+    catch (failure) { if (scope === detailScope.current) setDetailError(failure instanceof Error ? failure.message : "保存失败，请重新选择。"); }
+    finally { if (scope === detailScope.current) setSavingDetail(false); }
+  };
   useEffect(() => { setPath(""); setQuery(""); setPreview(null); setChanges(null); setListing(null); view.current?.abort(); }, [workspaceId]);
   useEffect(() => {
     const controller = new AbortController(); read.current?.abort(); read.current = controller;
@@ -38,6 +71,11 @@ export function WorkspacePanel({ workspaceId, sessionId, api, onReference, onClo
     return () => { clearTimeout(timer); controller.abort(); };
   }, [workspaceId, sessionId, path, query, tab, revision, api]);
   useEffect(() => () => view.current?.abort(), []);
+  useEffect(() => {
+    if (tab !== "changes" || changes?.verification?.status !== "VERIFYING") return;
+    const timer = setTimeout(() => setRevision(value => value + 1), 1000);
+    return () => clearTimeout(timer);
+  }, [tab, changes]);
   const openFile = async (file: string) => {
     view.current?.abort(); const controller = new AbortController(); view.current = controller;
     setBusy(true); setError(""); setPreview(null);
@@ -50,6 +88,14 @@ export function WorkspacePanel({ workspaceId, sessionId, api, onReference, onClo
     <nav className="workspace-tabs" aria-label="文件视图"><button type="button" aria-pressed={tab === "files"} onClick={() => setTab("files")}>文件</button>
       <button type="button" aria-pressed={tab === "changes"} onClick={() => { setTab("changes"); setPreview(null); }}>本轮变更</button>
       <button type="button" onClick={() => setRevision(value => value + 1)} disabled={busy}>刷新</button></nav>
+    {onResponseDetail && sessionId && <div className="workspace-detail-preference" aria-busy={savingDetail}>
+      <label>结果详略<select aria-label="结果详略" value={responseDetail} disabled={savingDetail}
+        onChange={event => void saveDetail(event.target.value as "short" | "auto" | "detailed")}>
+        <option value="short">简洁</option><option value="auto">自动</option><option value="detailed">详细</option>
+      </select></label>
+      <p className="workspace-detail-help" role={detailError ? "alert" : "status"}>{detailError
+        ? `${detailError} 请核对当前设置后重新选择。` : savingDetail ? "正在保存…" : "下一模型请求前生效；文件详情随偏好展开。"}</p>
+    </div>}
     {tab === "files" && <><input className="workspace-search" type="search" value={query} aria-label="搜索文件路径" placeholder="搜索文件路径…"
       onChange={event => { setQuery(event.target.value); setPreview(null); }} />
       <div className="workspace-breadcrumb"><button type="button" disabled={!path && !query} onClick={() => { setPath(path.split("/").slice(0, -1).join("/")); setQuery(""); setPreview(null); }}>上一级</button><span>{query ? "搜索结果" : path || "工作区根目录"}</span></div></>}
@@ -73,8 +119,12 @@ export function WorkspacePanel({ workspaceId, sessionId, api, onReference, onClo
         {preview.kind === "pdf" && <><iframe title={`${preview.name} PDF 预览`} src={api.contentUrl(workspaceId, preview.path)} referrerPolicy="no-referrer" /><p className="workspace-muted">若浏览器无法显示 PDF，可下载后打开。</p></>}
       </section>}
       {tab === "changes" && !busy && !changes && <p className="workspace-muted">本会话暂无已完成回合的文件快照。</p>}
-      {tab === "changes" && changes && <><p className="workspace-muted">{changes.partial ? "部分文件已对比。 " : ""}{changes.notice}</p>
-        {changes.files.length === 0 ? <p className="workspace-muted">记录范围内没有文本改动。</p> : changes.files.map(file => <details className="workspace-diff" key={file.path}><summary>{file.status === "added" ? "新增" : file.status === "deleted" ? "删除" : "修改"} · {file.path}</summary><pre tabIndex={0}>{file.diff}</pre></details>)}</>}
+      {tab === "changes" && changes && <>
+        <WorkspaceVerificationSummary changes={changes} />
+        <details className="workspace-capture-scope" open={changes.partial || responseDetail === "detailed"}>
+          <summary>快照范围{changes.partial ? " · 需要核对" : "与限制"}</summary><p className="workspace-muted">{changes.notice}</p>
+        </details>
+        {changes.files.length === 0 ? <p className="workspace-muted">记录范围内没有文本改动。</p> : changes.files.map((file, index) => <details className="workspace-diff" key={`${changes.turnId}:${file.path}:${responseDetail}`} open={responseDetail === "detailed" || (responseDetail === "auto" && changes.partial && index === 0)}><summary>{file.status === "added" ? "新增" : file.status === "deleted" ? "删除" : "修改"} · {file.path}</summary><pre tabIndex={0}>{file.diff}</pre></details>)}</>}
     </div>
   </aside>;
 }

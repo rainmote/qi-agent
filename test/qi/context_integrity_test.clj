@@ -22,6 +22,47 @@
 (defn- caught [f]
   (try (f) nil (catch clojure.lang.ExceptionInfo error (ex-data error))))
 
+(deftest summary-requests-retain-run-and-chunk-identity
+  (let [ctx (context (constantly (answer "summary")) {:max-source-chars 1200})]
+    (try
+      (let [store (kernel/require-service ctx :session/store)
+            manager (kernel/require-service ctx :context/manager)]
+        (append! store [{:role "user" :content (apply str (repeat 4000 "x"))}
+                        {:role "user" :content "current"}])
+        ((:compact! manager) {:force true :run-id "run-parent"})
+        (let [records (map :data (filter #(and (= "usage/request" (:type %))
+                                              (= :completed (get-in % [:data :status]))) ((:events store))))]
+          (is (> (count records) 1))
+          (is (every? #(= "run-parent" (:run-id %)) records))
+          (is (every? :compaction-id records))
+          (is (= 1 (count (set (map :compaction-id records)))))
+          (is (= (range (count records)) (map :chunk-index records)))))
+      (finally (kernel/dispose-all! ctx)))))
+
+(deftest automatic-compaction-uses-the-original-run-budget-and-preserves-history-on-exhaustion
+  (let [ctx (plugin/boot!
+             {:plugins [{:ns 'qi.plugins.session :config {:path nil :ephemeral true}}
+                        {:ns 'qi.plugins.model-registry}
+                        {:ns 'qi.plugins.mock :config {:context-window 2048 :generate (constantly (answer "summary"))}}
+                        {:ns 'qi.plugins.context-manager :config {:context-window 2048 :reserve-tokens 128
+                                                                :retain-messages 1 :max-source-chars 2000}}
+                        {:ns 'qi.plugins.runtime :config {:max-model-requests 2}}]})]
+    (try
+      (let [store (kernel/require-service ctx :session/store)
+            run (kernel/require-service ctx :agent/run)
+            history {:role "user" :content (apply str (repeat 12000 "x"))}]
+        (append! store [history])
+        (is (= :request-budget (:reason (caught #(run "current instruction")))))
+        (let [events ((:events store))
+              run-id (get-in (first (filter #(= "agent/run/start" (:type %)) events)) [:data :run-id])
+              requests (map :data (filter #(= "usage/request" (:type %)) events))]
+          (is (= 4 (count requests)))
+          (is (every? #(= run-id (:run-id %)) requests))
+          (is (every? #(= :compaction (:purpose %)) requests))
+          (is (not-any? #(= "session/compaction" (:type %)) events))
+          (is (= history (first ((:messages store)))))))
+      (finally (kernel/dispose-all! ctx)))))
+
 (deftest summary-covers-late-constraints-and-tool-arguments-beyond-the-old-prefix
   (let [requests (atom [])
         ctx (context (fn [request]
@@ -40,7 +81,7 @@
         (is (:compacted ((:compact! manager) {:force true})))
         (is (> (count @requests) 1))
         (let [source (apply str (map #(get-in % [:messages 0 :content]) @requests))
-              checkpoint (last ((:events store)))
+              checkpoint (last (filter #(= "session/compaction" (:type %)) ((:events store))))
               coverage (get-in checkpoint [:data :coverage])]
           (is (str/includes? source "TAIL-CONSTRAINT"))
           (is (str/includes? source (get-in history [0 :content])))

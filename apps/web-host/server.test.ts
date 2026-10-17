@@ -341,7 +341,7 @@ test("web host authenticates, catalogs, creates a real worker, and invokes RPC",
       result: Array<{ id: string; name: string; broken?: boolean }>;
     };
     assert.equal(agentPresetsResponse.status, 200, JSON.stringify(agentPresets));
-    assert.deepEqual(agentPresets.result.map((preset) => preset.id), ["standard", "creator"]);
+    assert.deepEqual(agentPresets.result.map((preset) => preset.id), ["standard", "creator", "production"]);
     assert.equal(agentPresets.result[1]?.name, "创造模式");
     assert.equal(JSON.stringify(agentPresets).includes("config_path"), false);
     assert.equal(JSON.stringify(agentPresets).includes("directory"), false);

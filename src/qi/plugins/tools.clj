@@ -253,7 +253,7 @@
    :requires #{:execution/world}
    :start
    (fn [ctx {:keys [max-read-chars default-read-lines timeout-ms
-                    compatibility-read-file]
+                    compatibility-read-file allow-tools]
              :or {max-read-chars 50000 default-read-lines 2000 timeout-ms 30000
                   compatibility-read-file true}}]
      (when-not (and (pos-int? max-read-chars)
@@ -263,7 +263,11 @@
                        {:max-read-chars max-read-chars
                         :default-read-lines default-read-lines
                         :timeout-ms timeout-ms})))
+     (when-not (or (nil? allow-tools)
+                   (and (sequential? allow-tools) (every? string? allow-tools)))
+       (throw (ex-info ":allow-tools must be an array of tool names" {})))
      (let [world (kernel/require-service ctx :execution/world)
+           allowed (when (some? allow-tools) (set allow-tools))
            process? (contains? (:capabilities world) :process)]
        (doseq [tool (cond-> [(current-time-tool)
                              (read-tool ctx world default-read-lines
@@ -277,5 +281,6 @@
                       compatibility-read-file
                       (conj (read-file-alias ctx world default-read-lines
                                              max-read-chars)))]
-         (kernel/register-tool! ctx tool)))
+         (when (or (nil? allowed) (contains? allowed (:name tool)))
+           (kernel/register-tool! ctx tool))))
      nil)})

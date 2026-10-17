@@ -242,7 +242,7 @@
       (throw (ex-info
               (str "Missing OpenAI API key; set "
                    (or (:api-key-env config) "OPENAI_API_KEY"))
-              {:provider :openai})))
+              {:provider :openai :code :missing-credentials :retryable false})))
     (let [tools (mapv tool-schema (:tools request))
           use-stream? (not= false (:stream config))
           body (cond->
@@ -260,12 +260,18 @@
           url (endpoint (or (:base-url config) default-base-url))
           response (post-with-retry
                     config url
-                    {:headers {"authorization" (str "Bearer " key)
+                    {:headers (cond-> {"authorization" (str "Bearer " key)
                                "content-type" "application/json"
                                "accept" (if use-stream?
                                           "text/event-stream"
                                           "application/json")
                                "user-agent" "qi-agent/0.1"}
+                                (get-in request [:accounting :request_id])
+                                (assoc "x-qi-request-id" (get-in request [:accounting :request_id]))
+                                (get-in request [:accounting :run-id])
+                                (assoc "x-qi-run-id" (get-in request [:accounting :run-id]))
+                                (get-in request [:accounting :purpose])
+                                (assoc "x-qi-purpose" (name (get-in request [:accounting :purpose]))))
                      :body (json/generate-string body)
                      :as (if use-stream? :stream :string)
                      :throw false

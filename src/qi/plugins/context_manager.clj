@@ -120,7 +120,7 @@
                                            :options (cond-> {} model (assoc :provider model)
                                                             reserve (assoc :max_output_tokens reserve))})))))
            compact-body!
-           (fn [{:keys [force reason cancel-token provider request]}]
+           (fn [{:keys [force reason cancel-token provider request run-id on-progress]}]
              (cancellation/throw-if-cancelled! cancel-token)
              (let [current ((:messages store))
                    request (pin-provider
@@ -153,14 +153,24 @@
                                                      (assoc :provider (get-in request [:options :provider])))})
                        chunks (source-chunks source max-source-chars
                                              #(:fits? (budget! (summary-request %))) max-summary-calls)
+                       compaction-id (str (random-uuid))
+                       run-id (or run-id (:run-id generation/*run*))
+                       completed (atom 0)
+                       _ (on-progress (cond-> {:status :started :compaction-id compaction-id
+                                                :completed-chunks 0 :total-chunks (count chunks) :reason reason}
+                                         run-id (assoc :run-id run-id)
+                                         (nil? run-id) (assoc :operation-id compaction-id)))
                        text (str/join
                              "\n\n"
                              (mapv
-                              (fn [{:keys [start end]}]
+                              (fn [chunk-index {:keys [start end]}]
                                 (cancellation/throw-if-cancelled! cancel-token)
                                 (try
                                   (let [response (generation/generate! ctx (check! (summary-request (subs source start end)))
-                                                                       {:purpose :compaction})
+                                                                       (cond-> {:purpose :compaction :compaction-id compaction-id
+                                                                                :chunk-index chunk-index}
+                                                                         run-id (assoc :run-id run-id)
+                                                                         (nil? run-id) (assoc :operation-id compaction-id)))
                                         content (get-in response [:message :content])]
                                     (cancellation/throw-if-cancelled! cancel-token)
                                     (when-not (and (string? content) (not (str/blank? content))
@@ -170,21 +180,42 @@
                                     (when-not (:fits? (budget! (assoc request :messages
                                                                      (summary/replacement content (:retained plan)))))
                                       (unfit! :compaction-insufficient (budget! request)))
+                                    (on-progress {:status :progress :completed-chunks (swap! completed inc)})
                                     content)
                                   (catch Throwable error
-                                    (if (or (:cancelled (ex-data error)) (= :context_unfit (:code (ex-data error))))
+                                    (if (or (:cancelled (ex-data error)) (= :context_unfit (:code (ex-data error)))
+                                            (contains? #{:request-budget :wall-budget} (:reason (ex-data error))))
                                       (throw error)
                                       (throw (ex-info "Semantic compaction failed; original context was preserved"
                                                       {:reason :summary-failed :retryable false
                                                        :chunk-start start :chunk-end end} error))))))
-                              chunks))
+                              (range) chunks))
                        coverage (summary/coverage visible source chunks)
                        result ((:compact! store)
                                {:plan plan :summary text :coverage coverage :cancel-token cancel-token
                                 :validate! #(check! (assoc request :messages %))})]
                    (kernel/emit! ctx :context/compacted (assoc result :semantic true :reason reason))
+                   (on-progress {:status :completed :compacted (:compacted result)
+                                 :reason (or (:reason result) reason)})
                    result))))
-           compact! (fn ([] (compact-body! {})) ([options] (compact-body! options)))
+           run-compaction!
+           (fn [options]
+             (let [started (System/nanoTime)
+                   current (atom nil)
+                   progress! (fn [update]
+                               (let [event (swap! current #(assoc (merge % update)
+                                                                 :elapsed-ms (quot (- (System/nanoTime) started) 1000000)))]
+                                 ;; Durable facts are replayable but never become model messages.
+                                 (kernel/emit! ctx :session/event ((:append! store) "context/compaction" event))
+                                 (kernel/emit! ctx :context/compaction event)))]
+               (try
+                 (compact-body! (assoc options :on-progress progress!))
+                 (catch Throwable error
+                   (when @current
+                     (progress! {:status (if (:cancelled (ex-data error)) :cancelled :failed)
+                                 :reason (or (:reason (ex-data error)) :summary-failed)}))
+                   (throw error)))))
+           compact! (fn ([] (run-compaction! {})) ([options] (run-compaction! options)))
            prepare! (fn [request]
                       (let [request (pin-provider request)
                             budget (budget! request)]

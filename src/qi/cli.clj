@@ -4,6 +4,7 @@
             [qi.kernel :as kernel]
             [qi.plugin :as plugin]
             [qi.protocol :as protocol]
+            [qi.provenance :as provenance]
             [qi.plugins.trust :as trust]
             [clojure.string :as str]))
 
@@ -216,6 +217,10 @@
                        (for-mode mode)
                        (with-remote-interaction mode)
                        (with-approval-mode approval-mode))
+            entry-provenance (provenance/for-entry config {:provider provider :mode mode})
+            config (if-let [index (session-plugin-index (:plugins config))]
+                     (assoc-in config [:plugins index :config :provenance] entry-provenance)
+                     config)
             allow-external-plugins (trust/trusted-root? ".")]
         (let [ctx (plugin/boot! config
                                 {:allow-external-plugins
