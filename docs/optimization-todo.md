@@ -86,7 +86,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | OPT-001 | 会话日志跨进程写入租约 | Clojure session | P0 | M | 中 | R | todo |
 | OPT-002 | Web 托管 provider 的密钥端点策略 | Web/provider | P0 | S | 低 | R | blocked |
-| OPT-003 | maintenance 付费直连的凭据隔离 | maintenance | P0 | M | 中 | C | in-progress |
+| OPT-003 | maintenance 付费直连的凭据隔离 | maintenance | P0 | M | 中 | R | blocked |
 | OPT-004 | Rust daemon 分层与协议类型化 | Rust | P1 | L | 中 | C | todo |
 | OPT-005 | Rust 生命周期锁不跨越 RPC | Rust | P1 | M | 中 | C | todo |
 | OPT-006 | Web 快照刷新合并事件游标 | Web | P1 | S | 低 | C | todo |
@@ -760,3 +760,16 @@
   `OPT-003-baseline.log`，作为跨范围发现，未隐去。
 - 平台为本地 macOS；Linux 浏览器/可信镜像验收 NOT_RUN，镜像 digest 未提供；独立安全/测试审查
   NOT_RUN。因此暂列 blocked，未勾选 done，也未接受、合入或激活候选规则。
+
+
+### OPT-003：直连已移除，待独立控制器审查与真实容器检查
+
+- `qi-supervised` driver 在 preflight/执行前拒绝；`--supervised-live` 保留为需要 `--budget` 的 broker 别名。
+- 执行器统一 `--network none`，拒绝任何 `envNames` 或联网请求，错误发生在 Docker 调用前。
+- broker smoke 检查所有 `*_API_KEY` 与 `QI_*`（仅允许容器 relay 地址），无宿主凭据进入容器。
+- `OPT-003-red` 两项旧行为断言失败；`OPT-003-green-target` 三项通过；
+  `OPT-003-maintenance-full` 108 tests 全部通过，包含真实离线 Babashka/relay 与模拟 provider 账本。
+- `OPT-003-evals` 72/74 通过；两项未改动的 Codex CLI 回放 fixture 在程序入口执行前触发 2 秒超时，
+  未扩大超时、放宽断言或隐去该失败。单独诊断另存 `OPT-003-eval-diagnostic`，不替代全套结果。
+- 本机 Docker engine socket 不存在；真实固定镜像 smoke NOT_RUN，真实付费调用 NOT_RUN，
+  独立控制器/执行器/测试审查 NOT_RUN；候选没有部署或用于给自身签发验收。

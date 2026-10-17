@@ -15,7 +15,11 @@ const image = immutableImage(process.env.QI_MAINTENANCE_IMAGE);
 await fs.mkdir(output);
 const root = path.join(output, 'state'), workspace = path.join(output, 'workspace'); await fs.mkdir(workspace);
 await fs.writeFile(path.join(workspace, 'request.mjs'), `import assert from 'node:assert/strict'; import net from 'node:net';
-assert.equal(process.env.OPENAI_API_KEY,undefined);
+for(const name of Object.keys(process.env)) {
+  if(name.endsWith('_API_KEY') || (name.startsWith('QI_') && name!=='QI_MAINTENANCE_BROKER_URL')) {
+    assert.fail('Unexpected credential or host setting in container: '+name);
+  }
+}
 const network=await new Promise(resolve=>{const s=net.connect({host:'192.0.2.1',port:443});s.on('error',e=>resolve(e.code));s.on('connect',()=>{s.destroy();resolve('CONNECTED')});s.setTimeout(500,()=>{s.destroy();resolve('TIMEOUT')})});
 assert.equal(network,'ENETUNREACH');
 const response=await fetch(process.env.QI_MAINTENANCE_BROKER_URL+'/responses',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:'fixture-model',input:[{role:'user',content:'hello'}]})});
