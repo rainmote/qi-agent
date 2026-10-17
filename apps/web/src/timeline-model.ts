@@ -1,8 +1,9 @@
 import type { DurableEvent } from "./types";
+import { runOutcome } from "./run-outcome";
 
 export interface ToolBatch { id: string; calls: DurableEvent[] }
 export type TimelineRow =
-  | { id: string; kind: "message" | "decision" | "error"; event: DurableEvent }
+  | { id: string; kind: "message" | "decision" | "error" | "outcome"; event: DurableEvent }
   | { id: string; kind: "tools"; batch: ToolBatch };
 export interface TimelineModel {
   rows: TimelineRow[];
@@ -30,7 +31,16 @@ export function appendTimeline(model: TimelineModel, event: DurableEvent, buildi
     return { ...model, results };
   }
   let row: TimelineRow;
-  if (event.type === "tool/call") {
+  if (event.type === "agent/run/end" || event.type === "agent.run/end") {
+    const outcome = runOutcome(event.data);
+    if (!outcome) return model;
+    const id = `outcome:${outcome["run-id"]}`;
+    if (model.rows.some(row => row.id === id)) return model;
+    const rows = model.rows.filter(row => !(row.kind === "error" &&
+      (row.event.data["run-id"] ?? row.event.data.run_id) === outcome["run-id"]));
+    rows.push({ id, kind: "outcome", event: { ...event, data: { ...outcome } } });
+    return { ...model, rows, activeToolRow: null };
+  } else if (event.type === "tool/call") {
     const previous = model.activeToolRow === null ? undefined : model.rows[model.activeToolRow];
     if (previous?.kind === "tools") {
       const rows = building ? model.rows : [...model.rows];
@@ -48,6 +58,8 @@ export function appendTimeline(model: TimelineModel, event: DurableEvent, buildi
   } else if (event.type === "approval/decision") {
     row = { id: event.id, kind: "decision", event };
   } else if (event.type === "agent/error") {
+    const runId = event.data["run-id"] ?? event.data.run_id;
+    if (runId && model.rows.some(row => row.id === `outcome:${runId}`)) return model;
     row = { id: event.id, kind: "error", event };
   } else return model;
   const rows = building ? model.rows : [...model.rows];

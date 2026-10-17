@@ -1,0 +1,90 @@
+[
+  {
+    "file": "ui-loop",
+    "raw_sha256": "f09616961a9c2f620c04d0a1b850cf7139d2015ee3c935690d86941f04013f0e",
+    "events": [
+      {
+        "at": "2026-10-16T04:42:44.260Z",
+        "type": "task/created",
+        "data": {
+          "task_id": "web-run-overview-20261016",
+          "status": "queued",
+          "base_sha": "a0b74ad310aa0e0978f747369c41315560aa6dd3",
+          "controller_sha": "a6782fc7ee1410c5b281d4017b7402aff5488b22"
+        }
+      },
+      {
+        "at": "2026-10-16T04:42:44.463Z",
+        "type": "task/transition",
+        "data": {
+          "task_id": "web-run-overview-20261016",
+          "status": "scoped"
+        }
+      },
+      {
+        "at": "2026-10-16T04:43:00.358Z",
+        "type": "check/start",
+        "data": {
+          "task_id": "web-run-overview-20261016",
+          "check_id": "rust-format",
+          "phase": "baseline",
+          "container": "qi-maint-check-0a370837-7993-4fbe-9b25-021e359c0dab",
+          "container_owner": "e041d06c-f387-4d50-9c4b-300604380639"
+        }
+      },
+      {
+        "at": "2026-10-16T04:45:10.687Z",
+        "type": "task/transition",
+        "data": {
+          "task_id": "web-run-overview-20261016",
+          "status": "uncertain",
+          "reason": "Container inspection is uncertain"
+        }
+      }
+    ]
+  },
+  {
+    "file": "strict-context-accessibility",
+    "raw_sha256": "ebf0070635ad99a5f11912ec15b2262a83a247b9f81254c8f6c44ba2cb624e54",
+    "events": [
+      {
+        "at": "2026-10-16T10:23:47.190Z",
+        "type": "task/created",
+        "data": {
+          "task_id": "context-a11y-description-20261016",
+          "status": "queued",
+          "base_sha": "a0b74ad310aa0e0978f747369c41315560aa6dd3",
+          "controller_sha": "7dfa4a23ac7b12d457317d9e7906004a74723333"
+        }
+      },
+      {
+        "at": "2026-10-16T10:23:47.405Z",
+        "type": "task/transition",
+        "data": {
+          "task_id": "context-a11y-description-20261016",
+          "status": "scoped"
+        }
+      },
+      {
+        "at": "2026-10-16T10:24:01.031Z",
+        "type": "check/start",
+        "data": {
+          "task_id": "context-a11y-description-20261016",
+          "check_id": "rust-format",
+          "phase": "baseline",
+          "container": "qi-maint-check-a2de4257-fbb1-4df5-b7d3-4a472adba0c8",
+          "container_owner": "f746f596-c62c-41e1-b618-84ff8d371857"
+        }
+      },
+      {
+        "at": "2026-10-16T10:26:25.031Z",
+        "type": "task/transition",
+        "data": {
+          "task_id": "context-a11y-description-20261016",
+          "status": "uncertain",
+          "reason": "Container inspection is uncertain"
+        }
+      }
+    ]
+  }
+]

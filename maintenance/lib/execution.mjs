@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { runProcess } from '../../evals/lib/core.mjs';
 
 export function git(repo, ...args) {
@@ -77,22 +77,41 @@ export function resourceLimits(resources = {}) {
   return limits;
 }
 
-export async function cleanupContainer(name, owner, run = runProcess) {
+function dockerArgs(argv, environment) {
+  if (!environment) return argv;
+  if (typeof environment.host !== 'string' || !environment.host || environment.host.length > 4096 || /[\0\r\n]/.test(environment.host) ||
+      createHash('sha256').update(environment.host).digest('hex') !== environment.endpoint ||
+      typeof environment.engine !== 'string' || !environment.engine) throw new Error('Invalid original engine binding');
+  return ['--host', environment.host, ...argv];
+}
+
+async function assertEngine(environment, run, timeoutMs = 5000) {
+  if (!environment) return;
+  const result = await run('docker', dockerArgs(['info', '--format', '{{.ID}}'], environment), { timeoutMs, maxOutputBytes: 65536 });
+  if (result.exit_code !== 0 || result.error || result.signal || result.timed_out || result.output_limited ||
+      typeof result.stdout !== 'string' || result.stdout.trim() !== environment.engine) throw new Error('Original engine identity remains unresolved');
+}
+
+export async function cleanupContainer(name, owner, run = runProcess, environment) {
   if (!/^qi-maint-(?:check-)?[a-f0-9-]{36}$/.test(name ?? '') || !/^[a-f0-9-]{36}$/.test(owner ?? '')) throw new Error('Missing container ownership receipt');
-  const inspected = await run('docker', ['inspect', '--type=container', name], { timeoutMs: 10_000 });
+  await assertEngine(environment, run);
+  const inspected = await run('docker', dockerArgs(['inspect', '--type=container', name], environment), { timeoutMs: 10_000 });
+  if (inspected.error || inspected.signal || inspected.timed_out || inspected.output_limited) throw new Error('Container inspection is uncertain');
   if (inspected.exit_code !== 0) {
     if (/No such (object|container)/i.test(inspected.stderr)) return { status: 'absent', container: name };
     throw new Error('Container inspection is uncertain');
   }
   const container = JSON.parse(inspected.stdout)[0];
   if (container.Config?.Labels?.['qi.maintenance.owner'] !== owner || !/^[a-f0-9]{64}$/.test(container.Id ?? '')) throw new Error('Container ownership mismatch');
-  const removed = await run('docker', ['rm', '-f', container.Id], { timeoutMs: 15_000 });
-  if (removed.exit_code !== 0 && !/No such container/i.test(removed.stderr)) throw new Error('Container cleanup is uncertain');
+  const removed = await run('docker', dockerArgs(['rm', '-f', container.Id], environment), { timeoutMs: 15_000 });
+  if (removed.error || removed.signal || removed.timed_out || removed.output_limited ||
+      (removed.exit_code !== 0 && !/No such container/i.test(removed.stderr))) throw new Error('Container cleanup is uncertain');
   return { status: 'removed', container: name, container_id: container.Id };
 }
 
-export async function containerCommand({ image, argv, workspace, readonly = true, mounts = [], timeoutMs, envNames = [], network = false,
-  name = 'qi-maint-' + randomUUID(), owner = randomUUID(), resources, shouldStop = async () => false }) {
+export async function containerCommand({ image, argv, workspace, readonly = true, mounts = [], timeoutMs = 30000, envNames = [], network = false,
+  name = 'qi-maint-' + randomUUID(), owner = randomUUID(), resources, environment, shouldStop = async () => false }) {
+  const deadline = Date.now() + timeoutMs;
   immutableImage(image);
   const limits = resourceLimits(resources);
   if (!Array.isArray(argv) || !argv.length || argv.some((v) => typeof v !== 'string' || v.includes('\0'))) throw new Error('Expected a nonempty argv array');
@@ -123,17 +142,19 @@ export async function containerCommand({ image, argv, workspace, readonly = true
       if (stopping) return;
       stopping = true;
       pendingStop = (async () => {
-        try { if (await shouldStop()) await cleanupContainer(name, owner); }
+        try { if (await shouldStop()) await cleanupContainer(name, owner, runProcess, environment); }
         catch (error) { stopError = error; }
         finally { stopping = false; }
       })();
     }, 500);
-    return await runProcess('docker', args, { timeoutMs, maxOutputBytes: 10_000_000 });
+    await assertEngine(environment, runProcess, Math.min(5000, Math.max(1, deadline - Date.now())));
+    if (Date.now() >= deadline) throw new Error('Original execution deadline exhausted');
+    return await runProcess('docker', dockerArgs(args, environment), { timeoutMs: deadline - Date.now(), maxOutputBytes: 10_000_000 });
   } finally {
     clearInterval(poll);
     await pendingStop;
     // Killing the Docker client does not guarantee that its container stopped.
-    await cleanupContainer(name, owner);
+    await cleanupContainer(name, owner, runProcess, environment);
     if (stopError) throw stopError;
   }
 }

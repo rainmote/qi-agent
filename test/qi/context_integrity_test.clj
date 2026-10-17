@@ -81,7 +81,7 @@
         (is (:compacted ((:compact! manager) {:force true})))
         (is (> (count @requests) 1))
         (let [source (apply str (map #(get-in % [:messages 0 :content]) @requests))
-              checkpoint (last ((:events store)))
+              checkpoint (last (filter #(= "session/compaction" (:type %)) ((:events store))))
               coverage (get-in checkpoint [:data :coverage])]
           (is (str/includes? source "TAIL-CONSTRAINT"))
           (is (str/includes? source (get-in history [0 :content])))

@@ -15,6 +15,7 @@
             [qi.run-outcome-test]
             [qi.context-integrity-test]
             [qi.generation-test]
+            [qi.provenance-test]
             [qi.remote-snapshot-test]
             [qi.remote-interaction-cancel-test]
             [qi.computer-use-test]
@@ -2717,39 +2718,65 @@
       (finally (kernel/dispose-all! ctx)))))
 
 (deftest deterministic-parallel-tool-batches
-  (let [calls [(tool-call "slow-a" "slow_a" {})
-               (tool-call "slow-b" "slow_b" {})]
-        completed (atom [])
+  (let [calls [(tool-call "slow-a" "slow_a" {}) (tool-call "slow-b" "slow_b" {})]
+        entered [(promise) (promise)] release (promise) completed (atom [])
         ctx (plugin/boot! (batch-config calls))]
     (try
       (let [tool-ctx (kernel/plugin-context ctx :test/delay-tools)]
-        (kernel/register-tool! tool-ctx (delay-tool "slow_a" nil 200 completed))
-        (kernel/register-tool! tool-ctx (delay-tool "slow_b" nil 200 completed))
-        (let [started (System/nanoTime)
-              result ((kernel/require-service ctx :agent/run) "parallel")
-              elapsed-ms (/ (- (System/nanoTime) started) 1000000.0)
-              tool-messages (filterv #(= "tool" (:role %))
-                                     (:messages result))]
-          (is (< elapsed-ms 350))
-          (is (= ["slow-a" "slow-b"]
-                 (mapv :tool_call_id tool-messages)))
-          (is (= #{"slow_a" "slow_b"} (set @completed)))))
-      (finally (kernel/dispose-all! ctx))))
+        (doseq [[name ready] (map vector ["slow_a" "slow_b"] entered)]
+          (kernel/register-tool! tool-ctx
+                                (assoc (delay-tool name nil 0 completed)
+                                       :execute (fn [_ _]
+                                                  (deliver ready :entered)
+                                                  (when (= :timeout (deref release 5000 :timeout))
+                                                    (throw (ex-info "Parallel test release timed out" {})))
+                                                  (swap! completed conj name)
+                                                  {:name name}))))
+        (let [pending (future ((kernel/require-service ctx :agent/run) "parallel"))]
+          (try
+            ;; Both bodies must enter before either is allowed to finish.
+            ;; Scheduler speed is not evidence for or against overlap.
+            (doseq [ready entered] (is (= :entered (deref ready 5000 :timeout))))
+            (is (empty? @completed))
+            (deliver release true)
+            (let [result (deref pending 5000 :timeout)]
+              (is (map? result))
+              (is (= ["slow-a" "slow-b"]
+                     (mapv :tool_call_id (filterv #(= "tool" (:role %)) (:messages result)))))
+              (is (= #{"slow_a" "slow_b"} (set @completed))))
+            (finally (deliver release true)))))
+      (finally (deliver release true) (kernel/dispose-all! ctx))))
 
-  (let [calls [(tool-call "ordered-a" "ordered_a" {})
-               (tool-call "ordered-b" "ordered_b" {})]
-        completed (atom [])
+  (let [calls [(tool-call "ordered-a" "ordered_a" {}) (tool-call "ordered-b" "ordered_b" {})]
+        first-entered (promise) second-entered (promise) release (promise) completed (atom [])
         ctx (plugin/boot! (batch-config calls))]
     (try
       (let [tool-ctx (kernel/plugin-context ctx :test/ordered-tools)]
         (kernel/register-tool! tool-ctx
-                               (delay-tool "ordered_a" :sequential 200 completed))
-        (kernel/register-tool! tool-ctx (delay-tool "ordered_b" nil 200 completed))
-        (let [started (System/nanoTime)]
-          ((kernel/require-service ctx :agent/run) "sequential")
-          (is (>= (/ (- (System/nanoTime) started) 1000000.0) 350))
-          (is (= ["ordered_a" "ordered_b"] @completed))))
-      (finally (kernel/dispose-all! ctx)))))
+                              (assoc (delay-tool "ordered_a" :sequential 0 completed)
+                                     :execute (fn [_ _]
+                                                (deliver first-entered true)
+                                                (when (= :timeout (deref release 5000 :timeout))
+                                                  (throw (ex-info "Sequential test release timed out" {})))
+                                                (swap! completed conj "ordered_a")
+                                                {:name "ordered_a"})))
+        (kernel/register-tool! tool-ctx
+                              (assoc (delay-tool "ordered_b" nil 0 completed)
+                                     :execute (fn [_ _]
+                                                (deliver second-entered true)
+                                                (is (= ["ordered_a"] @completed))
+                                                (swap! completed conj "ordered_b")
+                                                {:name "ordered_b"})))
+        (let [pending (future ((kernel/require-service ctx :agent/run) "sequential"))]
+          (try
+            (is (true? (deref first-entered 5000 false)))
+            (is (not (realized? second-entered)))
+            (deliver release true)
+            (is (map? (deref pending 5000 :timeout)))
+            (is (realized? second-entered))
+            (is (= ["ordered_a" "ordered_b"] @completed))
+            (finally (deliver release true)))))
+      (finally (deliver release true) (kernel/dispose-all! ctx)))))
 
 (defn- delete-tree! [directory]
   (let [root (.toPath (io/file directory))]
@@ -4250,7 +4277,7 @@
 
 (defn -main []
   (let [{:keys [fail error]}
-        (run-tests 'qi.test-runner 'qi.run-outcome-test 'qi.context-integrity-test 'qi.generation-test
+        (run-tests 'qi.test-runner 'qi.run-outcome-test 'qi.context-integrity-test 'qi.generation-test 'qi.provenance-test
                    'qi.web-test 'qi.presets-test
                    'qi.runtime-inspect-test 'qi.runtime-lab-test
                    'qi.session-title-test 'qi.runtime-recovery-test

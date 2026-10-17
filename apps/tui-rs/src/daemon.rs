@@ -3241,7 +3241,7 @@ impl Runtime {
                     worker.alive.store(false, Ordering::SeqCst);
                 }
                 if !wait_for_worker_stop(&descriptor_path, descriptor.pid, Duration::from_secs(5)) {
-                    terminate_worker_process_group(descriptor.pid);
+                    terminate_worker_groups(&descriptor);
                 }
                 retire_orphaned_worker(&descriptor)?;
                 self.database
@@ -5309,29 +5309,47 @@ fn retire_orphaned_worker(descriptor: &WorkerDescriptor) -> Result<()> {
         bail!("existing worker proxy is still alive; refusing a second session writer")
     }
     if let Some(group) = descriptor.pid {
+        let child_group = descriptor.child_process_group.unwrap_or(group);
+        if descriptor.child_process_group.is_some()
+            && descriptor.child_pid.is_some_and(|pid| pid != child_group)
+        {
+            bail!("orphan worker process group does not match its recorded child")
+        }
         if let Some(child_pid) = descriptor.child_pid.filter(|pid| process_alive(Some(*pid)))
-            && unsafe { libc::getpgid(child_pid as i32) } != group as i32
+            && unsafe { libc::getpgid(child_pid as i32) } != child_group as i32
         {
             bail!("orphan worker process ownership could not be verified")
         }
-        // Tools can survive both the proxy and its BB child. A group without
-        // its original leader still belongs to that worker session.
-        if unsafe { libc::kill(-(group as i32), 0) } == 0 {
-            terminate_worker_process_group(Some(group));
-            let deadline = std::time::Instant::now() + Duration::from_secs(5);
-            while unsafe { libc::kill(-(group as i32), 0) } == 0
-                && std::time::Instant::now() < deadline
-            {
-                thread::sleep(Duration::from_millis(20));
-            }
+        // New watchdog workers have an explicitly recorded BB group. Legacy
+        // workers share the proxy group. Retire both before another writer.
+        let mut groups = vec![group, child_group];
+        groups.sort_unstable();
+        groups.dedup();
+        for group in groups {
             if unsafe { libc::kill(-(group as i32), 0) } == 0 {
-                bail!("orphan worker tools have not exited; refusing a second session writer")
+                terminate_worker_process_group(Some(group));
+                let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                while unsafe { libc::kill(-(group as i32), 0) } == 0
+                    && std::time::Instant::now() < deadline
+                {
+                    thread::sleep(Duration::from_millis(20));
+                }
+                if unsafe { libc::kill(-(group as i32), 0) } == 0 {
+                    bail!("orphan worker tools have not exited; refusing a second session writer")
+                }
             }
         }
     } else if process_alive(descriptor.child_pid) {
         bail!("orphan worker has no recorded process group")
     }
     Ok(())
+}
+
+fn terminate_worker_groups(descriptor: &WorkerDescriptor) {
+    if let Some(group) = descriptor.child_process_group {
+        terminate_worker_process_group(Some(group));
+    }
+    terminate_worker_process_group(descriptor.pid);
 }
 
 fn terminate_worker_process_group(pid: Option<u32>) {
@@ -5363,7 +5381,9 @@ fn terminate_failed_worker_start(
         }
         return;
     };
-    terminate_worker_process_group(descriptor.pid.or(fallback_pid));
+    // The proxy can time out before publishing its PID into the descriptor.
+    descriptor.pid = descriptor.pid.or(fallback_pid);
+    terminate_worker_groups(&descriptor);
     let _ = fs::remove_file(&descriptor.socket_path);
     if remove_descriptor {
         let _ = fs::remove_file(descriptor_path);
@@ -5698,6 +5718,14 @@ fn doctor(runtime: &Runtime, fix: bool) -> Value {
     let workers_ok = values
         .iter()
         .all(|worker| worker.get("alive") == Some(&Value::Bool(true)));
+    let telemetry_sources = runtime.paths.telemetry_sources(
+        runtime
+            .agents
+            .lock()
+            .expect("agents mutex poisoned")
+            .values()
+            .map(|agent| agent.session_path.clone()),
+    );
     json!({
         "ok": workers_ok && database_integrity == "ok"
             && schema_revision == SCHEMA_REVISION,
@@ -5708,6 +5736,7 @@ fn doctor(runtime: &Runtime, fix: bool) -> Value {
         "socket": runtime.paths.public_socket,
         "database": runtime.paths.database,
         "database_backups": runtime.paths.state_dir.join("backups"),
+        "telemetry_sources": telemetry_sources,
         "workers": values,
         "idle_eviction": idle_eviction_status(runtime),
         "schedules": runtime.database.list_schedules(None).unwrap_or_default(),
@@ -5801,6 +5830,161 @@ fn reject_archive_symlink(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct OwnedWorkerProcess(std::process::Child);
+
+    impl OwnedWorkerProcess {
+        fn spawn() -> Self {
+            let mut command = Command::new("/bin/sleep");
+            command
+                .arg("60")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            unsafe {
+                command.pre_exec(|| {
+                    if libc::setsid() < 0 {
+                        Err(std::io::Error::last_os_error())
+                    } else {
+                        Ok(())
+                    }
+                });
+            }
+            let mut child = command.spawn().unwrap();
+            assert!(child.try_wait().unwrap().is_none());
+            Self(child)
+        }
+
+        fn stopped(&mut self) -> bool {
+            let deadline = Instant::now() + Duration::from_millis(500);
+            loop {
+                if self.0.try_wait().unwrap().is_some() {
+                    return true;
+                }
+                if Instant::now() >= deadline {
+                    return false;
+                }
+                thread::sleep(Duration::from_millis(5));
+            }
+        }
+    }
+
+    impl Drop for OwnedWorkerProcess {
+        fn drop(&mut self) {
+            if matches!(self.0.try_wait(), Ok(None)) {
+                unsafe {
+                    libc::kill(-(self.0.id() as i32), libc::SIGKILL);
+                }
+                let _ = self.0.wait();
+            }
+        }
+    }
+
+    fn assert_failed_start_cleanup(state: &str, remove_descriptor: bool) {
+        let root = std::env::temp_dir().join(format!("qi-failed-start-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("worker.json");
+        let socket = root.join("worker.sock");
+        let mut proxy = OwnedWorkerProcess::spawn();
+        let mut fallback = OwnedWorkerProcess::spawn();
+        let mut child = OwnedWorkerProcess::spawn();
+        let descriptor = WorkerDescriptor {
+            version: 1,
+            worker_id: "worker-test".into(),
+            agent_id: "agent-test".into(),
+            root_agent_id: "agent-test".into(),
+            workspace_id: "workspace-test".into(),
+            workspace_path: root.clone(),
+            session_path: root.join("session.jsonl"),
+            repository_root: root.clone(),
+            config_path: root.join("agent.edn"),
+            preset_id: None,
+            repl_backend: None,
+            socket_path: socket.clone(),
+            token: "test-only".into(),
+            generation: 1,
+            pid: (state == "known-pid").then_some(proxy.0.id()),
+            child_pid: (state == "child-group").then_some(child.0.id()),
+            child_process_group: (state == "child-group").then_some(child.0.id()),
+            session_id: None,
+            status: "starting".into(),
+            started_at_ms: 0,
+        };
+        if state != "missing" {
+            write_descriptor(&path, &descriptor).unwrap();
+            fs::write(&socket, b"owned socket placeholder").unwrap();
+        }
+        terminate_failed_worker_start(&path, remove_descriptor, Some(fallback.0.id()));
+        let (proxy_stopped, fallback_stopped) = if state == "known-pid" {
+            (proxy.stopped(), fallback.0.try_wait().unwrap().is_some())
+        } else {
+            (proxy.0.try_wait().unwrap().is_some(), fallback.stopped())
+        };
+        let child_stopped = if state == "child-group" {
+            child.stopped()
+        } else {
+            child.0.try_wait().unwrap().is_some()
+        };
+        let descriptor_state = if !remove_descriptor && state != "missing" {
+            let stopped = read_descriptor(&path).unwrap();
+            stopped.status == "stopped" && stopped.pid.is_none() && stopped.child_pid.is_none()
+        } else {
+            !path.exists()
+        };
+        let socket_removed = !socket.exists();
+        fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            proxy_stopped,
+            state == "known-pid",
+            "recorded PID must take precedence"
+        );
+        assert_eq!(
+            fallback_stopped,
+            state != "known-pid",
+            "fallback PID must terminate only when needed"
+        );
+        assert_eq!(
+            child_stopped,
+            state == "child-group",
+            "recorded child group must also terminate"
+        );
+        assert!(
+            descriptor_state,
+            "descriptor removal/stopped state must persist"
+        );
+        assert!(socket_removed, "failed worker socket must be removed");
+    }
+
+    #[test]
+    fn failed_start_cleans_new_worker_without_recorded_pid() {
+        assert_failed_start_cleanup("no-pid", true);
+    }
+
+    #[test]
+    fn failed_start_cleans_recovery_without_recorded_pid() {
+        assert_failed_start_cleanup("no-pid", false);
+    }
+
+    #[test]
+    fn failed_start_preserves_recorded_pid_precedence() {
+        for remove in [true, false] {
+            assert_failed_start_cleanup("known-pid", remove);
+        }
+    }
+
+    #[test]
+    fn failed_start_cleans_missing_descriptor() {
+        for remove in [true, false] {
+            assert_failed_start_cleanup("missing", remove);
+        }
+    }
+
+    #[test]
+    fn failed_start_cleans_child_group_and_fallback_proxy() {
+        for remove in [true, false] {
+            assert_failed_start_cleanup("child-group", remove);
+        }
+    }
 
     #[test]
     fn database_migrations_are_versioned_backed_up_and_reject_newer_schemas() {
@@ -5939,6 +6123,7 @@ mod tests {
             generation: 4,
             pid: None,
             child_pid: None,
+            child_process_group: None,
             session_id: Some("session-1".into()),
             status: "running".into(),
             started_at_ms: 0,
@@ -6492,6 +6677,7 @@ mod tests {
             generation: 1,
             pid: None,
             child_pid: None,
+            child_process_group: None,
             session_id: None,
             status: "running".into(),
             started_at_ms: 0,

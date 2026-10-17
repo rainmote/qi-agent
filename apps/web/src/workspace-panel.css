@@ -22,3 +22,14 @@
 @media(max-width:600px){.workspace-panel{position:fixed;inset:0;z-index:45;border:0}.workspace-preview iframe{height:55dvh}.attachment-list li>span{max-width:145px}.attachment-actions .workspace-muted{flex-basis:100%}}
 
 .workbench-content{min-height:0;flex:1;overflow:auto}.workbench-approval{flex:none;background:var(--layer-1);border-top:1px solid var(--border-2)}.workbench-approval .approval-panel{border-bottom:0}
+
+/* finesse · component: response-detail · register=product
+ * states: default · hover · focus-visible · active · disabled · loading · error · success
+ * tokens: inherited (styles.css) */
+.workspace-detail-preference{padding:0 12px 8px;min-width:0}.workspace-detail-preference label{display:flex;align-items:center;gap:12px;justify-content:space-between;font-size:13px;color:var(--text-2)}
+.workspace-detail-preference select{min-height:44px;min-width:104px;padding:8px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);background:var(--input);color:var(--text);font:inherit;outline:2px solid transparent;outline-offset:2px;cursor:pointer}
+.workspace-detail-preference select:focus-visible{outline-color:var(--accent)}.workspace-detail-preference select:active{background:var(--active)}.workspace-detail-preference select:disabled{opacity:.5;cursor:not-allowed}.workspace-detail-preference[aria-busy=true]{cursor:progress}
+.workspace-detail-help{min-height:2.8em;font-size:12px;line-height:1.4;color:var(--text-2);margin:6px 0 0;overflow-wrap:anywhere}.workspace-detail-help[role=alert]{color:var(--danger)}
+.workspace-result-summary{border:1px solid var(--border-2);border-radius:var(--radius-sm);background:var(--layer-2);padding:10px 12px;font-size:13px;line-height:1.6;overflow-wrap:anywhere}.workspace-result-summary p{margin:0}.workspace-result-summary p+p{margin-top:6px}.workspace-result-summary strong{font-weight:600}
+.workspace-capture-scope summary{min-height:44px;padding:12px 0;cursor:pointer;font-size:12px;color:var(--text-2)}
+@media(hover:hover){.workspace-detail-preference select:hover:not(:disabled){background:var(--hover)}}
