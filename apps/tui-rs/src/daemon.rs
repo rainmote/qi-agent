@@ -5381,6 +5381,8 @@ fn terminate_failed_worker_start(
         }
         return;
     };
+    // The proxy can time out before publishing its PID into the descriptor.
+    descriptor.pid = descriptor.pid.or(fallback_pid);
     terminate_worker_groups(&descriptor);
     let _ = fs::remove_file(&descriptor.socket_path);
     if remove_descriptor {
@@ -5828,6 +5830,161 @@ fn reject_archive_symlink(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct OwnedWorkerProcess(std::process::Child);
+
+    impl OwnedWorkerProcess {
+        fn spawn() -> Self {
+            let mut command = Command::new("/bin/sleep");
+            command
+                .arg("60")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            unsafe {
+                command.pre_exec(|| {
+                    if libc::setsid() < 0 {
+                        Err(std::io::Error::last_os_error())
+                    } else {
+                        Ok(())
+                    }
+                });
+            }
+            let mut child = command.spawn().unwrap();
+            assert!(child.try_wait().unwrap().is_none());
+            Self(child)
+        }
+
+        fn stopped(&mut self) -> bool {
+            let deadline = Instant::now() + Duration::from_millis(500);
+            loop {
+                if self.0.try_wait().unwrap().is_some() {
+                    return true;
+                }
+                if Instant::now() >= deadline {
+                    return false;
+                }
+                thread::sleep(Duration::from_millis(5));
+            }
+        }
+    }
+
+    impl Drop for OwnedWorkerProcess {
+        fn drop(&mut self) {
+            if matches!(self.0.try_wait(), Ok(None)) {
+                unsafe {
+                    libc::kill(-(self.0.id() as i32), libc::SIGKILL);
+                }
+                let _ = self.0.wait();
+            }
+        }
+    }
+
+    fn assert_failed_start_cleanup(state: &str, remove_descriptor: bool) {
+        let root = std::env::temp_dir().join(format!("qi-failed-start-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("worker.json");
+        let socket = root.join("worker.sock");
+        let mut proxy = OwnedWorkerProcess::spawn();
+        let mut fallback = OwnedWorkerProcess::spawn();
+        let mut child = OwnedWorkerProcess::spawn();
+        let descriptor = WorkerDescriptor {
+            version: 1,
+            worker_id: "worker-test".into(),
+            agent_id: "agent-test".into(),
+            root_agent_id: "agent-test".into(),
+            workspace_id: "workspace-test".into(),
+            workspace_path: root.clone(),
+            session_path: root.join("session.jsonl"),
+            repository_root: root.clone(),
+            config_path: root.join("agent.edn"),
+            preset_id: None,
+            repl_backend: None,
+            socket_path: socket.clone(),
+            token: "test-only".into(),
+            generation: 1,
+            pid: (state == "known-pid").then_some(proxy.0.id()),
+            child_pid: (state == "child-group").then_some(child.0.id()),
+            child_process_group: (state == "child-group").then_some(child.0.id()),
+            session_id: None,
+            status: "starting".into(),
+            started_at_ms: 0,
+        };
+        if state != "missing" {
+            write_descriptor(&path, &descriptor).unwrap();
+            fs::write(&socket, b"owned socket placeholder").unwrap();
+        }
+        terminate_failed_worker_start(&path, remove_descriptor, Some(fallback.0.id()));
+        let (proxy_stopped, fallback_stopped) = if state == "known-pid" {
+            (proxy.stopped(), fallback.0.try_wait().unwrap().is_some())
+        } else {
+            (proxy.0.try_wait().unwrap().is_some(), fallback.stopped())
+        };
+        let child_stopped = if state == "child-group" {
+            child.stopped()
+        } else {
+            child.0.try_wait().unwrap().is_some()
+        };
+        let descriptor_state = if !remove_descriptor && state != "missing" {
+            let stopped = read_descriptor(&path).unwrap();
+            stopped.status == "stopped" && stopped.pid.is_none() && stopped.child_pid.is_none()
+        } else {
+            !path.exists()
+        };
+        let socket_removed = !socket.exists();
+        fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            proxy_stopped,
+            state == "known-pid",
+            "recorded PID must take precedence"
+        );
+        assert_eq!(
+            fallback_stopped,
+            state != "known-pid",
+            "fallback PID must terminate only when needed"
+        );
+        assert_eq!(
+            child_stopped,
+            state == "child-group",
+            "recorded child group must also terminate"
+        );
+        assert!(
+            descriptor_state,
+            "descriptor removal/stopped state must persist"
+        );
+        assert!(socket_removed, "failed worker socket must be removed");
+    }
+
+    #[test]
+    fn failed_start_cleans_new_worker_without_recorded_pid() {
+        assert_failed_start_cleanup("no-pid", true);
+    }
+
+    #[test]
+    fn failed_start_cleans_recovery_without_recorded_pid() {
+        assert_failed_start_cleanup("no-pid", false);
+    }
+
+    #[test]
+    fn failed_start_preserves_recorded_pid_precedence() {
+        for remove in [true, false] {
+            assert_failed_start_cleanup("known-pid", remove);
+        }
+    }
+
+    #[test]
+    fn failed_start_cleans_missing_descriptor() {
+        for remove in [true, false] {
+            assert_failed_start_cleanup("missing", remove);
+        }
+    }
+
+    #[test]
+    fn failed_start_cleans_child_group_and_fallback_proxy() {
+        for remove in [true, false] {
+            assert_failed_start_cleanup("child-group", remove);
+        }
+    }
 
     #[test]
     fn database_migrations_are_versioned_backed_up_and_reject_newer_schemas() {
