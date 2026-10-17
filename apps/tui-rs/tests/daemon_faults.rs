@@ -1025,6 +1025,7 @@ fn settings_mutations_require_controller_and_are_journaled() {
         .to_string(),
     )
     .unwrap();
+    fs::set_permissions(&settings, fs::Permissions::from_mode(0o600)).unwrap();
     let harness = Harness::start_with_env(
         config.to_str().unwrap(),
         &[(
