@@ -12,7 +12,9 @@ writeFileSync(path.join(root, 'qi/mcp_stdio.clj'),
 const result = spawnSync('bb', ['--classpath', `${root}:src:test`, '-e',
   `(require 'qi.mcp-deadline-test '[clojure.test :as t])
    (let [r (t/run-tests 'qi.mcp-deadline-test)]
-     (System/exit (if (= {:test 2 :pass 8 :fail 1 :error 0} r) 0 1)))`],
+     (prn {:frozen-target "${target}" :test-summary r})
+     (System/exit (if (= {:test 2 :pass 8 :fail 1 :error 0}
+                        (select-keys r [:test :pass :fail :error])) 0 1)))`],
 { encoding: 'utf8', timeout: 30000 });
 process.stdout.write(result.stdout ?? ''); process.stderr.write(result.stderr ?? '');
 assert.equal(result.error, undefined); assert.equal(result.signal, null); assert.equal(result.status, 0);
