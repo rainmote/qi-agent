@@ -10,8 +10,8 @@ const directory = path.resolve(process.env.ACCEPTANCE_ROOT);
 const targets = ['linux-x86_64', 'linux-aarch64', 'macos-x86_64', 'macos-aarch64'];
 const actions = {
   checkout: '3d3c42e5aac5ba805825da76410c181273ba90b1',
-  upload: 'ea165f8d65b6e75b540449e92b4886f43607fa02',
-  download: '9000827ccba6bdab643e8b6fd33ac0654aef8333',
+  upload: 'cf430e030ddbb5b0abf93d22962f4752f3646cd9',
+  download: { v4: 'd3f86a106a0bac45b974a628896c90dbdf5c8093', v8: '9000827ccba6bdab643e8b6fd33ac0654aef8333' },
 };
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8', timeout: 15000 }).trim();
@@ -66,13 +66,15 @@ if (mode === 'produce') {
     `source=${identity.source}\nbase=${identity.base}\nhead=${identity.head}\n`);
   console.log(JSON.stringify({ status: 'PASS', mode, ...identity, archives: outputs }));
 } else if (mode === 'upload-receipt') {
-  const uploads = targets.map((target, index) => {
+  const uploads = [...targets, 'ci-evidence'].map((target, index) => {
     const id = process.env['UPLOAD_ID_' + index]; const digest = process.env['UPLOAD_DIGEST_' + index];
     assert.match(id ?? '', /^[1-9][0-9]*$/); assert.match(digest ?? '', /^[0-9a-f]{64}$/);
     return { target, id, digest };
   });
   await write(path.join(directory, 'uploads.json'), { ...identity, run, uploads });
 } else if (mode === 'consume') {
+  const consumer = process.env.DOWNLOAD_VERSION;
+  assert.ok(['v4', 'v8'].includes(consumer), 'explicit supported consumer required');
   const dist = path.join(directory, 'dist');
   const producer = JSON.parse(await fs.readFile(path.join(directory, 'producer', 'producer.json')));
   const uploads = JSON.parse(await fs.readFile(path.join(directory, 'producer', 'uploads.json')));
@@ -80,6 +82,11 @@ if (mode === 'produce') {
     assert.equal(producer[key], identity[key]); assert.equal(uploads[key], identity[key]);
   }
   assert.equal(producer.tag, tag); assert.deepEqual(producer.actions, actions);
+  assert.deepEqual(uploads.uploads.map(x => x.target), [...targets, 'ci-evidence']);
+  const single = path.join(directory, 'ci-evidence');
+  assert.deepEqual(await fs.readdir(single), ['producer.json'], 'single-file verify evidence retains its filename');
+  assert.equal(sha256(await fs.readFile(path.join(single, 'producer.json'))),
+    sha256(await fs.readFile(path.join(directory, 'producer', 'producer.json'))));
   assert.deepEqual((await fs.readdir(dist)).sort(), expectedFiles, 'exactly twelve files, flattened, without sentinel');
   const gate = path.join(root, 'maintenance/release-gate.mjs');
   async function runGate(label, input, expectedError) {
@@ -123,9 +130,11 @@ if (mode === 'produce') {
   const nested = path.join(directory, 'nested');
   assert.deepEqual((await fs.readdir(nested)).sort(), targets.map(t => 'release-' + t).sort());
   results.push(await runGate('non-flat', nested, 'Release archive set is incomplete or unexpected'));
-  const report = { status: 'PASS', ...identity, tag, actions, run, uploads: uploads.uploads, results,
+  const report = { status: 'PASS', ...identity, tag, actions, consumer, run, uploads: uploads.uploads, results,
     archive_members: 'README.md and source manifest, regular files only, exact bytes checked',
-    service_digest_policy: 'download-artifact digest-mismatch:error; valid service downloads only',
+    service_digest_policy: consumer === 'v8'
+      ? 'download-artifact digest-mismatch:error; valid service downloads only'
+      : 'download-artifact v4 native policy; independent ZIP digest verification required',
     not_run: ['service digest corruption injection', 'release binaries', 'cross-platform runtime', 'attestation', 'publish'] };
   await write(path.join(directory, 'acceptance.json'), report); console.log(JSON.stringify(report, null, 2));
 } else throw new Error('Expected produce, upload-receipt or consume');
