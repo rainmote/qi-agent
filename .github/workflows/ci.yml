@@ -23,7 +23,7 @@ jobs:
         os: [ubuntu-24.04, macos-14]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: 22.12.0
@@ -98,7 +98,7 @@ jobs:
     name: Dependency audit
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: 22.12.0
@@ -114,3 +114,134 @@ jobs:
         run: cargo install cargo-audit --locked
       - name: Audit Rust dependencies
         run: cargo audit --file apps/tui-rs/Cargo.lock
+
+  artifact-producer:
+    name: Artifact transport producer (no publish)
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.number == 1 || github.event.pull_request.number == 14)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      source: ${{ steps.source.outputs.source }}
+      base: ${{ steps.source.outputs.base }}
+      head: ${{ steps.source.outputs.head }}
+    env:
+      SOURCE_SHA: ${{ github.sha }}
+      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+      # Frozen reviewed integration base; refresh only after new-base review.
+      # Old PR event/API base metadata can lag behind the actual merge tree.
+      EXPECTED_BASE: 0567c1eb9dedad4ef2972f4eb1d273f7bca0f4c0
+      EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Freeze merge source and create transport samples
+        id: source
+        env:
+          ACCEPTANCE_ROOT: ${{ runner.temp }}/artifact-acceptance
+        run: node .github/scripts/artifact-acceptance.mjs produce
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        id: linux-x86
+        with:
+          name: release-linux-x86_64
+          path: ${{ runner.temp }}/artifact-acceptance/linux-x86_64/*
+          if-no-files-found: error
+          retention-days: 1
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        id: linux-arm
+        with:
+          name: release-linux-aarch64
+          path: ${{ runner.temp }}/artifact-acceptance/linux-aarch64/*
+          if-no-files-found: error
+          retention-days: 1
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        id: mac-x86
+        with:
+          name: release-macos-x86_64
+          path: ${{ runner.temp }}/artifact-acceptance/macos-x86_64/*
+          if-no-files-found: error
+          retention-days: 1
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        id: mac-arm
+        with:
+          name: release-macos-aarch64
+          path: ${{ runner.temp }}/artifact-acceptance/macos-aarch64/*
+          if-no-files-found: error
+          retention-days: 1
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-ci-evidence
+          path: ${{ runner.temp }}/artifact-acceptance/sentinel.txt
+          if-no-files-found: error
+          retention-days: 1
+      - name: Record service artifact identifiers and digests
+        env:
+          ACCEPTANCE_ROOT: ${{ runner.temp }}/artifact-acceptance
+          UPLOAD_ID_0: ${{ steps.linux-x86.outputs.artifact-id }}
+          UPLOAD_DIGEST_0: ${{ steps.linux-x86.outputs.artifact-digest }}
+          UPLOAD_ID_1: ${{ steps.linux-arm.outputs.artifact-id }}
+          UPLOAD_DIGEST_1: ${{ steps.linux-arm.outputs.artifact-digest }}
+          UPLOAD_ID_2: ${{ steps.mac-x86.outputs.artifact-id }}
+          UPLOAD_DIGEST_2: ${{ steps.mac-x86.outputs.artifact-digest }}
+          UPLOAD_ID_3: ${{ steps.mac-arm.outputs.artifact-id }}
+          UPLOAD_DIGEST_3: ${{ steps.mac-arm.outputs.artifact-digest }}
+        run: node .github/scripts/artifact-acceptance.mjs upload-receipt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: acceptance-producer
+          path: |
+            ${{ runner.temp }}/artifact-acceptance/producer.json
+            ${{ runner.temp }}/artifact-acceptance/uploads.json
+          if-no-files-found: error
+          retention-days: 1
+
+  artifact-consumer:
+    name: Artifact transport consumer (no publish)
+    needs: artifact-producer
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.number == 1 || github.event.pull_request.number == 14)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      SOURCE_SHA: ${{ needs.artifact-producer.outputs.source }}
+      EXPECTED_BASE: ${{ needs.artifact-producer.outputs.base }}
+      EXPECTED_HEAD: ${{ needs.artifact-producer.outputs.head }}
+      EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.artifact-producer.outputs.source }}
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: release-*64
+          path: ${{ runner.temp }}/artifact-acceptance/dist
+          merge-multiple: true
+          digest-mismatch: error
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: release-*64
+          path: ${{ runner.temp }}/artifact-acceptance/nested
+          merge-multiple: false
+          digest-mismatch: error
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: acceptance-producer
+          path: ${{ runner.temp }}/artifact-acceptance/producer
+          digest-mismatch: error
+      - name: Validate exact files, actual asset gate and negative cases
+        env:
+          ACCEPTANCE_ROOT: ${{ runner.temp }}/artifact-acceptance
+        run: node .github/scripts/artifact-acceptance.mjs consume
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: acceptance-evidence
+          path: |
+            ${{ runner.temp }}/artifact-acceptance/acceptance.json
+            ${{ runner.temp }}/artifact-acceptance/*.log
+            ${{ runner.temp }}/artifact-acceptance/producer/*.json
+          if-no-files-found: error
+          retention-days: 7
