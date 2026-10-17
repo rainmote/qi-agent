@@ -24,7 +24,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22.12.0
           cache: npm
@@ -99,7 +99,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22.12.0
           cache: npm
@@ -114,3 +114,206 @@ jobs:
         run: cargo install cargo-audit --locked
       - name: Audit Rust dependencies
         run: cargo audit --file apps/tui-rs/Cargo.lock
+
+  artifact-producer:
+    name: Artifact transport producer (no publish)
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.number == 13
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      source: ${{ steps.source.outputs.source }}
+      base: ${{ steps.source.outputs.base }}
+      head: ${{ steps.source.outputs.head }}
+    env:
+      SOURCE_SHA: ${{ github.sha }}
+      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+      # Frozen reviewed integration base; refresh only after new-base review.
+      # Old PR event/API base metadata can lag behind the actual merge tree.
+      EXPECTED_BASE: cefe9c78efea9cb7588b2819473b314623999870
+      EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Freeze merge source and create transport samples
+        id: source
+        env:
+          ACCEPTANCE_ROOT: ${{ runner.temp }}/artifact-acceptance
+        run: node .github/scripts/artifact-acceptance.mjs produce
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        id: linux-x86
+        with:
+          name: release-linux-x86_64
+          path: |
+            ${{ runner.temp }}/artifact-acceptance/linux-x86_64/*.tar.gz
+            ${{ runner.temp }}/artifact-acceptance/linux-x86_64/*.tar.gz.sha256
+            ${{ runner.temp }}/artifact-acceptance/linux-x86_64/*.tar.gz.source.json
+          if-no-files-found: error
+          retention-days: 1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        id: linux-arm
+        with:
+          name: release-linux-aarch64
+          path: |
+            ${{ runner.temp }}/artifact-acceptance/linux-aarch64/*.tar.gz
+            ${{ runner.temp }}/artifact-acceptance/linux-aarch64/*.tar.gz.sha256
+            ${{ runner.temp }}/artifact-acceptance/linux-aarch64/*.tar.gz.source.json
+          if-no-files-found: error
+          retention-days: 1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        id: mac-x86
+        with:
+          name: release-macos-x86_64
+          path: |
+            ${{ runner.temp }}/artifact-acceptance/macos-x86_64/*.tar.gz
+            ${{ runner.temp }}/artifact-acceptance/macos-x86_64/*.tar.gz.sha256
+            ${{ runner.temp }}/artifact-acceptance/macos-x86_64/*.tar.gz.source.json
+          if-no-files-found: error
+          retention-days: 1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        id: mac-arm
+        with:
+          name: release-macos-aarch64
+          path: |
+            ${{ runner.temp }}/artifact-acceptance/macos-aarch64/*.tar.gz
+            ${{ runner.temp }}/artifact-acceptance/macos-aarch64/*.tar.gz.sha256
+            ${{ runner.temp }}/artifact-acceptance/macos-aarch64/*.tar.gz.source.json
+          if-no-files-found: error
+          retention-days: 1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        id: ci-evidence
+        with:
+          name: release-ci-evidence
+          path: ${{ runner.temp }}/artifact-acceptance/producer.json
+          if-no-files-found: error
+          retention-days: 1
+      - name: Record service artifact identifiers and digests
+        env:
+          ACCEPTANCE_ROOT: ${{ runner.temp }}/artifact-acceptance
+          UPLOAD_ID_0: ${{ steps.linux-x86.outputs.artifact-id }}
+          UPLOAD_DIGEST_0: ${{ steps.linux-x86.outputs.artifact-digest }}
+          UPLOAD_ID_1: ${{ steps.linux-arm.outputs.artifact-id }}
+          UPLOAD_DIGEST_1: ${{ steps.linux-arm.outputs.artifact-digest }}
+          UPLOAD_ID_2: ${{ steps.mac-x86.outputs.artifact-id }}
+          UPLOAD_DIGEST_2: ${{ steps.mac-x86.outputs.artifact-digest }}
+          UPLOAD_ID_3: ${{ steps.mac-arm.outputs.artifact-id }}
+          UPLOAD_DIGEST_3: ${{ steps.mac-arm.outputs.artifact-digest }}
+          UPLOAD_ID_4: ${{ steps.ci-evidence.outputs.artifact-id }}
+          UPLOAD_DIGEST_4: ${{ steps.ci-evidence.outputs.artifact-digest }}
+        run: node .github/scripts/artifact-acceptance.mjs upload-receipt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: acceptance-producer
+          path: |
+            ${{ runner.temp }}/artifact-acceptance/producer.json
+            ${{ runner.temp }}/artifact-acceptance/uploads.json
+          if-no-files-found: error
+          retention-days: 1
+
+  artifact-consumer-v4:
+    name: Artifact transport consumer v4 (no publish)
+    needs: artifact-producer
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.number == 13
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      DOWNLOAD_VERSION: v4
+      SOURCE_SHA: ${{ needs.artifact-producer.outputs.source }}
+      EXPECTED_BASE: ${{ needs.artifact-producer.outputs.base }}
+      EXPECTED_HEAD: ${{ needs.artifact-producer.outputs.head }}
+      EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.artifact-producer.outputs.source }}
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: release-*64
+          path: ${{ runner.temp }}/artifact-acceptance/dist
+          merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: release-*64
+          path: ${{ runner.temp }}/artifact-acceptance/nested
+          merge-multiple: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: acceptance-producer
+          path: ${{ runner.temp }}/artifact-acceptance/producer
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-ci-evidence
+          path: ${{ runner.temp }}/artifact-acceptance/ci-evidence
+      - name: Validate exact files, actual asset gate and negative cases
+        env:
+          ACCEPTANCE_ROOT: ${{ runner.temp }}/artifact-acceptance
+        run: node .github/scripts/artifact-acceptance.mjs consume
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: acceptance-evidence-v4
+          path: |
+            ${{ runner.temp }}/artifact-acceptance/acceptance.json
+            ${{ runner.temp }}/artifact-acceptance/*.log
+            ${{ runner.temp }}/artifact-acceptance/producer/*.json
+          if-no-files-found: error
+          retention-days: 7
+
+  artifact-consumer-v8:
+    name: Artifact transport consumer v8 (no publish)
+    needs: artifact-producer
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.number == 13
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      DOWNLOAD_VERSION: v8
+      SOURCE_SHA: ${{ needs.artifact-producer.outputs.source }}
+      EXPECTED_BASE: ${{ needs.artifact-producer.outputs.base }}
+      EXPECTED_HEAD: ${{ needs.artifact-producer.outputs.head }}
+      EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.artifact-producer.outputs.source }}
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: release-*64
+          path: ${{ runner.temp }}/artifact-acceptance/dist
+          merge-multiple: true
+          digest-mismatch: error
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: release-*64
+          path: ${{ runner.temp }}/artifact-acceptance/nested
+          merge-multiple: false
+          digest-mismatch: error
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: acceptance-producer
+          path: ${{ runner.temp }}/artifact-acceptance/producer
+          digest-mismatch: error
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: release-ci-evidence
+          path: ${{ runner.temp }}/artifact-acceptance/ci-evidence
+          digest-mismatch: error
+      - name: Validate exact files, actual asset gate and negative cases
+        env:
+          ACCEPTANCE_ROOT: ${{ runner.temp }}/artifact-acceptance
+        run: node .github/scripts/artifact-acceptance.mjs consume
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: acceptance-evidence-v8
+          path: |
+            ${{ runner.temp }}/artifact-acceptance/acceptance.json
+            ${{ runner.temp }}/artifact-acceptance/*.log
+            ${{ runner.temp }}/artifact-acceptance/producer/*.json
+          if-no-files-found: error
+          retention-days: 7
