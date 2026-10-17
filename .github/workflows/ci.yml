@@ -131,7 +131,6 @@ jobs:
       # Old PR event/API base metadata can lag behind the actual merge tree.
       EXPECTED_BASE: a0b74ad310aa0e0978f747369c41315560aa6dd3
       EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-      ACCEPTANCE_ROOT: ${{ runner.temp }}/artifact-acceptance
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -140,6 +139,8 @@ jobs:
           persist-credentials: false
       - name: Freeze merge source and create transport samples
         id: source
+        env:
+          ACCEPTANCE_ROOT: ${{ runner.temp }}/artifact-acceptance
         run: node .github/scripts/artifact-acceptance.mjs produce
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         id: linux-x86
@@ -177,6 +178,7 @@ jobs:
           retention-days: 1
       - name: Record service artifact identifiers and digests
         env:
+          ACCEPTANCE_ROOT: ${{ runner.temp }}/artifact-acceptance
           UPLOAD_ID_0: ${{ steps.linux-x86.outputs.artifact-id }}
           UPLOAD_DIGEST_0: ${{ steps.linux-x86.outputs.artifact-digest }}
           UPLOAD_ID_1: ${{ steps.linux-arm.outputs.artifact-id }}
@@ -206,7 +208,6 @@ jobs:
       EXPECTED_BASE: ${{ needs.artifact-producer.outputs.base }}
       EXPECTED_HEAD: ${{ needs.artifact-producer.outputs.head }}
       EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-      ACCEPTANCE_ROOT: ${{ runner.temp }}/artifact-acceptance
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -231,6 +232,8 @@ jobs:
           path: ${{ runner.temp }}/artifact-acceptance/producer
           digest-mismatch: error
       - name: Validate exact files, actual asset gate and negative cases
+        env:
+          ACCEPTANCE_ROOT: ${{ runner.temp }}/artifact-acceptance
         run: node .github/scripts/artifact-acceptance.mjs consume
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
