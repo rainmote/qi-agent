@@ -1,0 +1,62 @@
+name: Transfer verified maintenance image
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_id:
+        description: Exact verified toolchain artifact ID
+        required: true
+      artifact_sha256:
+        description: SHA-256 returned by the GitHub artifact API
+        required: true
+      source_sha:
+        description: Exact source recorded in the verified bundle
+        required: true
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/maintenance-transfer.yml'
+      - 'scripts/repack-maintenance-image.py'
+permissions:
+  contents: read
+  actions: read
+jobs:
+  transfer:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[transfer-toolchain]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify the original artifact and split without rebuilding
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QI_TRANSFER_ARTIFACT: ${{ inputs.artifact_id || '11943201323' }}
+          QI_TRANSFER_SHA256: ${{ inputs.artifact_sha256 || '81d5d1f90004c75c14e9afc78b57d2f3e8b3341b525bb1bb1e5ac223ee0b55d4' }}
+          QI_TRANSFER_SOURCE: ${{ inputs.source_sha || '1c806077bb479a1e76049a52287a7c500d71c26c' }}
+        run: python3 scripts/repack-maintenance-image.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qi-toolchain-transfer-metadata
+          path: ${{ runner.temp }}/qi-transfer/metadata/
+          retention-days: 1
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qi-toolchain-transfer-part00
+          path: ${{ runner.temp }}/qi-transfer/part00/
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qi-toolchain-transfer-part01
+          path: ${{ runner.temp }}/qi-transfer/part01/
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qi-toolchain-transfer-part02
+          path: ${{ runner.temp }}/qi-transfer/part02/
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error

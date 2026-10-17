@@ -279,6 +279,38 @@
         (is (false? (alive? (parse-long (str/trim (slurp (str (fs/path directory "child.pid")))))))))
       (finally (kernel/dispose-all! ctx) (fs/delete-tree directory)))))
 
+(deftest world-timeout-covers-output-pump-startup-delay
+  (let [directory (fs/create-temp-dir {:prefix "qi-jobs-startup-delay-"})
+        ctx (plugin/boot! {:plugins [{:ns 'qi.plugins.execution-world
+                                     :config {:root (str directory) :sandbox :none
+                                              :timeout-ms 100 :max-timeout-ms 1000}}]})
+        pump-var (ns-resolve 'qi.plugins.execution-world 'pump!)
+        original-pump @pump-var
+        injected (atom 0)
+        child-pid (atom nil)]
+    (try
+      (let [started (System/nanoTime)]
+        (with-redefs-fn
+          {pump-var (fn [& args]
+                      (swap! injected inc)
+                      (Thread/sleep 150)
+                      (apply original-pump args))}
+          #(is (thrown-with-msg? clojure.lang.ExceptionInfo #"timed out"
+                                ((:spawn! (kernel/require-service ctx :execution/world))
+                                 {:command "sleep 3 & echo $! > child.pid; sleep 0.05"}))))
+        (is (= 2 @injected) "Both output pumps must exercise the startup delay")
+        (is (< (/ (- (System/nanoTime) started) 1000000) 1500))
+        (reset! child-pid (parse-long (str/trim (slurp (str (fs/path directory "child.pid"))))))
+        (is (false? (alive? @child-pid))))
+      (finally
+        ;; Only clean this fixture after the immediate liveness assertion.
+        (when @child-pid
+          (let [handle (java.lang.ProcessHandle/of @child-pid)]
+            (when (and (.isPresent handle) (.isAlive (.get handle)))
+              (.destroyForcibly (.get handle)))))
+        (kernel/dispose-all! ctx)
+        (fs/delete-tree directory)))))
+
 (deftest background-bash-cannot-bypass-the-runtime-trust-and-approval-gates
   (doseq [[trusted? approval expected-starts] [[false :allow 0] [true :deny 0] [true :allow 1]]]
     (let [ctx (kernel/create-context)

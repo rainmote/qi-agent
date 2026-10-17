@@ -754,7 +754,7 @@
                (when (compare-and-set! ended? false true)
                  (let [terminal (assoc (select-keys result
                                                     [:status :stop-reason :reason :error
-                                                     :usage :steps :verification :code])
+                                                     :usage :request-usage :steps :verification :code])
                                        :run-id run-id)]
                    (record! ctx "agent/run/end" terminal)
                    (publish! ctx listeners :agent.run/end terminal))))]
@@ -768,15 +768,18 @@
     (try
       (record! ctx "agent/run/start" {:run-id run-id})
       (let [result (outcome/normalize
-                    (assoc (run-agent-body! ctx config active admission-lock prompt
-                                           options token queue state listeners progress)
-                           :run-id run-id :status :completed))]
+                    (assoc (binding [generation/*run* (generation/run-budget run-id config)]
+                             (run-agent-body! ctx config active admission-lock prompt
+                                              options token queue state listeners progress))
+                           :run-id run-id :status :completed
+                           :request-usage (generation/request-summary ctx run-id)))]
         (end! result)
         (set-phase! ctx state listeners :idle
                     {:run-id nil :attempt nil :last-result result :last-outcome result})
         result)
       (catch Throwable cause
-        (let [terminal (merge @progress (outcome/from-error cause) {:run-id run-id})
+        (let [terminal (merge @progress (outcome/from-error cause)
+                              {:run-id run-id :request-usage (generation/request-summary ctx run-id)})
               error (ex-info (ex-message cause) (merge (ex-data cause) terminal) cause)]
           (close-admission! ctx active admission-lock queue listeners
                             (if (:cancelled (ex-data error)) :aborted :error))

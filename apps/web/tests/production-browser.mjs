@@ -1,11 +1,15 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { stripVTControlCharacters } from "node:util";
 const url = "http://127.0.0.1:4179";
 const server = spawn(process.execPath, ["node_modules/vite/bin/vite.js", "preview", "--host", "127.0.0.1", "--port", "4179", "--strictPort"], { stdio: ["ignore", "pipe", "inherit"] });
 let listening = false;
+let startupOutput = "";
 server.stdout.on("data", chunk => {
   process.stdout.write(chunk);
-  if (chunk.toString().includes(url)) listening = true;
+  // CI colors the port separately; a stream chunk can also split the URL or escape sequence.
+  startupOutput = (startupOutput + chunk.toString()).slice(-4096);
+  if (stripVTControlCharacters(startupOutput).includes(url)) listening = true;
 });
 try {
   let ready = false;

@@ -53,7 +53,13 @@ assert.equal(containment.exit_code, 0, containment.stderr);
 const timeout = await containerCommand({ image, workspace: path.join(output, 'oracle/repo'), readonly: true,
   argv: ['node', '-e', 'setInterval(()=>{},1000)'], timeoutMs: 1200 });
 assert.equal(timeout.timed_out, true);
+const pauseAt = Date.now() + 700;
+const paused = await containerCommand({ image, workspace: path.join(output, 'oracle/repo'), readonly: true,
+  argv: ['node', '-e', 'setInterval(()=>{},1000)'], timeoutMs: 10_000, shouldStop: async () => Date.now() >= pauseAt });
+assert.equal(paused.timed_out, false, 'pause must stop the container before its command timeout');
+assert.notEqual(paused.exit_code, 0);
 const report = { schema_version: 1, status: 'PASS', results, readonly_input: 'PASS', container_timeout_cleanup: 'PASS',
+  container_pause_cleanup: 'PASS',
   note: 'Real Docker nop/oracle and isolation smoke only; not Harbor integration or a model benchmark.' };
 await durableWrite(path.join(output, 'report.json'), encode(report));
 console.log(encode({ ...report, output }));

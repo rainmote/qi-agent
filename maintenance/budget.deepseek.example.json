@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "provider": "deepseek",
+  "model": "deepseek-flash",
+  "effort": "high",
+  "task_usd": null,
+  "daily_usd": null,
+  "max_requests": 64,
+  "context_window_tokens": 1048576,
+  "max_output_tokens": 8192,
+  "input_usd_per_million": null,
+  "output_usd_per_million": null,
+  "price_valid_until": null,
+  "price_source": "https://api-docs.deepseek.com/quick_start/pricing/",
+  "note": "DeepSeek V4.1 Flash uses the canonical API name deepseek-flash. Review peak uncached input and output prices, covering all hours; do not budget using off-peak/cache discounts. 1048576 conservatively covers the documented 1M window. Dedicated host DEEPSEEK_API_KEY is required; only the budgeted broker may access it. Fill caps, current price ceilings and expiry before use."
+}

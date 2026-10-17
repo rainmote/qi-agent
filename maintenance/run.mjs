@@ -4,19 +4,29 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { lockStore, readJournal, encode, durableWrite, putArtifact } from './lib/store.mjs';
-import { prepare, implement, verify, accept, retry, recover, restoreCandidate, loadTask, transition } from './lib/controller.mjs';
+import { prepare, implement, verify, accept, retry, recover, restoreCandidate, loadTask, transition, recordTrial } from './lib/controller.mjs';
 import { reviewWindow, recordReview, lessonState } from './lib/reflection.mjs';
 import { actionIntent, usageLedger } from './lib/ledger.mjs';
+import { budgetSnapshot, reconcileBudget } from './lib/budget.mjs';
+import { enqueue, tick, pause, resume } from './lib/runner.mjs';
 
 const controller = fileURLToPath(new URL('..', import.meta.url));
 const readJSON = async (file) => JSON.parse(await fs.readFile(file, 'utf8'));
-const definitions = Object.fromEntries(['state', 'repo', 'task', 'id', 'driver', 'review', 'revision', 'start', 'end', 'limit', 'output', 'window', 'incident', 'action', 'result', 'evidence'].map((key) => [key, { type: 'string' }]));
+const definitions = Object.fromEntries(['state', 'repo', 'task', 'id', 'driver', 'review', 'revision', 'start', 'end', 'limit', 'output', 'window', 'incident', 'action', 'result', 'evidence', 'budget', 'approval', 'config', 'reason'].map((key) => [key, { type: 'string' }]));
 definitions['supervised-live'] = { type: 'boolean', default: false };
+definitions['budgeted-live'] = { type: 'boolean', default: false };
 definitions.help = { type: 'boolean' };
 const usage = `qi maintenance (controller checkout must be clean for prepare)
   prepare --state ABS --repo ABS --task contract.json
   run --state ABS --id ID --driver offline-driver.json
   run --state ABS --id ID --supervised-live
+  run --state ABS --id ID --budgeted-live --budget budget.json
+  record-trial --state ABS --id ID
+  enqueue --state ABS --repo ABS --task contract.json --budget budget.json --approval approval.json
+  tick --state ABS --config runner.json
+  pause --state ABS --reason TEXT
+  resume --state ABS [--review uncertain-acknowledgement.json]
+  reconcile-budget --state ABS --review provider-receipt.json
   verify|status|cancel|restore --state ABS --id ID
   retry --state ABS --id ID --revision N
   accept --state ABS --id ID --revision N --review human-review.json
@@ -36,18 +46,30 @@ try {
   else {
     if (!args.state || !path.isAbsolute(args.state)) throw new Error('--state must be an absolute directory outside repositories');
     const root = args.state;
-    lock = await lockStore(root, { recover: command === 'recover' });
+    if (command === 'pause') { await pause(root, args.reason); console.log(encode({ status: 'paused' })); process.exit(0); }
+    lock = await lockStore(root, { recover: ['recover', 'tick'].includes(command) });
+    if (command === 'tick' && lock.recovered) {
+      await recover({ root, lock });
+      await pause(root, 'interrupted-controller-recovered');
+    }
     let result;
     const common = { root, lock, id: args.id };
     switch (command) {
       case 'prepare': result = await prepare({ ...common, repo: args.repo, controller, task: await readJSON(args.task),
         policy: await readJSON(path.join(controller, 'maintenance/policy.json')) }); break;
       case 'run': {
-        if (!!args.driver === !!args['supervised-live']) throw new Error('Choose an offline driver or --supervised-live');
-        const driver = args['supervised-live'] ? { mode: 'qi-supervised', paid: true, unattended: false } : await readJSON(args.driver);
+        if ([args.driver, args['supervised-live'], args['budgeted-live']].filter(Boolean).length !== 1) throw new Error('Choose one offline, supervised or budgeted driver');
+        const driver = args['budgeted-live'] ? { mode: 'qi-budgeted', paid: true, unattended: false } :
+          args['supervised-live'] ? { mode: 'qi-supervised', paid: true, unattended: false } : await readJSON(args.driver);
         if (args.driver && driver.mode !== 'offline') throw new Error('Paid admission requires the explicit --supervised-live flag');
-        result = await implement({ ...common, driver }); break;
+        result = await implement({ ...common, driver, budget: args['budgeted-live'] ? await readJSON(args.budget) : undefined }); break;
       }
+      case 'enqueue': result = await enqueue({ ...common, controller, repo: args.repo, task: await readJSON(args.task),
+        policy: await readJSON(path.join(controller, 'maintenance/policy.json')), budget: await readJSON(args.budget), approval: await readJSON(args.approval) }); break;
+      case 'tick': result = await tick({ ...common, controller, config: await readJSON(args.config) }); break;
+      case 'resume': result = await resume({ ...common, acknowledgement: args.review ? await readJSON(args.review) : undefined }); break;
+      case 'reconcile-budget': result = await reconcileBudget({ ...common, receipt: await readJSON(args.review) }); break;
+      case 'record-trial': result = await recordTrial(common); break;
       case 'verify': result = await verify(common); break;
       case 'retry': result = await retry({ ...common, expectedRevision: Number(args.revision) }); break;
       case 'accept': result = await accept({ ...common, expectedRevision: Number(args.revision), review: await readJSON(args.review) }); break;
@@ -57,7 +79,7 @@ try {
       }
       case 'status': {
         const { state, events } = await loadTask(root, args.id);
-        result = { ...state, usage: usageLedger(events.filter((e) => e.type === 'usage/request' && e.data.task_id === args.id).map((e) => e.data)) }; break;
+        result = { ...state, budget: budgetSnapshot(events, args.id), usage: usageLedger(events.filter((e) => e.type === 'usage/request' && e.data.task_id === args.id).map((e) => e.data)) }; break;
       }
       case 'recover': result = await recover(common); break;
       case 'restore': result = await restoreCandidate(common); break;
