@@ -21,6 +21,22 @@ a complete billing ledger for compaction and failed requests. Recovered orphan
 runs have unknown usage and step counts. Legacy logs without run envelopes
 remain readable and are not assigned invented outcomes.
 
+`request-usage` adds a separate logical-request summary: known input/output
+tokens, request count, unknown request count, and token completeness. It includes
+compaction and failed requests by request ID, and never substitutes zero for an
+unknown invoice. Main/compaction events carry native/root run IDs; summary
+fragments also carry a compaction ID and chunk index. Manual compaction without
+an active run receives an independent operation ID.
+
+Optional runtime `max-model-requests` and `max-wall-ms` cover all logical calls
+through `qi.generation`, including retries, summary fragments and inherited child
+budgets. Exhaustion refuses the next call with `request-budget` or `wall-budget`;
+an interrupted summary preserves the original history. These are admission
+limits; the maintenance controller additionally kills the outer container at its
+deadline. Its dedicated profile uses 64 requests and 35 minutes for implementation.
+See [unattended maintenance](unattended-maintenance.md) for host-enforced cost
+reservation and the distinction between a configured price ceiling and billing.
+
 Child failures, cancellation, and uncertainty propagate to workflow nodes.
 Failed/cancelled dependencies are skipped; an uncertain child suspends the
 workflow as uncertain. Contradictory `completed` plus `error` is a failure.

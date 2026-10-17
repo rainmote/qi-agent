@@ -3,18 +3,20 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { commitSHA, checkReview } from './github.mjs';
 import { digest, encode, identifier, readJournal, putArtifact, readArtifact, validateArtifacts } from './store.mjs';
-import { git, relative, regularFile, snapshot, changedFiles, verifiedTree, immutableImage, containerCommand } from './execution.mjs';
+import { git, relative, regularFile, snapshot, changedFiles, verifiedTree, immutableImage, containerCommand, resourceLimits, cleanupContainer } from './execution.mjs';
 import { assessTap } from '../../evals/lib/grading.mjs';
 import { usageLedger, mayAttempt } from './ledger.mjs';
+import { validateBudget, budgetSnapshot } from './budget.mjs';
+import { startBroker } from './broker.mjs';
 
 const catalog = JSON.parse(await fs.readFile(new URL('../checks.json', import.meta.url)));
 
-export const TERMINAL = new Set(['accepted', 'failed', 'blocked', 'uncertain', 'cancelled']);
+export const TERMINAL = new Set(['accepted', 'trial_passed', 'failed', 'blocked', 'uncertain', 'cancelled']);
 const TRANSITIONS = {
   queued: ['scoped', 'blocked', 'uncertain', 'cancelled'], scoped: ['implementing', 'verifying', 'blocked', 'uncertain', 'cancelled'],
   implementing: ['verifying', 'failed', 'blocked', 'uncertain', 'cancelled'],
   verifying: ['review_ready', 'implementing', 'failed', 'blocked', 'uncertain', 'cancelled'],
-  review_ready: ['accepted', 'blocked', 'uncertain', 'cancelled'],
+  review_ready: ['accepted', 'trial_passed', 'blocked', 'uncertain', 'cancelled'],
   failed: ['scoped'],
 };
 
@@ -36,6 +38,7 @@ export async function transition(root, lock, id, expectedRevision, status, data 
 
 export function validateContract(task, policy) {
   identifier(task.task_id); commitSHA(task.base_sha); immutableImage(task.image);
+  resourceLimits(task.resources);
   if (task.schema_version !== 1 || !['bug', 'feature', 'docs'].includes(task.kind) || typeof task.goal !== 'string' || !task.goal.trim()) throw new Error('Invalid task contract');
   if (!Array.isArray(task.allowed_files) || !task.allowed_files.length || new Set(task.allowed_files).size !== task.allowed_files.length) throw new Error('Declare unique allowed_files');
   for (const file of task.allowed_files) {
@@ -75,7 +78,7 @@ async function copyVerifier(source, destination) {
   }
 }
 
-async function hashTree(root) {
+export async function hashTree(root) {
   const values = [];
   for (const entry of (await fs.readdir(root, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
     if (entry.isSymbolicLink()) throw new Error('Trusted material contains a symlink');
@@ -147,20 +150,25 @@ export async function loadTask(root, id) {
 }
 
 const succeeded = (result) => result.exit_code === 0 && !result.error && !result.signal && !result.timed_out && !result.output_limited;
+const operatorPaused = (root) => fs.stat(path.join(root, 'pause.json')).then(() => true, (e) => { if (e.code === 'ENOENT') return false; throw e; });
 
 async function executeCheck({ root, lock, state, task, check, workspace, phase, deadline, execute }) {
+  if (await operatorPaused(root)) return { id: check.id, phase, status: 'CANCELLED', reason: 'operator-paused' };
   const remaining = deadline - Date.now();
   if (remaining <= 0) return { id: check.id, phase, status: 'NOT_RUN', reason: 'wall-budget' };
   const started = new Date().toISOString();
   const name = 'qi-maint-check-' + randomUUID();
-  await lock.append('check/start', { task_id: task.task_id, check_id: check.id, phase, container: name });
+  const owner = randomUUID();
+  await lock.append('check/start', { task_id: task.task_id, check_id: check.id, phase, container: name, container_owner: owner });
   const result = await execute({ image: task.image, argv: check.argv, workspace, readonly: true,
     mounts: [{ source: path.join(state.material, 'verifier'), target: '/acceptance' }],
-    timeoutMs: Math.min(remaining, check.timeout_seconds * 1000), name });
+    timeoutMs: Math.min(remaining, check.timeout_seconds * 1000), name, owner, resources: task.resources,
+    shouldStop: () => operatorPaused(root) });
   const output = await putArtifact(root, encode(result));
   const tap = check.tests ? assessTap(result.stdout, check.tests) : null;
-  const status = succeeded(result) && (!tap || tap.passed) ? 'PASS' : 'FAIL';
-  return { id: check.id, phase, status, argv: check.argv, image: task.image, started_at: started,
+  const paused = await operatorPaused(root);
+  const status = paused ? 'CANCELLED' : succeeded(result) && (!tap || tap.passed) ? 'PASS' : 'FAIL';
+  return { id: check.id, phase, status, ...(paused ? { reason: 'operator-paused' } : {}), argv: check.argv, image: task.image, started_at: started,
     ended_at: new Date().toISOString(), exit_code: result.exit_code, timed_out: result.timed_out,
     duration_ms: result.duration_ms, tests: tap?.tests ?? null, tap, output };
 }
@@ -202,7 +210,9 @@ export async function preflight({ root, id, lock, execute = containerCommand }) 
   };
   try {
     for (const spec of task.checks) {
-      if ((await check(spec, path.join(state.material, 'base'), 'baseline')).status !== 'PASS') {
+      const result = await check(spec, path.join(state.material, 'base'), 'baseline');
+      if (result.status === 'CANCELLED') return transition(root, lock, id, state.revision, 'cancelled', { reason: 'operator-paused', checks });
+      if (result.status !== 'PASS') {
         return transition(root, lock, id, state.revision, 'blocked', { reason: 'baseline-failed', checks });
       }
     }
@@ -210,6 +220,7 @@ export async function preflight({ root, id, lock, execute = containerCommand }) 
       timeout_seconds: 60, tests: task.acceptance.tests } : null;
     if (task.kind === 'bug') {
       const red = await check(acceptance, path.join(state.material, 'base'), 'red');
+      if (red.status === 'CANCELLED') return transition(root, lock, id, state.revision, 'cancelled', { reason: 'operator-paused', checks });
       const raw = JSON.parse(await readArtifact(root, red.output));
       // A completed named assertion failure, not syntax/import/timeout/skip, is valid red evidence.
       if (!red.tap?.complete || red.tap.reason !== 'acceptance_assertions_failed' || raw.exit_code !== 1 ||
@@ -244,7 +255,11 @@ export async function verify({ root, id, lock, execute = containerCommand }) {
     const candidate = await candidateTree(state, task, root);
     try {
       if (state.fingerprint === candidate.fingerprint) return transition(root, lock, id, state.revision, 'blocked', { reason: 'no-progress' });
-      for (const spec of [...task.checks, ...(acceptance ? [acceptance] : [])]) await check(spec, candidate.directory, 'candidate');
+      for (const spec of [...task.checks, ...(acceptance ? [acceptance] : [])]) {
+        if ((await check(spec, candidate.directory, 'candidate')).status === 'CANCELLED') {
+          return transition(root, lock, id, state.revision, 'cancelled', { reason: 'operator-paused', checks });
+        }
+      }
       const passed = checks.filter((item) => item.phase === 'candidate').every((item) => item.status === 'PASS');
       const evidence = await putArtifact(root, encode({ base_sha: state.base_sha, checks, manifest: candidate.manifest, patch: candidate.patch }));
       if (!passed) return transition(root, lock, id, state.revision, 'failed', { reason: 'verification-failed', checks, evidence, fingerprint: candidate.fingerprint });
@@ -268,34 +283,55 @@ export async function verify({ root, id, lock, execute = containerCommand }) {
   }
 }
 
-export async function implement({ root, id, lock, driver, execute = containerCommand }) {
+export async function implement({ root, id, lock, driver, budget, execute = containerCommand, brokerFactory = startBroker }) {
   let { state, task, policy, events } = await loadTask(root, id);
   if (state.status !== 'scoped') throw new Error('Implementation requires a freshly scoped task');
   const usage = usageLedger(events.filter((event) => event.type === 'usage/request' && event.data.task_id === id).map((event) => event.data));
-  const denied = mayAttempt({ policy, startedAt: state.started_at, attempts: state.attempts, usage, paid: driver.paid, unattended: driver.unattended });
+  const brokered = driver.mode === 'qi-budgeted';
+  if (brokered) {
+    validateBudget(budget);
+    if (budgetSnapshot(events, id).uncertain.length) return transition(root, lock, id, state.revision, 'blocked', { reason: 'unknown-cost' });
+  }
+  const denied = mayAttempt({ policy, startedAt: state.started_at, attempts: state.attempts, usage, paid: driver.paid && !brokered, unattended: driver.unattended });
   if (denied) return transition(root, lock, id, state.revision, 'blocked', { reason: denied });
-  if (driver.unattended || !['offline', 'qi-supervised'].includes(driver.mode)) throw new Error('Pilot requires an offline driver or explicit supervised qi run');
+  if ((driver.unattended && !brokered) || !['offline', 'qi-supervised', 'qi-budgeted'].includes(driver.mode)) throw new Error('Unattended execution requires the host budget broker');
+  if (driver.unattended && !events.some((e) => e.type === 'queue/enqueued' && e.data.task_id === id &&
+      e.data.contract_hash === state.contract_hash && e.data.budget_hash === digest(encode(budget)) && e.data.controller_sha === state.controller_sha)) throw new Error('Missing exact task/controller/budget authorization');
   if ((driver.mode === 'offline') !== (driver.paid === false)) throw new Error('Paid status must match the driver mode');
   state = await preflight({ root, id, lock, execute });
   if (TERMINAL.has(state.status)) return state;
-  const afterPreflight = mayAttempt({ policy, startedAt: state.started_at, attempts: state.attempts, usage, paid: driver.paid, unattended: driver.unattended });
+  if (await operatorPaused(root)) return transition(root, lock, id, state.revision, 'cancelled', { reason: 'operator-paused' });
+  const afterPreflight = mayAttempt({ policy, startedAt: state.started_at, attempts: state.attempts, usage, paid: driver.paid && !brokered, unattended: driver.unattended });
   if (afterPreflight) return transition(root, lock, id, state.revision, 'blocked', { reason: afterPreflight });
   const runId = randomUUID();
   const driverArtifact = await putArtifact(root, encode(driver));
   state = await transition(root, lock, id, state.revision, 'implementing', { run_id: runId, attempts: state.attempts + 1,
-    container: 'qi-maint-' + runId, driver: driverArtifact });
+    container: 'qi-maint-' + runId, container_owner: randomUUID(), driver: driverArtifact });
   const deadline = state.started_at + (policy.wall_seconds - policy.verification_reserve_seconds) * 1000;
-  const argv = driver.mode === 'qi-supervised' ? ['bb', '--classpath', '/controller/src:/controller/plugins', '/controller/maintenance/worker.clj',
+  let argv = driver.mode !== 'offline' ? ['bb', '--classpath', '/controller/src:/controller/plugins', '/controller/maintenance/worker.clj',
     '/profile/agent.edn', task.goal + '\nAllowed deliverables: ' + task.allowed_files.join(', ')] : driver.argv;
-  const execution = await execute({ image: task.image, argv, workspace: state.workspace, readonly: false,
-    mounts: [{ source: path.join(state.material, 'controller'), target: '/controller' }, { source: path.join(state.material, 'profile'), target: '/profile' }],
-    timeoutMs: Math.max(1, deadline - Date.now()), network: driver.paid === true,
-    envNames: driver.paid === true ? ['OPENAI_API_KEY'] : [], name: state.container });
+  let broker, execution;
+  const paused = () => operatorPaused(root);
+  try {
+    const mounts = [{ source: path.join(state.material, 'controller'), target: '/controller' }, { source: path.join(state.material, 'profile'), target: '/profile' }];
+    if (brokered) {
+      const directory = path.join(root, 'gateway-' + runId);
+      broker = await brokerFactory({ root, lock, config: budget, taskId: id, runId, deadline, directory, stopped: paused });
+      mounts.push({ source: directory, target: '/gateway', writable: true });
+      argv = ['node', '/controller/maintenance/relay.mjs', '/gateway', ...argv];
+    }
+    execution = await execute({ image: task.image, argv, workspace: state.workspace, readonly: false, mounts,
+      timeoutMs: Math.max(1, deadline - Date.now()), network: driver.paid === true && !brokered,
+      envNames: driver.paid === true && !brokered ? ['OPENAI_API_KEY'] : [], name: state.container, owner: state.container_owner,
+      resources: task.resources, shouldStop: async () => !!broker?.failure() || await paused() });
+  } catch (error) {
+    return transition(root, lock, id, state.revision, 'uncertain', { reason: 'execution-uncertain: ' + error.message });
+  } finally { if (broker) await broker.close(); }
   const artifact = await putArtifact(root, encode(execution));
   await lock.append('implementation/result', { task_id: id, run_id: runId, execution: artifact,
     usage: { accounting_complete: false, total_cost_usd: null } });
   // Keep accounting from unsuccessful runs too. A malformed/missing envelope stays unknown.
-  if (driver.mode === 'qi-supervised') {
+  if (driver.mode !== 'offline') {
     for (const line of execution.stdout.split('\n').filter(Boolean)) {
       let event;
       try { event = JSON.parse(line); } catch { continue; }
@@ -304,8 +340,10 @@ export async function implement({ root, id, lock, driver, execute = containerCom
       }
     }
   }
+  if (await paused()) return transition(root, lock, id, state.revision, 'cancelled', { reason: 'operator-paused' });
+  if (broker?.failure()) return transition(root, lock, id, state.revision, 'blocked', { reason: broker.failure() });
   if (!succeeded(execution)) return transition(root, lock, id, state.revision, 'failed', { reason: execution.timed_out ? 'wall-budget' : 'driver-failed' });
-  if (driver.mode === 'qi-supervised') {
+  if (driver.mode !== 'offline') {
     let records;
     try { records = execution.stdout.split('\n').filter(Boolean).map((line) => JSON.parse(line)); }
     catch { return transition(root, lock, id, state.revision, 'uncertain', { reason: 'malformed-qi-output' }); }
@@ -322,7 +360,8 @@ export async function retry({ root, id, lock, expectedRevision }) {
   if (state.status !== 'failed' || state.revision !== expectedRevision) throw new Error('Only a known failure at the expected revision can be retried');
   const usage = usageLedger(events.filter((e) => e.type === 'usage/request' && e.data.task_id === id).map((e) => e.data));
   const driver = state.driver ? JSON.parse(await readArtifact(root, state.driver)) : { paid: false };
-  const denied = mayAttempt({ policy, startedAt: state.started_at, attempts: state.attempts, usage, paid: driver.paid, unattended: false });
+  if (driver.mode === 'qi-budgeted' && budgetSnapshot(events, id).uncertain.length) throw new Error('Retry blocked: unknown-cost');
+  const denied = mayAttempt({ policy, startedAt: state.started_at, attempts: state.attempts, usage, paid: driver.paid && driver.mode !== 'qi-budgeted', unattended: false });
   if (denied) throw new Error('Retry blocked: ' + denied);
   return transition(root, lock, id, expectedRevision, 'scoped', { retry_of: state.run_id, reason: null });
 }
@@ -342,13 +381,29 @@ export async function accept({ root, id, lock, review, expectedRevision, baseRef
   return transition(root, lock, id, expectedRevision, 'accepted', { review: artifact, accepted_at: new Date().toISOString() });
 }
 
-export async function recover({ root, lock }) {
+export async function recordTrial({ root, id, lock }) {
+  const { state, task, events } = await loadTask(root, id);
+  const driver = state.driver && JSON.parse(await readArtifact(root, state.driver));
+  if (state.status !== 'review_ready' || !['dev', 'heldout'].includes(task.split) || driver?.mode !== 'qi-budgeted' ||
+      driver.unattended !== false || !budgetSnapshot(events, id).requests || budgetSnapshot(events, id).uncertain.length) throw new Error('Only a verified supervised model trial with settled budget can be recorded');
+  return transition(root, lock, id, state.revision, 'trial_passed', { trial_split: task.split,
+    note: 'Benchmark evidence only. The candidate is not human-accepted, merged or published.' });
+}
+
+export async function recover({ root, lock, cleanup = cleanupContainer }) {
   const events = await readJournal(root);
   await validateArtifacts(root, events);
   const states = [];
   for (const id of new Set(events.filter((event) => event.type === 'task/created').map((event) => event.data.task_id))) {
     const state = taskState(events, id);
-    if (['queued', 'implementing', 'verifying'].includes(state.status)) states.push(await transition(root, lock, id, state.revision, 'uncertain', { reason: 'interrupted-process-reconcile-before-new-task' }));
+    if (['queued', 'scoped', 'implementing', 'verifying'].includes(state.status)) {
+      const receipts = events.filter((e) => e.data.task_id === id && e.data.container_owner).map((e) => e.data);
+      for (const receipt of receipts) {
+        const result = await cleanup(receipt.container, receipt.container_owner);
+        await lock.append('resource/reconciled', { task_id: id, ...result });
+      }
+      states.push(await transition(root, lock, id, state.revision, 'uncertain', { reason: 'interrupted-process-reconcile-before-new-task' }));
+    }
   }
   return states;
 }

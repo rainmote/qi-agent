@@ -7,7 +7,7 @@
     {"id":"production-build","argv":["npm","run","web:build"],"timeout_seconds":180}
   ],
   "web_checks": [
-    {"id":"production-browser","argv":["npm","run","test:web-browser:ci"],"timeout_seconds":300},
+    {"id":"production-browser","argv":["sh","-c","npm run web:build && npm run test:web-browser:ci"],"timeout_seconds":300},
     {"id":"daemon-web-e2e","argv":["npm","run","test:web-e2e"],"timeout_seconds":600}
   ],
   "note": "Linux container checks require an image with pinned toolchains, dependency caches and Chromium. macOS PTY/desktop and cross-platform MSRV/audit remain separate CI or dedicated-host evidence."

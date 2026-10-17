@@ -213,6 +213,16 @@
   (let [handle (java.lang.ProcessHandle/of pid)]
     (and (.isPresent handle) (.isAlive (.get handle)))))
 
+(defn- await-stopped? [pid]
+  ;; ProcessHandle termination sends a signal; kernel exit/reaping is asynchronous.
+  ;; The bound is shorter than either fixture's sleep, so natural exit cannot pass.
+  (let [deadline (+ (System/nanoTime) 1000000000)]
+    (loop []
+      (cond
+        (not (alive? pid)) true
+        (>= (System/nanoTime) deadline) false
+        :else (do (Thread/sleep 5) (recur))))))
+
 (deftest real-background-process-tree-is-killed-and-spools-are-removed-on-unload
   (let [directory (fs/create-temp-dir {:prefix "qi-jobs-kill-"})
         ctx (plugin/boot! {:plugins [{:ns 'qi.plugins.execution-world
@@ -230,7 +240,7 @@
         (is (alive? pid))
         (kernel/dispose-plugin! ctx :tools/jobs)
         (is (= :cancelled (:status (await-status manager (:job-id job)))))
-        (is (false? (alive? pid)))
+        (is (await-stopped? pid))
         (is (nil? (kernel/service ctx :execution/jobs)))
         (is (nil? (kernel/tool ctx "job_kill")))
         (is (empty? (fs/glob (fs/path directory ".qi-agent/tool-output") "*.tmp" {:hidden true}))))
@@ -276,7 +286,7 @@
                               ((:spawn! world)
                                {:command "sleep 3 & echo $! > child.pid; sleep 0.05"})))
         (is (< (/ (- (System/nanoTime) started) 1000000) 1500))
-        (is (false? (alive? (parse-long (str/trim (slurp (str (fs/path directory "child.pid")))))))))
+        (is (await-stopped? (parse-long (str/trim (slurp (str (fs/path directory "child.pid"))))))))
       (finally (kernel/dispose-all! ctx) (fs/delete-tree directory)))))
 
 (deftest background-bash-cannot-bypass-the-runtime-trust-and-approval-gates

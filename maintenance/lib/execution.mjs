@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { runProcess } from '../../evals/lib/core.mjs';
@@ -29,7 +30,14 @@ export async function regularFile(root, file) {
 export async function snapshot(repo, sha, target) {
   await fs.mkdir(target, { recursive: true, mode: 0o755 });
   const archive = execFileSync('git', ['-C', repo, 'archive', '--format=tar', sha], { maxBuffer: 128 * 1024 * 1024 });
-  execFileSync('tar', ['-xf', '-', '-C', target], { input: archive });
+  // BSD tar can exit successfully at the end marker before consuming padded
+  // stdin, which spawnSync reports as EPIPE. A private file has no pipe race.
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'qi-maint-snapshot-'));
+  try {
+    const file = path.join(temporary, 'source.tar');
+    await fs.writeFile(file, archive, { mode: 0o600 });
+    execFileSync('tar', ['-xf', file, '-C', target]);
+  } finally { await fs.rm(temporary, { recursive: true, force: true }); }
 }
 
 export function changedFiles(workspace, base) {
@@ -60,18 +68,46 @@ export function immutableImage(image) {
   return image;
 }
 
-export async function containerCommand({ image, argv, workspace, readonly = true, mounts = [], timeoutMs, envNames = [], network = false, name = 'qi-maint-' + randomUUID() }) {
+export function resourceLimits(resources = {}) {
+  const limits = { cpus: 2, memory_mb: 2048, work_mb: 1024, tmp_mb: 256, pids: 256, ...resources };
+  for (const [key, max] of Object.entries({ cpus: 4, memory_mb: 6144, work_mb: 6144, tmp_mb: 1024, pids: 1024 })) {
+    if (!Number.isSafeInteger(limits[key]) || limits[key] < 1 || limits[key] > max) throw new Error('Invalid container resource limit: ' + key);
+  }
+  if (Object.keys(limits).length !== 5) throw new Error('Unknown container resource limit');
+  return limits;
+}
+
+export async function cleanupContainer(name, owner, run = runProcess) {
+  if (!/^qi-maint-(?:check-)?[a-f0-9-]{36}$/.test(name ?? '') || !/^[a-f0-9-]{36}$/.test(owner ?? '')) throw new Error('Missing container ownership receipt');
+  const inspected = await run('docker', ['inspect', '--type=container', name], { timeoutMs: 10_000 });
+  if (inspected.exit_code !== 0) {
+    if (/No such (object|container)/i.test(inspected.stderr)) return { status: 'absent', container: name };
+    throw new Error('Container inspection is uncertain');
+  }
+  const container = JSON.parse(inspected.stdout)[0];
+  if (container.Config?.Labels?.['qi.maintenance.owner'] !== owner || !/^[a-f0-9]{64}$/.test(container.Id ?? '')) throw new Error('Container ownership mismatch');
+  const removed = await run('docker', ['rm', '-f', container.Id], { timeoutMs: 15_000 });
+  if (removed.exit_code !== 0 && !/No such container/i.test(removed.stderr)) throw new Error('Container cleanup is uncertain');
+  return { status: 'removed', container: name, container_id: container.Id };
+}
+
+export async function containerCommand({ image, argv, workspace, readonly = true, mounts = [], timeoutMs, envNames = [], network = false,
+  name = 'qi-maint-' + randomUUID(), owner = randomUUID(), resources, shouldStop = async () => false }) {
   immutableImage(image);
+  const limits = resourceLimits(resources);
   if (!Array.isArray(argv) || !argv.length || argv.some((v) => typeof v !== 'string' || v.includes('\0'))) throw new Error('Expected a nonempty argv array');
   // No shell evaluation of argv. The fixed wrapper only creates an ephemeral build tree.
   const args = ['run', '--rm', '--name', name, '--init', '--read-only', '--cap-drop=ALL', '--security-opt=no-new-privileges',
-    '--pids-limit=256', '--memory=2g', '--cpus=2', `--user=${process.getuid?.() || 1000}:${process.getgid?.() || 1000}`, '--network', network ? 'bridge' : 'none',
-    '--tmpfs', '/tmp:rw,exec,mode=1777,size=256m', '--env', 'HOME=/tmp/qi-home', '--env', 'NO_COLOR=1'];
-  if (readonly) args.push('--mount', `type=bind,src=${workspace},dst=/inputs,readonly`, '--tmpfs', '/work:rw,exec,mode=1777,size=1g');
+    '--label', 'qi.maintenance.owner=' + owner,
+    '--pids-limit=' + limits.pids, '--memory=' + limits.memory_mb + 'm', '--memory-swap=' + limits.memory_mb + 'm', '--cpus=' + limits.cpus,
+    `--user=${process.getuid?.() || 1000}:${process.getgid?.() || 1000}`, '--network', network ? 'bridge' : 'none',
+    '--tmpfs', '/tmp:rw,exec,mode=1777,size=' + limits.tmp_mb + 'm', '--env', 'HOME=/tmp/qi-home', '--env', 'NO_COLOR=1'];
+  if (readonly) args.push('--mount', `type=bind,src=${workspace},dst=/inputs,readonly`, '--tmpfs', '/work:rw,exec,mode=1777,size=' + limits.work_mb + 'm');
   else args.push('--mount', `type=bind,src=${workspace},dst=/work`);
-  for (const { source, target } of mounts) {
-    if (!path.isAbsolute(source) || !/^\/(controller|profile|acceptance)(\/|$)/.test(target) || /[,\0\r\n]/.test(source + target)) throw new Error('Invalid trusted mount');
-    args.push('--mount', `type=bind,src=${source},dst=${target},readonly`);
+  for (const { source, target, writable = false } of mounts) {
+    if (!path.isAbsolute(source) || !/^\/(controller|profile|acceptance|gateway)(\/|$)/.test(target) || /[,\0\r\n]/.test(source + target) ||
+        (writable && target !== '/gateway')) throw new Error('Invalid trusted mount');
+    args.push('--mount', `type=bind,src=${source},dst=${target}${writable ? '' : ',readonly'}`);
   }
   for (const key of envNames) {
     if (key !== 'OPENAI_API_KEY') throw new Error('Only the explicit maintenance provider credential is allowed');
@@ -81,11 +117,23 @@ export async function containerCommand({ image, argv, workspace, readonly = true
   if (!path.isAbsolute(workspace) || /[,\0\r\n]/.test(workspace)) throw new Error('Invalid workspace');
   args.push('--workdir', '/work', image, 'sh', '-c',
     readonly ? 'mkdir -p "$HOME" && cp -R /inputs/. /work/ && exec "$@"' : 'mkdir -p "$HOME" && exec "$@"', 'qi-maint-command', ...argv);
+  let stopping = false, stopError, poll, pendingStop = Promise.resolve();
   try {
+    poll = setInterval(() => {
+      if (stopping) return;
+      stopping = true;
+      pendingStop = (async () => {
+        try { if (await shouldStop()) await cleanupContainer(name, owner); }
+        catch (error) { stopError = error; }
+        finally { stopping = false; }
+      })();
+    }, 500);
     return await runProcess('docker', args, { timeoutMs, maxOutputBytes: 10_000_000 });
   } finally {
+    clearInterval(poll);
+    await pendingStop;
     // Killing the Docker client does not guarantee that its container stopped.
-    const cleanup = await runProcess('docker', ['rm', '-f', name], { timeoutMs: 15_000 });
-    if (cleanup.exit_code !== 0 && !/No such container/i.test(cleanup.stderr)) throw new Error('Container cleanup is uncertain: ' + name);
+    await cleanupContainer(name, owner);
+    if (stopError) throw stopError;
   }
 }

@@ -120,7 +120,7 @@
                                            :options (cond-> {} model (assoc :provider model)
                                                             reserve (assoc :max_output_tokens reserve))})))))
            compact-body!
-           (fn [{:keys [force reason cancel-token provider request]}]
+           (fn [{:keys [force reason cancel-token provider request run-id]}]
              (cancellation/throw-if-cancelled! cancel-token)
              (let [current ((:messages store))
                    request (pin-provider
@@ -153,14 +153,19 @@
                                                      (assoc :provider (get-in request [:options :provider])))})
                        chunks (source-chunks source max-source-chars
                                              #(:fits? (budget! (summary-request %))) max-summary-calls)
+                       compaction-id (str (random-uuid))
+                       run-id (or run-id (:run-id generation/*run*))
                        text (str/join
                              "\n\n"
                              (mapv
-                              (fn [{:keys [start end]}]
+                              (fn [chunk-index {:keys [start end]}]
                                 (cancellation/throw-if-cancelled! cancel-token)
                                 (try
                                   (let [response (generation/generate! ctx (check! (summary-request (subs source start end)))
-                                                                       {:purpose :compaction})
+                                                                       (cond-> {:purpose :compaction :compaction-id compaction-id
+                                                                                :chunk-index chunk-index}
+                                                                         run-id (assoc :run-id run-id)
+                                                                         (nil? run-id) (assoc :operation-id compaction-id)))
                                         content (get-in response [:message :content])]
                                     (cancellation/throw-if-cancelled! cancel-token)
                                     (when-not (and (string? content) (not (str/blank? content))
@@ -172,12 +177,13 @@
                                       (unfit! :compaction-insufficient (budget! request)))
                                     content)
                                   (catch Throwable error
-                                    (if (or (:cancelled (ex-data error)) (= :context_unfit (:code (ex-data error))))
+                                    (if (or (:cancelled (ex-data error)) (= :context_unfit (:code (ex-data error)))
+                                            (contains? #{:request-budget :wall-budget} (:reason (ex-data error))))
                                       (throw error)
                                       (throw (ex-info "Semantic compaction failed; original context was preserved"
                                                       {:reason :summary-failed :retryable false
                                                        :chunk-start start :chunk-end end} error))))))
-                              chunks))
+                              (range) chunks))
                        coverage (summary/coverage visible source chunks)
                        result ((:compact! store)
                                {:plan plan :summary text :coverage coverage :cancel-token cancel-token

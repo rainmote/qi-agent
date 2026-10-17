@@ -24,7 +24,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22.12.0
           cache: npm
@@ -99,7 +99,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22.12.0
           cache: npm
@@ -129,7 +129,7 @@ jobs:
       EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
       # Frozen reviewed integration base; refresh only after new-base review.
       # Old PR event/API base metadata can lag behind the actual merge tree.
-      EXPECTED_BASE: a0b74ad310aa0e0978f747369c41315560aa6dd3
+      EXPECTED_BASE: cefe9c78efea9cb7588b2819473b314623999870
       EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

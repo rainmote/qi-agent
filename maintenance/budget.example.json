@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "provider": "openai",
+  "model": "REPLACE_WITH_ACCOUNT_SUPPORTED_MODEL",
+  "effort": "medium",
+  "task_usd": null,
+  "daily_usd": null,
+  "max_requests": 64,
+  "context_window_tokens": null,
+  "max_output_tokens": 8192,
+  "input_usd_per_million": null,
+  "output_usd_per_million": null,
+  "price_valid_until": null,
+  "price_source": "https://developers.openai.com/api/docs/pricing",
+  "note": "Fill reviewed ceilings covering all input/output tiers of the exact model. Each request reserves the full input window plus capped output. Unknown outcomes retain the reservation and stop admission. Daily means a rolling 24-hour ceiling; this is not provider invoice reconciliation."
+}
