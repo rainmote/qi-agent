@@ -1684,11 +1684,23 @@ fn render_loading(frame: &mut Frame<'_>, app: &App, area: Rect) {
     } else {
         dots_frames[app.spinner_frame % dots_frames.len()]
     };
+    let loading_text = app
+        .projection
+        .as_ref()
+        .filter(|projection| projection.state.phase == "compacting")
+        .and_then(|projection| projection.state.compaction.as_ref())
+        .map(|progress| {
+            format!(
+                "整理上下文 {}/{}",
+                progress.completed_chunks, progress.total_chunks
+            )
+        })
+        .unwrap_or_else(|| app.loading_phrase().to_string());
     let status_spans = vec![
         Span::raw("  "),
         Span::styled(spinner, Style::default().fg(app.theme.primary)),
         Span::raw(" "),
-        Span::styled(app.loading_phrase(), Style::default().fg(app.theme.accent)),
+        Span::styled(loading_text, Style::default().fg(app.theme.accent)),
     ];
     if area.width < 80 {
         frame.render_widget(
@@ -1911,7 +1923,7 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let left = if app.focused_tool_group.is_some() {
         "Tool focus · ↑↓ navigate · Enter expand · Esc close"
     } else if app.busy() {
-        "Enter to steer · Ctrl+Q to queue"
+        "Enter to steer next step · Ctrl+Q to queue"
     } else {
         "? for shortcuts · Ctrl+T tools"
     };
@@ -2961,5 +2973,22 @@ mod tests {
         assert!(output.contains("failure"));
         assert!(!output.contains("[31m"));
         assert!(!output.contains("]0;owned"));
+    }
+
+    #[test]
+    fn compaction_loading_shows_actual_chunk_progress() {
+        let mut app = fixture();
+        let state = &mut app.projection.as_mut().unwrap().state;
+        state.phase = "compacting".into();
+        state.compaction = Some(CompactionProgress {
+            compaction_id: "summary-1".into(),
+            completed_chunks: 2,
+            total_chunks: 6,
+        });
+        let output = frame(&app, 100, 32);
+        assert!(
+            output.replace(' ', "").contains("整理上下文2/6"),
+            "{output}"
+        );
     }
 }

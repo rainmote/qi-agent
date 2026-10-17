@@ -1,0 +1,58 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { prepare, implement } from '../lib/controller.mjs';
+import { lockStore } from '../lib/store.mjs';
+import { exportWebReceipt } from '../export-web-receipt.mjs';
+import { runProcess } from '../../evals/lib/core.mjs';
+
+const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const git = (cwd, ...argv) => execFileSync('/usr/bin/git', ['-C', cwd, ...argv], {encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
+
+test('only a pinned independent controller can export the exact review-ready tree', async t => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(),'qvr-export-')));
+  t.after(() => fs.rm(root,{recursive:true,force:true}));
+  const controller = path.join(root,'controller'), repo=path.join(root,'repo'), stateRoot=path.join(root,'state'), verifier=path.join(root,'verifier');
+  await fs.mkdir(path.join(controller,'maintenance'),{recursive:true});
+  await fs.mkdir(path.join(controller,'evals'),{recursive:true});
+  await fs.cp(path.join(repository,'maintenance/lib'),path.join(controller,'maintenance/lib'),{recursive:true});
+  await fs.copyFile(path.join(repository,'maintenance/checks.json'),path.join(controller,'maintenance/checks.json'));
+  await fs.cp(path.join(repository,'evals/lib'),path.join(controller,'evals/lib'),{recursive:true});
+  git(controller,'init','-b','main');git(controller,'add','.');git(controller,'-c','user.name=Test','-c','user.email=test@example.invalid','commit','-m','fixed fixture controller');
+  const controllerSha=git(controller,'rev-parse','HEAD');
+  await fs.mkdir(path.join(repo,'src'),{recursive:true});await fs.mkdir(verifier);
+  await fs.writeFile(path.join(repo,'src/value.mjs'),'export const value=1;\n');
+  git(repo,'init','-b','main');git(repo,'add','.');git(repo,'-c','user.name=Test','-c','user.email=test@example.invalid','commit','-m','base');
+  const profile=path.join(root,'agent.edn');await fs.writeFile(profile,'{:plugins []}\n');
+  await fs.writeFile(path.join(verifier,'acceptance.test.mjs'),`import test from 'node:test';import assert from 'node:assert/strict';const {value}=await import('file://'+process.cwd()+'/src/value.mjs');test('value is two',()=>assert.equal(value,2));\n`);
+  const task={schema_version:1,task_id:'web-receipt',kind:'bug',goal:'Repair fixture',base_sha:git(repo,'rev-parse','HEAD'),image:'sha256:'+'a'.repeat(64),profile_path:profile,verifier_dir:verifier,allowed_files:['src/value.mjs'],checks:[{id:'parse',argv:['node','--check','src/value.mjs'],timeout_seconds:10}],acceptance:{file:'acceptance.test.mjs',tests:['value is two']}};
+  const policy=JSON.parse(await fs.readFile(new URL('../policy.json',import.meta.url)));
+  const lock=await lockStore(stateRoot);t.after(()=>lock.close().catch(()=>{}));
+  const scoped=await prepare({repo,root:stateRoot,controller,task,policy,lock});
+  const options={root:stateRoot,id:task.task_id,controller,controllerSha,turnId:'turn-0123456789',directory:path.join(root,'receipts')};
+  await assert.rejects(exportWebReceipt(options),/verdict/);
+  const execute=async options=>{
+    const argv=options.argv.map(arg=>arg.startsWith('/acceptance/')?path.join(options.mounts[0].source,arg.slice('/acceptance/'.length)):arg);
+    const env={...process.env};delete env.NODE_TEST_CONTEXT;
+    return runProcess(argv[0]==='node'?process.execPath:argv[0],argv.slice(1),{cwd:options.workspace,env,timeoutMs:options.timeoutMs});
+  };
+  const ready=await implement({root:stateRoot,id:task.task_id,lock,execute,driver:{mode:'offline',paid:false,unattended:false,argv:['node','-e',"require('node:fs').writeFileSync('src/value.mjs','export const value=2;\\n')"]}});
+  assert.equal(ready.status,'review_ready');
+  const exported=await exportWebReceipt(options);const receipt=JSON.parse(await fs.readFile(exported.file));
+  assert.equal(receipt.status,'PASS');assert.equal(receipt.candidate_sha,ready.candidate_sha);assert.equal(receipt.workspace_path,scoped.workspace);
+  assert.equal(receipt.bindings.controller_sha,controllerSha);assert.equal(receipt.bindings.material_sha256,ready.material_hash);assert.deepEqual(receipt.required_checks,['parse','acceptance']);
+  assert.equal(receipt.source_files.length,1);
+  await assert.rejects(exportWebReceipt(options),/EEXIST/);
+  await assert.rejects(exportWebReceipt({...options,controllerSha:'f'.repeat(40)}),/revision/);
+  await assert.rejects(exportWebReceipt({...options,directory:path.join(scoped.workspace,'receipts')}),/overlaps/);
+  await fs.writeFile(path.join(scoped.workspace,'extra.txt'),'unverified');
+  await assert.rejects(exportWebReceipt({...options,turnId:'turn-different'}),/verified tree/);
+  await fs.rm(path.join(scoped.workspace,'extra.txt'));
+  await fs.writeFile(path.join(scoped.workspace,'src/value.mjs'),'export const value=3;\n');
+  await assert.rejects(exportWebReceipt({...options,turnId:'turn-different'}),/verified tree/);
+  assert.equal(git(repo,'rev-parse','main'),task.base_sha);
+});

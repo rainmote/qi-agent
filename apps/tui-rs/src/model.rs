@@ -133,12 +133,69 @@ pub struct Model {
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
+pub struct RunOutcome {
+    pub run_id: String,
+    pub status: String,
+    pub reason: Option<String>,
+    pub verification: String,
+    pub error: Option<String>,
+}
+
+impl RunOutcome {
+    pub fn text(&self) -> String {
+        let status = match self.status.as_str() {
+            "completed" => "运行完成",
+            "failed" => "运行失败",
+            "cancelled" => "运行已取消",
+            _ => "结果未确认 · 需要核对",
+        };
+        let verification = match self.verification.as_str() {
+            "passed" | "verified" => "验收通过",
+            "failed" => "验收失败",
+            "unknown" => "验收结果未知",
+            _ => "尚未验收",
+        };
+        let reason = match self.reason.as_deref() {
+            Some("no-progress") => Some("连续调用没有进展"),
+            Some("step-budget") => Some("步数已达上限"),
+            Some("request-budget") => Some("请求数已达上限"),
+            Some("wall-budget") => Some("运行时间已达上限"),
+            Some("tool-terminated") => Some("工具策略终止"),
+            Some("provider-error") => Some("模型请求失败"),
+            Some("summary-failed") => Some("上下文整理失败"),
+            Some("output-limit") => Some("输出达到上限"),
+            Some("restored") => Some("中断后恢复"),
+            _ => None,
+        };
+        [
+            Some(status),
+            Some(verification),
+            reason,
+            self.error.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" · ")
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CompactionProgress {
+    pub compaction_id: String,
+    pub completed_chunks: u64,
+    pub total_chunks: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct AgentState {
     pub phase: String,
     pub run_id: Option<String>,
     pub partial_assistant: String,
     pub partial_reasoning: String,
     pub last_error: Option<String>,
+    pub last_outcome: Option<RunOutcome>,
+    pub compaction: Option<CompactionProgress>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

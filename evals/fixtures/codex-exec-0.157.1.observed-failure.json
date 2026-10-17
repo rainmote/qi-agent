@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "cli_version": "0.157.1",
+  "transcript_origin": "observed-provider-rejection",
+  "observed_live_transcript": true,
+  "raw_artifact_sha256": "c7babaa12302d598672fe5ffe80e1fd5dc850d2732ee7ec9bb6199ddd47595d0",
+  "redactions": [
+    "thread_id"
+  ],
+  "exit_code": 1,
+  "events": [
+    {
+      "type": "thread.started",
+      "thread_id": "observed-redacted-thread"
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_0",
+        "type": "error",
+        "message": "Model metadata for `gpt-6.1-sol` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."
+      }
+    },
+    {
+      "type": "turn.started"
+    },
+    {
+      "type": "error",
+      "message": "{\"type\":\"error\",\"status\":400,\"error\":{\"type\":\"invalid_request_error\",\"message\":\"The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.\"}}"
+    },
+    {
+      "type": "turn.failed",
+      "error": {
+        "message": "{\"type\":\"error\",\"status\":400,\"error\":{\"type\":\"invalid_request_error\",\"message\":\"The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.\"}}"
+      }
+    }
+  ]
+}

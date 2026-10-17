@@ -5,8 +5,50 @@
             [qi.plugins.runtime :as runtime]
             [qi.plugins.session :as session]
             [qi.plugins.subagent-in-process :as child]
+            [qi.session-preferences :as preferences]
+            [clojure.string :as str]
             [babashka.fs :as fs]
             [clojure.test :refer [deftest is testing]]))
+
+(deftest response-detail-is-durable-and-presentation-only
+  (let [directory (fs/create-temp-dir {:prefix "qi-response-detail-"})
+        path (str (fs/path directory "session.jsonl"))
+        requests (atom [])
+        config {:plugins [{:ns 'qi.plugins.session :config {:path path}}
+                          {:ns 'qi.plugins.mock
+                           :config {:generate (fn [request]
+                                                (swap! requests conj request)
+                                                {:message {:role "assistant" :content "ok"}
+                                                 :finish-reason "stop"})}}
+                          {:ns 'qi.plugins.runtime :config {:system-prompt "base"}}
+                          {:ns 'qi.plugins.remote-registry}
+                          {:ns 'qi.plugins.remote-api}]}]
+    (try
+      (let [ctx (plugin/boot! config)]
+        (try
+          (let [rpc (:invoke! (kernel/require-service ctx :remote/registry))]
+            (is (= {:response_detail "auto"} (rpc "session.preferences" {})))
+            (doseq [mode ["short" "auto" "detailed"]]
+              (rpc "session.preferences.set" {:response_detail mode})
+              ((kernel/require-service ctx :agent/run) "test")
+              (let [prompt (:system-prompt (last @requests))]
+                (is (str/includes? prompt (str "Response detail: " mode)))
+                (is (str/includes? prompt "verification"))
+                (is (str/includes? prompt "grants no permissions"))))
+            (is (thrown? clojure.lang.ExceptionInfo
+                         (rpc "session.preferences.set" {:response_detail "allow"})))
+            (is (thrown? clojure.lang.ExceptionInfo
+                         (rpc "session.preferences.set" {:response_detail "short" :permissions "allow"}))))
+          (finally (kernel/dispose-all! ctx))))
+      (let [ctx (plugin/boot! config)]
+        (try
+          (let [rpc (:invoke! (kernel/require-service ctx :remote/registry))]
+            (is (= "detailed" (get-in (rpc "session.snapshot" {}) [:preferences :response_detail])))
+            (rpc "session.clear" {})
+            (is (= {:response_detail "detailed"} (rpc "session.preferences" {}))))
+          (finally (kernel/dispose-all! ctx))))
+      (is (= "auto" (:response_detail (preferences/snapshot [{:type "session/preferences" :data {:response_detail "unrecognized"}}]))))
+      (finally (fs/delete-tree directory)))))
 
 (defn- answer [text]
   {:message {:role "assistant" :content text} :finish-reason "stop"})
@@ -28,7 +70,7 @@
                [{:id (str "step-" step)
                  :type "function"
                  :function {:name "calculate"
-                            :arguments "{\"operation\":\"add\",\"a\":1,\"b\":1}"}}]}
+                            :arguments (str "{\"operation\":\"add\",\"a\":" step ",\"b\":1}")}}]}
               :finish-reason "tool_calls"})))}}
      {:ns 'qi.plugins.math}
      {:ns 'qi.plugins.runtime
@@ -181,7 +223,7 @@
         (is (:compacted ((:compact! manager))))
         (is (= ["user: old goal"] @sources))
         (is (= (subvec batch-history 1) (subvec ((:messages store)) 1)))
-        (is (= 5 (get-in (last ((:events store)))
+        (is (= 5 (get-in (last (filter #(= "session/compaction" (:type %)) ((:events store))))
                         [:data :retained_message_count])))
         (append-messages! ctx [{:role "assistant" :content "second answer"}
                                {:role "user" :content "new exact instruction"}])
@@ -451,3 +493,189 @@
         (deliver release-first true)
         (deliver second-result {:stop-reason :aborted})
         (kernel/dispose-all! ctx)))))
+
+
+(defn progress-answer [text] {:message {:role "assistant" :content text} :finish-reason "stop"})
+(defn progress-call [id args] {:id (str id) :type "function" :function {:name "probe" :arguments args}})
+(defn progress-tool-answer [calls] {:message {:role "assistant" :tool_calls calls} :finish-reason "tool_calls"})
+(defn progress-fixture [generate execute config tool-options]
+  (let [ctx (plugin/boot! {:plugins [{:ns 'qi.plugins.session :config {:path nil :ephemeral true}}
+                                    {:ns 'qi.plugins.mock :config {:generate generate}}
+                                    {:ns 'qi.plugins.runtime :config (merge {:max-steps 20} config)}]})]
+    (kernel/register-tool! (kernel/plugin-context ctx :acceptance/tools)
+                          (merge {:name "probe" :description "Offline progress-fixture"
+                                  :parameters {:type "object"} :execute execute} tool-options))
+    ctx))
+(defn progress-attempt [ctx]
+  (try ((kernel/require-service ctx :agent/run) "offline task")
+       (catch clojure.lang.ExceptionInfo error (ex-data error))))
+(defn progress-events [ctx] ((:events (kernel/require-service ctx :session/store))))
+
+(deftest static-results-stop-with-auditable-no-progress
+  (let [requests (atom 0) bodies (atom 0)
+        ctx (progress-fixture (fn [_] (let [n (swap! requests inc)]
+                               (progress-tool-answer [(progress-call n (if (odd? n) "{\"a\":1,\"b\":2}" "{\"b\":2,\"a\":1}"))])))
+                     (fn [_ _] (swap! bodies inc) {:result 3}) {} {})]
+    (try
+      (let [result (progress-attempt ctx)
+            terminal (:data (last (filter #(= "agent/run/end" (:type %)) (progress-events ctx))))]
+        (is (= :no-progress (:reason result)))
+        (is (= 3 @bodies @requests))
+        (is (= ["1" "2" "3"] (get-in terminal [:no-progress :call-ids])))
+        (is (= :failed (:status terminal))))
+      (finally (kernel/dispose-all! ctx)))))
+
+(deftest changing-results-steering-and-polling-are-progress-aware
+  (doseq [mode [:changing :steer :poll]]
+    (testing (name mode)
+      (let [requests (atom 0) bodies (atom 0) context (atom nil)
+            ctx (progress-fixture
+                 (fn [_] (let [n (swap! requests inc)]
+                           (if (= n (if (= mode :steer) 5 9)) (progress-answer "done")
+                               (progress-tool-answer [(progress-call n "{}")]))))
+                 (fn [_ _]
+                   (let [n (swap! bodies inc)]
+                     (when (and (= mode :steer) (= n 2))
+                       ((:steer! (kernel/require-service @context :agent/session)) "new direction"))
+                     (if (= mode :changing) {:revision n} {:status "waiting"})))
+                 {} (if (= mode :poll) {:progress-mode :poll} {}))]
+        (reset! context ctx)
+        (try
+          (is (= "done" (:content (progress-attempt ctx))))
+          (when (= mode :steer)
+            (let [added (:data (first (filter #(= "queue/added" (:type %)) (progress-events ctx))))
+                  consumed (:data (first (filter #(= "queue/consumed" (:type %)) (progress-events ctx))))]
+              (is (= (:id added) (:id consumed)))
+              (is (some? (:id consumed)))))
+          (finally (kernel/dispose-all! ctx)))))))
+
+(deftest unchanged-polling-has-its-own-finite-limit
+  (let [bodies (atom 0)
+        ctx (progress-fixture (fn [_] (progress-tool-answer [(progress-call (str (random-uuid)) "{}")]))
+                     (fn [_ _] (swap! bodies inc) {:status "waiting"})
+                     {:max-stalled-polls 5} {:progress-mode :poll})]
+    (try
+      (is (= :no-progress (:reason (progress-attempt ctx))))
+      (is (= 5 @bodies))
+      (finally (kernel/dispose-all! ctx)))))
+
+(deftest forty-read-tools-have-four-workers-and-ordered-results
+  (let [requests (atom 0) active (atom 0) peak (atom 0)
+        ctx (progress-fixture (fn [_] (if (= 1 (swap! requests inc))
+                               (progress-tool-answer (mapv #(progress-call % (str "{\"n\":" % "}")) (range 40))) (progress-answer "done")))
+                     (fn [{:keys [n]} _]
+                       (let [running (swap! active inc)]
+                         (swap! peak max running)
+                         (try (Thread/sleep 50) {:n n} (finally (swap! active dec))))) {} {})]
+    (try
+      (is (= "done" (:content (progress-attempt ctx))))
+      (is (<= @peak 4))
+      (is (> @peak 1))
+      (is (= (mapv str (range 40))
+             (mapv #(get-in % [:data :call-id]) (filter #(= "tool/result" (:type %)) (progress-events ctx)))))
+      (finally (kernel/dispose-all! ctx)))))
+
+(deftest cancelling-a-batch-prevents-waiting-tool-bodies
+  (let [started (atom 0) four (promise) release (promise)
+        ctx (progress-fixture (fn [_] (progress-tool-answer (mapv #(progress-call % "{}") (range 40))))
+                     (fn [_ _] (when (= 4 (swap! started inc)) (deliver four true)) @release {:done true}) {} {})]
+    (try
+      (let [session (kernel/require-service ctx :agent/session)
+            task ((:submit! session) "cancel progress-fixture")]
+        (is (= true (deref four 3000 ::timeout)))
+        (Thread/sleep 75)
+        ((:abort! session))
+        (deliver release true)
+        (let [result (deref (:result task) 3000 ::timeout)]
+          (is (not= ::timeout result))
+          (is (= :cancelled (:status (ex-data (:error result))))))
+        (is (<= @started 4)))
+      (finally (deliver release true) (kernel/dispose-all! ctx)))))
+
+(deftest automatic-compaction-explains-its-chunks-and-closes-on-every-outcome
+  (doseq [mode [:success :failure :cancel]]
+    (testing (name mode)
+      (let [lifecycle (atom []) phases (atom [])
+            ctx (plugin/boot!
+                 {:plugins [{:ns 'qi.plugins.session :config {:path nil :ephemeral true}}
+                            {:ns 'qi.plugins.mock :config {:context-window 2048
+                             :generate (fn [{:keys [system-prompt cancel-token]}]
+                                         (if (.contains (or system-prompt "") "Summarize")
+                                           (case mode
+                                             :failure (throw (ex-info "offline summary failure" {:retryable false}))
+                                             :cancel (do (cancellation/cancel! cancel-token) (progress-answer "late"))
+                                             (progress-answer "summary")) (progress-answer "done")))}}
+                            {:ns 'qi.plugins.context-manager :config {:context-window 2048 :reserve-tokens 128
+                                                                    :retain-messages 1 :max-source-chars 1800}}
+                            {:ns 'qi.plugins.runtime}]})]
+        (try
+          (kernel/on! (kernel/plugin-context ctx :acceptance/hooks) :context/compaction (fn [_ data] (swap! lifecycle conj data)))
+          (let [store (kernel/require-service ctx :session/store)
+                old {:role "user" :content (apply str (repeat 12000 "x"))}]
+            ((:append! store) "message" {:message old})
+            ((:subscribe! (kernel/require-service ctx :agent/session)) #(swap! phases conj %))
+            (progress-attempt ctx)
+            (is (= :started (:status (first @lifecycle))))
+            (is (= (case mode :success :completed :failure :failed :cancel :cancelled) (:status (last @lifecycle))))
+            (is (some #(= :compacting (:phase %)) @phases))
+            (is (= :idle (:phase (last (filter #(= :agent/state (:type %)) @phases)))))
+            (is (every? #(and (:run-id %) (:compaction-id %) (:total-chunks %)) @lifecycle))
+            (if (= mode :success)
+              (is (= (:total-chunks (last @lifecycle)) (:completed-chunks (last @lifecycle))))
+              (do (is (= old (first ((:messages store)))))
+                  (is (not-any? #(= "session/compaction" (:type %)) (progress-events ctx))))))
+          (finally (kernel/dispose-all! ctx)))))))
+
+
+(deftest steering-at-the-repetition-threshold-still-takes-effect
+  (let [requests (atom 0) bodies (atom 0) context (atom nil)
+        ctx (progress-fixture
+             (fn [_] (let [n (swap! requests inc)]
+                       (if (= n 6) (progress-answer "done")
+                           (progress-tool-answer [(progress-call n "{}")]))))
+             (fn [_ _] (when (= 3 (swap! bodies inc))
+                         ((:steer! (kernel/require-service @context :agent/session)) "new instruction"))
+               {:result 3}) {} {})]
+    (reset! context ctx)
+    (try
+      (is (= "done" (:content (progress-attempt ctx))))
+      (is (= 5 @bodies))
+      (finally (kernel/dispose-all! ctx)))))
+
+(deftest alternating-read-cycle-produces-one-budget-bound-diagnostic
+  (let [requests (atom 0) ctx (progress-fixture
+                             (fn [_] (let [n (swap! requests inc)]
+                                       (progress-tool-answer [(progress-call n (str "{\"target\":\"" (if (odd? n) "A" "B") "\"}"))])))
+                             (fn [args _] args) {:max-model-requests 8 :max-wall-ms 5000} {})]
+    (try
+      (let [result (progress-attempt ctx)
+            terminal (:data (last (filter #(= "agent/run/end" (:type %)) (progress-events ctx))))
+            plan (:diagnostic-plan result)]
+        (is (= :no-progress (:reason result))) (is (= 5 @requests))
+        (is (= :read-cycle (get-in result [:no-progress :kind])))
+        (is (= ["3" "4" "5"] (:call-ids plan)))
+        (is (= 3 (count (:evidence plan))))
+        (is (= 2 (count (set (map :result-fingerprint (:evidence plan))))))
+        (is (= :no-new-observation (:evidence-gap plan)))
+        (is (= 1 (count (:steps plan)))) (is (every? :read-only (:steps plan)))
+        (is (false? (:automatic-execution plan)))
+        (is (= 5 (get-in plan [:budget :requests-used])))
+        (is (= 8 (get-in plan [:budget :max-requests])))
+        (is (integer? (get-in plan [:budget :deadline-at-ms])))
+        (is (= plan (:diagnostic-plan terminal))))
+      (finally (kernel/dispose-all! ctx)))))
+
+(deftest uncertain-write-produces-reconciliation-without-a-second-dispatch
+  (let [requests (atom 0) writes (atom 0)
+        ctx (progress-fixture (fn [_] (progress-tool-answer [(progress-call (swap! requests inc) "{}")]))
+                              (fn [_ _] (swap! writes inc) (throw (ex-info "external response lost" {:uncertain true})))
+                              {:max-model-requests 4 :max-wall-ms 5000} {:execution-mode :sequential})]
+    (try
+      (let [result (progress-attempt ctx) plan (:diagnostic-plan result)]
+        (is (= :no-progress (:reason result))) (is (= 1 @writes @requests))
+        (is (= :uncertain-action (get-in result [:no-progress :kind])))
+        (is (= :external-result-unreconciled (:evidence-gap plan)))
+        (is (= [:reconcile-current-state] (mapv :action (:steps plan))))
+        (is (every? :read-only (:steps plan)))
+        (is (= 1 (get-in plan [:budget :requests-used]))))
+      (finally (kernel/dispose-all! ctx)))))
