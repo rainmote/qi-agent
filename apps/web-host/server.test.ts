@@ -119,7 +119,7 @@ test("web host authenticates, catalogs, creates a real worker, and invokes RPC",
     assert.equal(rejectedOrigin.status, 403);
   } finally {
     await host.close();
-    await rm(root, { recursive: true, maxRetries: 5, retryDelay: 100 });
+    await rm(root, { recursive: true });
   }
 });
 
