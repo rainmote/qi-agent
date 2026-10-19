@@ -1,0 +1,13 @@
+{
+  "command": [
+    "npm",
+    "run",
+    "test:web-browser:ci"
+  ],
+  "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent",
+  "start": "2026-10-19T13:53:45.360897+00:00",
+  "end": "2026-10-19T13:54:07.692578+00:00",
+  "exit_code": 0,
+  "isolation": "tools/isolation.sb; whitelisted environment",
+  "platform": "Darwin 27.0.0 arm64"
+}

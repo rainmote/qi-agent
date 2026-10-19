@@ -8,6 +8,7 @@ import { type ToolBatch, type TimelineRow } from "./timeline-model";
 import { captureAnchor, restoreAnchor, timelineLayout, visibleRange, type RowMeasurement, type ScrollAnchor } from "./virtual-timeline";
 import type { DurableEvent } from "./types";
 import { outcomeText, runOutcome } from "./run-outcome";
+import { displayTranscript, type TranscriptView, type TurnControl } from "./transcript-display";
 
 function text(value: unknown): string {
   if (typeof value === "string") return value;
@@ -120,7 +121,7 @@ function ToolDetails({ call, result, pluginSlots }: {
   </div>;
 }
 
-function ToolBatchCard({ batch, results, active, open, onToggle, expanded, onToolToggle, pluginSlots }: {
+function ToolBatchCard({ batch, results, active, open, onToggle, expanded, onToolToggle, pluginSlots, ungrouped = false }: {
   batch: ToolBatch;
   results: ReadonlyMap<string, DurableEvent>;
   active: boolean;
@@ -129,6 +130,7 @@ function ToolBatchCard({ batch, results, active, open, onToggle, expanded, onToo
   expanded: ReadonlySet<string>;
   onToolToggle: (id: string, open: boolean) => void;
   pluginSlots: PluginSlot[];
+  ungrouped?: boolean;
 }) {
   const { completed, failed, missing, running } = toolBatchStatus(batch, results, active);
   const current = running ? batch.calls.find(call => !results.has(callId(call))) : undefined;
@@ -136,8 +138,8 @@ function ToolBatchCard({ batch, results, active, open, onToggle, expanded, onToo
   const failure = failedCall && results.get(callId(failedCall));
   const label = toolBatchLabel(batch);
   const single = batch.calls.length === 1;
-  return <article className={`tool-card tool-batch ${failed ? "is-error" : running ? "is-running" : missing ? "is-unconfirmed" : "is-success"}`}>
-    <button className="tool-summary" type="button" onClick={onToggle}
+  return <article data-ungrouped={ungrouped} className={`tool-card tool-batch ${failed ? "is-error" : running ? "is-running" : missing ? "is-unconfirmed" : "is-success"}`}>
+    {!ungrouped && <button className="tool-summary" type="button" onClick={onToggle}
       aria-expanded={open}>
       <span className="tool-icon"><Icon name="terminal" /></span>
       <span className="tool-summary-copy"><span className="tool-name">{label}</span>
@@ -146,11 +148,11 @@ function ToolBatchCard({ batch, results, active, open, onToggle, expanded, onToo
         : running ? `${completed}/${batch.calls.length} 完成`
         : missing ? `${missing} 项结果未确认` : `${completed} 项完成`}</span>
       <Icon name="chevron" className={open ? "rotate" : ""} />
-    </button>
+    </button>}
     {!open && current && !single && <p className="tool-activity">正在调用 {String(current.data.name || "tool")} · {operationTarget(current)}</p>}
     {!open && failure && <p className="tool-failure">{String(failedCall!.data.name || "tool")} · {truncated(oneLine(failure.data.error || failure.data.content) || "调用失败，展开查看参数", 140)}</p>}
-    {open && single && <ToolDetails call={batch.calls[0]} result={results.get(callId(batch.calls[0]))} pluginSlots={pluginSlots} />}
-    {open && !single && <div className="tool-batch-items">
+    {open && single && !ungrouped && <ToolDetails call={batch.calls[0]} result={results.get(callId(batch.calls[0]))} pluginSlots={pluginSlots} />}
+    {(ungrouped || (open && !single)) && <div className="tool-batch-items">
       {batch.calls.map((call) => {
         const result = results.get(callId(call));
         const detailId = `call:${call.id}`, detailOpen = expanded.has(detailId);
@@ -209,8 +211,9 @@ export function UserMessageAttachments({ content }: { content: unknown }) {
   </div>;
 }
 
-function Message({ event, reasoningOpen, onReasoningToggle }: {
+function Message({ event, reasoningOpen, onReasoningToggle, hideReasoning = false, compact = false }: {
   event: DurableEvent; reasoningOpen: boolean; onReasoningToggle: (open: boolean) => void;
+  hideReasoning?: boolean; compact?: boolean;
 }) {
   const message = event.data.message as Record<string, unknown> | undefined;
   if (!message || message.role === "tool") return null;
@@ -219,12 +222,13 @@ function Message({ event, reasoningOpen, onReasoningToggle }: {
   const hasAttachments = Array.isArray(message.content) && message.content.some((item) => item?.type === "attachment");
   const reasoning = text(message.reasoning_content || message.reasoning);
   const calls = Array.isArray(message.tool_calls) ? message.tool_calls.length : 0;
-  if (!content && !calls && !hasAttachments) return null;
+  if (!content && !calls && !hasAttachments && !reasoning) return null;
   return <article className={`message message-${role}`}>
     <div className="message-body">
-      {role === "assistant" && reasoning && <details className="reasoning-row" open={reasoningOpen}
-        onToggle={(event) => onReasoningToggle(event.currentTarget.open)}><summary><Icon name="sparkles" />思考过程</summary>
-        <div>{reasoning}</div></details>}
+      {role === "assistant" && reasoning && !hideReasoning && <details className="reasoning-row" open={reasoningOpen}
+        onToggle={(event) => onReasoningToggle(event.currentTarget.open)}><summary><span>已思考</span><Icon name="chevron" />
+          {!compact && !reasoningOpen && <span className="reasoning-preview">{reasoning.split("\n")[0]}</span>}</summary>
+        <div><MarkdownContent content={reasoning} /></div></details>}
       {content && (role === "assistant"
         ? <MarkdownContent content={content} />
         : <div className="message-content">{content}</div>)}
@@ -237,7 +241,7 @@ function Message({ event, reasoningOpen, onReasoningToggle }: {
   </article>;
 }
 
-type DisplayRow = TimelineRow | { id: string; kind: "stream" | "run-error" };
+type DisplayRow = TimelineRow | TurnControl | { id: string; kind: "stream" | "run-error" };
 
 function estimateRow(row: DisplayRow, width: number): number {
   if (row.kind === "tools") return 52;
@@ -250,8 +254,9 @@ function estimateRow(row: DisplayRow, width: number): number {
   return Math.min(2_000, 62 + lines * 23);
 }
 
-export function Timeline({ projection, scrollRef, pluginSlots = [] }: {
+export function Timeline({ projection, scrollRef, pluginSlots = [], view = "standard" }: {
   projection: Projection; scrollRef: RefObject<HTMLDivElement | null>; pluginSlots?: PluginSlot[];
+  view?: TranscriptView;
 }) {
   const inner = useRef<HTMLDivElement>(null);
   const rowContainer = useRef<HTMLDivElement>(null);
@@ -262,21 +267,36 @@ export function Timeline({ projection, scrollRef, pluginSlots = [] }: {
   const follow = useRef(true);
   const anchor = useRef<ScrollAnchor | null>(null);
   const ignoredScrollTop = useRef<number | null>(null);
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  const [choices, setExpanded] = useState<ReadonlyMap<string, boolean>>(new Map());
+  const [focusedRow, setFocusedRow] = useState<string | null>(null);
+  const [focusedUngroupedRow, setFocusedUngroupedRow] = useState<string | null>(null);
+  const expanded = useMemo(() => new Set([...choices].filter(([,open]) => open).map(([id]) => id)), [choices]);
   const setExpandedRow = useCallback((id: string, open: boolean) => setExpanded((current) => {
-    if (current.has(id) === open) return current;
-    const next = new Set(current);
-    if (open) next.add(id); else next.delete(id);
+    if (current.get(id) === open) return current;
+    const next = new Map(current);
+    next.set(id, open);
     return next;
   }), []);
   const partialAssistant = String(projection.state["partial-assistant"] || projection.state.partialAssistant || "");
   const partialReasoning = String(projection.state["partial-reasoning"] || projection.state.partialReasoning || "");
   const streaming = projection.state.phase !== "idle" && Boolean(partialAssistant || partialReasoning);
+  const transcript = useMemo(() => displayTranscript(projection.timeline, view, choices, focusedRow), [projection.timeline, view, choices, focusedRow]);
+  const rememberFocusedProcess = () => {
+    const retained = transcript.rows.filter(row => row.kind === "turn-control" && row.open
+      && focusedRow !== null && row.members.includes(focusedRow));
+    if (!retained.length) return;
+    setExpanded(current => {
+      if (retained.every(row => current.has(row.id))) return current;
+      const next = new Map(current);
+      retained.forEach(row => { if (!next.has(row.id)) next.set(row.id, true); });
+      return next;
+    });
+  };
   const rows = useMemo<DisplayRow[]>(() => [
-    ...projection.timeline.rows,
+    ...transcript.rows,
     ...(streaming ? [{ id: "__live-stream__", kind: "stream" as const }] : []),
     ...(projection.lastRunError ? [{ id: "__run-error__", kind: "run-error" as const }] : []),
-  ], [projection.timeline.rows, streaming, Boolean(projection.lastRunError)]);
+  ], [transcript.rows, streaming, Boolean(projection.lastRunError)]);
   const layout = useMemo(() => timelineLayout(rows.map((row) => ({
     id: row.id, estimate: estimateRow(row, viewport.width),
   })), measurements, viewport.width), [rows, measurements, viewport.width]);
@@ -371,6 +391,20 @@ export function Timeline({ projection, scrollRef, pluginSlots = [] }: {
   };
 
   return <div className="timeline-inner virtualized-timeline" ref={inner} data-total-rows={rows.length}
+    onFocusCapture={event => {
+      rememberFocusedProcess();
+      const target = event.target as HTMLElement;
+      const row = target.closest<HTMLElement>("[data-row-id]")?.dataset.rowId || null;
+      setFocusedRow(row);
+      // Preserve the layout already holding focus; focusing a historical group
+      // header must never replace that header with individual tool controls.
+      setFocusedUngroupedRow(target.closest('.tool-batch[data-ungrouped="true"]') ? row : null);
+    }}
+    onBlurCapture={event => {
+      if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) {
+        rememberFocusedProcess(); setFocusedRow(null); setFocusedUngroupedRow(null);
+      }
+    }}
     data-window-start={range.start} data-window-end={range.end} data-scroll-top={Math.round(viewport.top)}>
     {!rows.length && projection.state.phase === "idle" &&
       <div className="empty-conversation">描述任务，开始这段会话。</div>}
@@ -380,13 +414,27 @@ export function Timeline({ projection, scrollRef, pluginSlots = [] }: {
         data-row-id={row.id} ref={(element) => {
           if (element) nodes.current.set(row.id, element); else nodes.current.delete(row.id);
         }}>
+        {row.kind === "turn-control" && <button type="button" className="turn-process-toggle" aria-expanded={row.open}
+          onClick={() => {
+            if (!row.open) setExpandedRow(row.id, true);
+            else setExpanded(current => {
+              const next = new Map(current);
+              row.members.forEach(id => next.delete(id));
+              next.set(row.id, false);
+              return next;
+            });
+          }}><span>{row.label}</span><Icon name="chevron" /></button>}
         {row.kind === "message" && <Message event={row.event} reasoningOpen={expanded.has(row.id)}
+          hideReasoning={transcript.hiddenReasoning.has(row.id)} compact={view === "compact"}
           onReasoningToggle={(open) => setExpandedRow(row.id, open)} />}
         {row.kind === "tools" && <ToolBatchCard batch={row.batch} results={projection.timeline.results}
           active={projection.timeline.activeToolRow !== null && projection.timeline.rows[projection.timeline.activeToolRow]?.id === row.id
             && (projection.state.phase !== "idle" || projection.interactions.length > 0)}
           expanded={expanded} onToolToggle={setExpandedRow} pluginSlots={pluginSlots}
-          open={expanded.has(row.id)} onToggle={() => setExpandedRow(row.id, !expanded.has(row.id))} />}
+          ungrouped={view === "verbose" || (view === "detailed" && (focusedUngroupedRow === row.id || (transcript.activeRows.has(row.id)
+            && (projection.state.phase !== "idle" || projection.interactions.length > 0))))}
+          open={choices.get(row.id) ?? false}
+          onToggle={() => setExpandedRow(row.id, !(choices.get(row.id) ?? false))} />}
         {row.kind === "decision" && <div className={`decision-row ${row.event.data.decision === "allow" ? "allowed" : "denied"}`}>
           <Icon name="shield" /><span>{String(row.event.data.tool || "工具")} {row.event.data.decision === "allow" ? "已获批准" : "被拒绝"}</span>
         </div>}
@@ -397,8 +445,9 @@ export function Timeline({ projection, scrollRef, pluginSlots = [] }: {
         {row.kind === "run-error" && <div className="inline-error">{projection.lastRunError}</div>}
         {row.kind === "stream" && <article className="message message-assistant is-streaming">
           <div className="message-body">
-            {partialReasoning && <details className="reasoning-row" open><summary><Icon name="sparkles" />正在思考</summary>
-              <div>{partialReasoning}</div></details>}
+            {partialReasoning && <details className="reasoning-row" open={choices.get("__reasoning__") ?? false}
+              onToggle={event => setExpandedRow("__reasoning__", event.currentTarget.open)}><summary>正在思考<Icon name="chevron" /></summary>
+              <div><MarkdownContent content={partialReasoning} /></div></details>}
             <MarkdownContent content={partialAssistant} />
           </div>
         </article>}

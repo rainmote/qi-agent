@@ -1,0 +1,50 @@
+// External acceptance capture only. Production source and fixtures are unchanged.
+import { readFile, mkdir, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { chromium } from 'playwright'
+import { it, onTestFinished, expect } from 'vitest'
+import { launchWebScaffold, seedSession, selectedSessionFixture, watchConsole } from './scaffold.ts'
+import { connectFreshWorkspaceZh } from './support.ts'
+
+it('captures the pinned official assembly for qi-agent comparison without a model call', async () => {
+  const out = join(process.cwd(), '../evidence/reference/capture')
+  await mkdir(out, { recursive: true })
+  const scaffold = await launchWebScaffold({})
+  onTestFinished(() => scaffold.close())
+  const fixture = await selectedSessionFixture(join(process.cwd(), 'snapshots/web/turn-tail-actions/session.v3.jsonl'))
+  await seedSession(scaffold, await readFile(fixture, 'utf8'), 'qi-reference-ui')
+  const browser = await chromium.launch({ channel: 'chrome' })
+  onTestFinished(() => browser.close())
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, locale: 'zh-CN', colorScheme: 'light', reducedMotion: 'reduce' })
+  const console = watchConsole(page)
+  const evidence: Array<{name:string;viewport: unknown}> = []
+  const shot = async (name:string) => {
+    await page.screenshot({ path:join(out, name+'.png'), animations:'disabled' })
+    evidence.push({name,viewport:page.viewportSize()})
+  }
+  await page.goto(scaffold.authenticatedUrl)
+  await page.locator('[role="treeitem"]').first().click()
+  await page.locator('[role="treeitem"]').nth(1).click()
+  await page.locator('[data-turn-process]').first().waitFor()
+  await shot('conversation-light-1440')
+  await page.locator('[data-turn-process]').first().click()
+  await shot('process-open-light-1440')
+  await page.getByRole('button', {name:'账号菜单',exact:true}).click()
+  await page.getByText('设置',{exact:true}).click()
+  await page.getByRole('button',{name:'通用设置',exact:true}).waitFor()
+  await shot('settings-light-1440')
+  await page.getByRole('button',{name:'深色',exact:true}).click()
+  await shot('settings-dark-1440')
+  await page.getByRole('button',{name:'关闭',exact:true}).click()
+  await page.getByRole('button',{name:'新建会话',exact:true}).last().click()
+  await page.locator('[data-composer-input]').first().waitFor()
+  await connectFreshWorkspaceZh(page,scaffold.workspaceCwd)
+  await shot('new-session-dark-1440')
+  for(const width of [768,390,320]) {
+    await page.setViewportSize({width,height:844})
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    await shot('new-session-dark-'+width)
+  }
+  expect(console.pageErrors).toEqual([])
+  await writeFile(join(out,'manifest.json'),JSON.stringify({source:'687f282e8625c6b8d11ff58211a90524be2e4317',assembly:'official built client + shipped isolated scaffold, recorded history; zero model calls',evidence,errors:console.pageErrors},null,2))
+},120_000)

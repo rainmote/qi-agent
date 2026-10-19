@@ -1,26 +1,45 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { api } from "./api";
 import { Icon } from "./icons";
 import { ProviderSettingsPanel } from "./ProviderSettingsPanel";
 import type { Interaction, ProjectTrust, RuntimeStatus, Workspace } from "./types";
+import { transcriptViews, type TranscriptView } from "./transcript-display";
 
 function DialogFrame({ title, children, onClose, className = "", dangerous = false }: {
   title: string; children: ReactNode; onClose?: () => void; className?: string; dangerous?: boolean;
 }) {
   const dialog = useRef<HTMLDivElement>(null);
-  useEffect(() => dialog.current?.querySelector<HTMLElement>("button, input, select")?.focus(), []);
+  const controls = () => [...dialog.current?.querySelectorAll<HTMLElement>(
+    "button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], summary") || []]
+    .filter(element => element.getClientRects().length > 0);
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const root = document.getElementById("root");
+    const wasInert = root?.inert ?? false;
+    const overflow = document.body.style.overflow;
+    if (root) root.inert = true;
+    document.body.style.overflow = "hidden";
+    controls()[0]?.focus();
+    return () => {
+      if (root) root.inert = wasInert;
+      document.body.style.overflow = overflow;
+      const box = opener?.getBoundingClientRect();
+      if (opener?.isConnected && box && box.right > 0 && box.left < innerWidth) opener.focus();
+      else root?.querySelector<HTMLElement>("main .mobile-nav-button")?.focus();
+    };
+  }, []);
   const trap = (event: KeyboardEvent) => {
-    if (event.key === "Escape" && onClose) onClose();
+    if (event.key === "Escape" && onClose) { event.preventDefault(); event.stopPropagation(); onClose(); }
     if (event.key !== "Tab" || !dialog.current) return;
-    const focusable = [...dialog.current.querySelectorAll<HTMLElement>(
-      "button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])")];
+    const focusable = controls();
     if (!focusable.length) return;
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
     if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
   };
-  return <div className="dialog-backdrop" role="presentation">
+  const content = <div className="dialog-backdrop" role="presentation">
     <div className={`dialog ${dangerous ? "dialog-danger" : ""} ${className}`} role="dialog" aria-modal="true"
       aria-label={title} ref={dialog} onKeyDown={trap}>
       <header><h2>{title}</h2>{onClose &&
@@ -28,6 +47,7 @@ function DialogFrame({ title, children, onClose, className = "", dangerous = fal
       {children}
     </div>
   </div>;
+  return typeof document === "undefined" ? content : createPortal(content, document.body);
 }
 
 export function ApprovalPanel({ interaction, resolving, onResolve, onStop, stopping, stopError, error, count = 1 }: {
@@ -143,10 +163,11 @@ export function WorkspaceDialog({ initialPath, onClose, onSelect }: {
 
 type SettingsTab = "general" | "models" | "plugins" | "tools";
 
-export function SettingsDialog({ workspaces, runtime, theme, onThemeChange, onClose,
+export function SettingsDialog({ workspaces, runtime, theme, onThemeChange, onClose, view, onViewChange,
   onAddWorkspace, onRemoveWorkspace, onProvidersChanged }: {
   workspaces: Workspace[]; runtime: RuntimeStatus | null;
   theme: "dark" | "light" | "system"; onThemeChange: (theme: "dark" | "light" | "system") => void;
+  view: TranscriptView; onViewChange: (view: TranscriptView) => void;
   onClose: () => void; onAddWorkspace: () => void;
   onRemoveWorkspace?: (workspace: Workspace) => Promise<void>;
   onProvidersChanged?: () => Promise<void> | void;
@@ -170,11 +191,16 @@ export function SettingsDialog({ workspaces, runtime, theme, onThemeChange, onCl
       </nav>
       <div className="settings-content">
         {tab === "general" && <>
-          <section><h3>外观</h3><p>选择界面的明暗模式。</p>
-            <div className="theme-options">{(["system", "light", "dark"] as const).map((value) =>
-              <button type="button" key={value} className={theme === value ? "active" : ""}
+          <section className="settings-option-row"><div><h3>外观</h3><p>选择界面的明暗模式</p></div>
+            <div className="theme-options">{(["light", "dark", "system"] as const).map((value) =>
+              <button type="button" key={value} className={theme === value ? "active" : ""} aria-pressed={theme === value}
                 onClick={() => onThemeChange(value)}><Icon name={value === "dark" ? "moon" : value === "light" ? "sun" : "sliders"} />
                 {value === "system" ? "跟随系统" : value === "light" ? "浅色" : "深色"}</button>)}</div>
+          </section>
+          <section className="settings-option-row"><div><h3>工作步骤展示</h3><p>选择希望看到多少工具调用细节</p></div>
+            <select aria-label="工作步骤展示" value={view} onChange={event => onViewChange(event.target.value as TranscriptView)}>
+              {transcriptViews.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
+            </select>
           </section>
           <section><div className="section-title-row"><div><h3>工作区</h3><p>管理 Web UI 可以访问的本机目录。</p></div>
             <button type="button" className="button secondary compact-button" onClick={onAddWorkspace}><Icon name="plus" />添加</button></div>

@@ -1,0 +1,123 @@
+{
+  "checks": [
+    {
+      "name": "delivery-typecheck",
+      "output": "delivery-typecheck.txt",
+      "exit_code": 0,
+      "metadata": "delivery-typecheck.json"
+    },
+    {
+      "name": "delivery-build",
+      "output": "delivery-build.txt",
+      "exit_code": 0,
+      "metadata": "delivery-build.json"
+    },
+    {
+      "name": "delivery-web-ui",
+      "output": "delivery-web-ui.txt",
+      "exit_code": 0,
+      "metadata": "delivery-web-ui.json"
+    },
+    {
+      "name": "delivery-browser",
+      "output": "delivery-browser.txt",
+      "exit_code": 0,
+      "metadata": "delivery-browser.json"
+    },
+    {
+      "name": "delivery-real-e2e",
+      "output": "delivery-real-e2e.txt",
+      "exit_code": 0,
+      "metadata": "delivery-real-e2e.json"
+    },
+    {
+      "name": "delivery-captures",
+      "output": "delivery-captures.txt",
+      "exit_code": 0,
+      "metadata": "delivery-captures.json"
+    },
+    {
+      "name": "reference-build-retry",
+      "output": "reference-build-retry.txt",
+      "exit_code": null,
+      "metadata": null,
+      "recording": "Original raw output retained; structured command/exit metadata was not recorded."
+    },
+    {
+      "name": "reference-browser-capture-final",
+      "output": "reference-browser-capture-final.txt",
+      "exit_code": 0,
+      "metadata": "reference-browser-capture-final.json"
+    },
+    {
+      "name": "frozen-baseline-build",
+      "output": "frozen-baseline-build.txt",
+      "exit_code": 0,
+      "metadata": "frozen-baseline-build.json"
+    },
+    {
+      "name": "frozen-baseline-captures-final",
+      "output": "frozen-baseline-captures-final.txt",
+      "exit_code": 0,
+      "metadata": "frozen-baseline-captures-final.json"
+    },
+    {
+      "name": "baseline-web-ui",
+      "output": "baseline-web-ui.txt",
+      "exit_code": null,
+      "metadata": null,
+      "recording": "Original raw output retained; structured command/exit metadata was not recorded."
+    },
+    {
+      "name": "baseline-typecheck",
+      "output": "baseline-typecheck.txt",
+      "exit_code": null,
+      "metadata": null,
+      "recording": "Original raw output retained; structured command/exit metadata was not recorded."
+    },
+    {
+      "name": "candidate-host-tests",
+      "output": "candidate-host-tests.txt",
+      "exit_code": 1,
+      "metadata": "candidate-host-tests.json"
+    },
+    {
+      "name": "frozen-baseline-host-tests",
+      "output": "frozen-baseline-host-tests.txt",
+      "exit_code": 1,
+      "metadata": "frozen-baseline-host-tests.json"
+    },
+    {
+      "name": "host-prepare-diagnostic",
+      "output": "host-prepare-diagnostic.txt",
+      "exit_code": 0,
+      "metadata": "host-prepare-diagnostic.json"
+    },
+    {
+      "name": "red-reasoning",
+      "output": "red-reasoning.txt",
+      "exit_code": 1,
+      "metadata": "red-reasoning.json"
+    },
+    {
+      "name": "red-detailed-settlement-focus",
+      "output": "red-detailed-settlement-focus.txt",
+      "exit_code": 1,
+      "metadata": "red-detailed-settlement-focus.json"
+    },
+    {
+      "name": "red-settled-group-focus",
+      "output": "red-settled-group-focus.txt",
+      "exit_code": 1,
+      "metadata": "red-settled-group-focus.json"
+    },
+    {
+      "name": "red-composer-width",
+      "output": "red-composer-width.txt",
+      "exit_code": 1,
+      "metadata": "red-composer-width.json"
+    }
+  ],
+  "final_prefix": "delivery-",
+  "caveat": "Red failures retained. Host suite failures remain failures. No full controller acceptance receipt or container image verification."
+}

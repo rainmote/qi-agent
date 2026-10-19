@@ -1,0 +1,24 @@
+
+> @rainmote/qi-agent-web@0.1.0 test:web-ui
+> tsx --test apps/web/src/*.test.tsx
+
+node:net:2306
+      const error = new UVExceptionWithHostPort(rval, 'listen', address, port);
+                    ^
+
+Error: listen EPERM: operation not permitted /var/folders/f6/wqq7xx_x0lj7gwvgnnqpy4br0000gn/T/tsx-501/67257.pipe
+    at Server.setupListenHandle [as _listen2] (node:net:2306:21)
+    at listenInCluster (node:net:2437:12)
+    at Server.listen (node:net:2579:5)
+    at file:///Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/node_modules/tsx/dist/cli.mjs:53:32174
+    at new Promise (<anonymous>)
+    at createIpcServer (file:///Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/node_modules/tsx/dist/cli.mjs:53:32152)
+    at async file:///Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/node_modules/tsx/dist/cli.mjs:55:542 {
+  code: 'EPERM',
+  errno: -1,
+  syscall: 'listen',
+  address: '/var/folders/f6/wqq7xx_x0lj7gwvgnnqpy4br0000gn/T/tsx-501/67257.pipe',
+  port: -1
+}
+
+Node.js v26.9.0

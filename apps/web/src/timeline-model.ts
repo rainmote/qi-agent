@@ -52,7 +52,7 @@ export function appendTimeline(model: TimelineModel, event: DurableEvent, buildi
     row = { id: event.id, kind: "tools", batch: { id: event.id, calls: [event] } };
   } else if (event.type === "message") {
     const message = event.data.message as Record<string, unknown> | undefined;
-    if (!message || message.role === "tool" || (!message.content &&
+    if (!message || message.role === "tool" || (!message.content && !message.reasoning_content && !message.reasoning &&
       !(Array.isArray(message.tool_calls) && message.tool_calls.length))) return model;
     row = { id: event.id, kind: "message", event };
   } else if (event.type === "approval/decision") {

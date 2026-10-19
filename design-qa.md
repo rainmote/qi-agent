@@ -1,3 +1,43 @@
+# Design QA — Harness 对照改造
+
+参考固定为 `deepseek-ai/deepseek-harness@687f282e8625c6b8d11ff58211a90524be2e4317`；实现基线为 qi-agent `d3173b5f01b86565bf300d54b7b24ea9d14d6060`。完整说明见 [对照报告](docs/webui-harness-comparison.md)。
+
+## 证据
+
+官方真实构建使用随仓 scaffold 和录制历史；候选/基线使用相同确定性 API fixture。独立真实后端 E2E 使用隔离 Host、daemon、Worker 与离线 provider。未用截图替换可交互组件。
+
+- 官方原图：[reference/](docs/ui-harness-20261019/reference/manifest.json)，1440×1000、768/390/320×844，DPR 1。
+- 改造前：[before/](docs/ui-harness-20261019/before/manifest.json)，17 张。
+- 最终候选：[after/](docs/ui-harness-20261019/after/manifest.json)，19 张，320/375/390/768/1024/1440px，浅/深色，DPR 1。
+- 组合对照：[桌面新会话](docs/ui-harness-20261019/comparisons/desktop-new-session.png)、[移动新会话](docs/ui-harness-20261019/comparisons/mobile-new-session.png)。
+- 重点对照：[桌面设置](docs/ui-harness-20261019/comparisons/desktop-settings.png)、[移动设置](docs/ui-harness-20261019/comparisons/mobile-settings.png)。
+
+## 核对与迭代
+
+| 范围 | 已核对的呈现与交互 |
+| --- | --- |
+| 外框与导航 | 灰阶与蓝色强调、280px 侧栏、紧凑会话项、两行标题、居中自适应正文。平板抽屉入口可用。 |
+| 新会话与输入 | 居中标题、圆角输入面板、左右两组控件、空态。移除会影响固定菜单定位的父级 transform。320px 下菜单与输入控件无横向越界；宽度变化重算输入高度，两行提示及长草稿保持可见/可滚动。 |
+| 消息与过程 | Markdown、reasoning-only 消息、四种展示、成功轮次折叠；失败/取消/未知结果保持可见，最终答复和审批不被隐藏。 |
+| 工具与子任务 | 单项展开、完成/失败/未确认状态、子任务结果 disclosure；活动转完成时保留焦点，历史组头获焦点仍可点击，整轮关闭重置子项。 |
+| 设置与返回 | 800px 设置面板及手机重排，主题卡片、展示设置、标签无裁切；portal、背景 inert、Tab/Escape 与关闭后焦点返回。 |
+
+独立只读复核提出的平板导航、手机设置裁切、异常轮次误折叠及工具焦点问题均已修复。两条焦点问题及输入宽度重排都有有效失败断言再修复；最终构建须以 checks/ 中的最终测试记录为准。
+
+## 结果与限制
+
+设计 QA 的已验证页面范围通过；最终只读代码复核范围内无已知 P1/P2。差异保留并记录：qì 品牌、快捷开始、业务设置、手机抽屉；没有声称整个官方产品逐像素一致。
+
+官方真实模型的流式/审批/子任务交互未实测；物理手机键盘与安全区、Electron、浏览器历史按钮未验证。广义 Host 测试仍有 3 项隔离环境失败，冻结基线相同；设计 QA 通过不等于完整维护控制器验收 PASS 或发布批准。
+
+final result: passed（仅本轮已验证的设计范围；完整维护验收仍受上述阻碍）
+
+---
+
+# 基线既有 QA 记录
+
+以下保留基线原文，包含早期 Web 与 TUI 任务；不代表本轮重跑或确认其外部临时截图仍存在。
+
 # Web model-provider settings parity QA
 
 ## Comparison target

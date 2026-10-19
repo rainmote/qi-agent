@@ -9,6 +9,8 @@ import { Icon } from "./icons";
 import { applyHostEvent, fromSnapshot, type Projection } from "./projection";
 import { Timeline } from "./Timeline";
 import { RunOverview } from "./RunOverview";
+import { SubagentPanel } from "./SubagentPanel";
+import { transcriptView, type TranscriptView } from "./transcript-display";
 import { Trajectory } from "./Trajectory";
 import { WorkspacePanel } from "./WorkspacePanel";
 import { ComposerAttachments, ComposerReferences, type AttachmentRef } from "./ComposerAttachments";
@@ -111,6 +113,8 @@ function Brand({ collapsed = false }: { collapsed?: boolean }) {
 
 export function App() {
   const started = useRef(false);
+  const sidebarElement = useRef<HTMLElement>(null);
+  const mainElement = useRef<HTMLElement>(null);
   const timeline = useRef<HTMLDivElement>(null);
   const composerInput = useRef<HTMLTextAreaElement>(null);
   const attachmentInput = useRef<HTMLInputElement>(null);
@@ -161,8 +165,24 @@ export function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() =>
     (localStorage.getItem("qi-agent.sidebar") || localStorage.getItem("dao.sidebar")) === "collapsed");
   const [mobileSidebar, setMobileSidebar] = useState(false);
+  useEffect(() => {
+    if (!mobileSidebar) return;
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const main = mainElement.current;
+    if (main) main.inert = true;
+    sidebarElement.current?.querySelector<HTMLElement>(".sidebar-toggle")?.focus();
+    const width = window.matchMedia("(max-width: 1023px)");
+    const resize = () => { if (!width.matches) setMobileSidebar(false); };
+    width.addEventListener("change", resize);
+    return () => {
+      if (main) main.inert = false;
+      width.removeEventListener("change", resize);
+      if (opener?.isConnected) opener.focus();
+    };
+  }, [mobileSidebar]);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [stepsView, setStepsView] = useState<TranscriptView>(() => transcriptView(localStorage.getItem("qi-agent.transcript-view")));
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
   const [fullAccessDialogOpen, setFullAccessDialogOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -733,10 +753,21 @@ export function App() {
   useLayoutEffect(() => {
     const input = composerInput.current;
     if (!input) return;
-    input.style.height = "0px";
-    const nextHeight = Math.max(44, Math.min(input.scrollHeight, 180));
-    input.style.height = `${nextHeight}px`;
-    input.style.overflowY = input.scrollHeight > 180 ? "auto" : "hidden";
+    const resize = () => {
+      input.style.height = "0px";
+      const nextHeight = Math.max(44, Math.min(input.scrollHeight, 180));
+      input.style.height = `${nextHeight}px`;
+      input.style.overflowY = input.scrollHeight > 180 ? "auto" : "hidden";
+    };
+    resize();
+    let width = input.clientWidth;
+    const observer = new ResizeObserver(() => {
+      if (input.clientWidth === width) return;
+      width = input.clientWidth;
+      resize();
+    });
+    observer.observe(input);
+    return () => observer.disconnect();
   }, [activeSession?.id, composer]);
 
   const chooseCommand = (index = commandIndex) => {
@@ -794,7 +825,7 @@ export function App() {
       <ComposerAttachments key={`${workspaceId}:${activeSession?.id || "draft"}`} workspaceId={workspaceId || ""}
         inputRef={attachmentInput} items={attachments} onChange={setAttachments} upload={api.uploadAttachment}
         disabled={!workspaceId || busy || !!pendingOperation} onBusyChange={setUploading}>
-      <textarea ref={composerInput} rows={1} value={composer} disabled={!workspaceId || busy} placeholder={workspaceId ? "描述目标、问题或想创建的能力…" : "选择一个工作区开始"}
+      <textarea ref={composerInput} rows={1} value={composer} disabled={!workspaceId || busy} placeholder={workspaceId ? "描述你想要构建的内容，/ 调用指令，@ 文件或会话" : "选择一个工作区开始"}
         aria-controls={commandSuggestions.length ? "command-suggestions" : undefined}
         onChange={(event) => setComposer(event.target.value)} onKeyDown={(event) => {
           if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
@@ -824,12 +855,12 @@ export function App() {
             { label: "插件", icon: "settings", disabled: !activeSession, run: () => setWorkbench("plugins") },
           ]} />
           {policy && <PermissionControl policy={policy} onChange={requestPolicy} />}
+        </div>
+        <div className="composer-right">
           {!!models?.providers.length && <ModelControl models={models.providers}
             selectedId={pendingModel || models.current?.id || null} thinkingLevel={pendingThinking}
             onSelectModel={(provider) => void selectModel(provider)}
             onSelectThinking={(level) => void selectThinking(level)} />}
-        </div>
-        <div className="composer-right">
           {composerContext && <ContextMeter status={composerContext} />}
           {(phase !== "idle" || !!projection?.interactions.length || stopping) && activeSession ? <button type="button" className="send-button stop"
             disabled={stopping} aria-busy={stopping} onClick={() => void stopRun()} aria-label={stopping ? "正在停止" : "停止运行"}><Icon name="stop" /></button>
@@ -846,26 +877,46 @@ export function App() {
   </div>;
 
   return <div className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${detailsOpen ? "details-open" : ""}`}>
-    <aside className={`sidebar ${mobileSidebar ? "is-open" : ""}`}>
+    <aside ref={sidebarElement} className={`sidebar ${mobileSidebar ? "is-open" : ""}`}
+      role={mobileSidebar ? "dialog" : undefined} aria-modal={mobileSidebar || undefined} aria-label={mobileSidebar ? "导航" : undefined}
+      onKeyDown={event => {
+        if (!mobileSidebar) return;
+        if (event.key === "Escape") { event.preventDefault(); setMobileSidebar(false); }
+        if (event.key === "Tab") {
+          const controls = [...event.currentTarget.querySelectorAll<HTMLElement>("button:not([disabled]), input, select")];
+          const first = controls[0], last = controls.at(-1);
+          if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+          if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+        }
+      }}>
       <div className="sidebar-brand-row">
         <button type="button" className="brand-button" onClick={startNewSession} aria-label="新建会话"><Brand collapsed={sidebarCollapsed && !mobileSidebar} /></button>
-        <button type="button" className="icon-button sidebar-toggle" onClick={mobileSidebar ? () => setMobileSidebar(false) : toggleSidebar}
+        <button type="button" className="icon-button sidebar-toggle" onClick={() => {
+          if (window.matchMedia("(max-width: 1023px)").matches) setMobileSidebar(value => !value);
+          else toggleSidebar();
+        }}
           aria-label={mobileSidebar ? "收起导航" : sidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}><Icon name="panel" /></button>
       </div>
       <button className="new-session" type="button" onClick={startNewSession} disabled={!workspaceId || busy}>
         <Icon name="plus" />{(!sidebarCollapsed || mobileSidebar) && <span>新会话</span>}
       </button>
+      <nav className="sidebar-actions" aria-label="工作台入口">
+        <button type="button" disabled={!activeSession} onClick={() => { setWorkbench("plugins"); setMobileSidebar(false); }} title="插件（打开会话后可用）">
+          <Icon name="command" />{(!sidebarCollapsed || mobileSidebar) && <span>插件</span>}</button>
+        <button type="button" disabled={!activeSession} onClick={() => { setWorkbench("automation"); setMobileSidebar(false); }} title="自动化任务（打开会话后可用）">
+          <Icon name="clock" />{(!sidebarCollapsed || mobileSidebar) && <span>自动化任务</span>}</button>
+      </nav>
       {(!sidebarCollapsed || mobileSidebar) && <>
+        <div className="workspace-heading"><span>工作区</span><div>
+          <button className={`icon-button compact ${searchOpen ? "active" : ""}`} type="button" onClick={() => setSearchOpen((value) => !value)} aria-label="搜索会话"><Icon name="search" /></button>
+          <button className={`icon-button compact ${viewMenuOpen ? "active" : ""}`} type="button" onClick={() => setViewMenuOpen((value) => !value)} aria-label="视图选项"><Icon name="sliders" /></button>
+          <button className="icon-button compact" type="button" onClick={() => setWorkspaceDialogOpen(true)} aria-label="添加工作区" title="添加工作区"><Icon name="plus" /></button>
+        </div></div>
         <div className="sidebar-workspace">
           <label className="workspace-select"><Icon name="folder" /><select value={workspaceId || ""} aria-label="工作区"
             onChange={(event) => { setWorkspaceId(event.target.value); startNewSession(); }}>
             {bootstrap?.workspaces.map((workspace) => <option value={workspace.id} key={workspace.id}>{workspace.name}</option>)}</select></label>
-          <button className="icon-button compact" type="button" onClick={() => setWorkspaceDialogOpen(true)} aria-label="添加工作区" title="添加工作区"><Icon name="plus" /></button>
         </div>
-        <div className="workspace-heading"><span>会话</span><div>
-          <button className={`icon-button compact ${searchOpen ? "active" : ""}`} type="button" onClick={() => setSearchOpen((value) => !value)} aria-label="搜索会话"><Icon name="search" /></button>
-          <button className={`icon-button compact ${viewMenuOpen ? "active" : ""}`} type="button" onClick={() => setViewMenuOpen((value) => !value)} aria-label="视图选项"><Icon name="sliders" /></button>
-        </div></div>
         {searchOpen && <input className="session-search" value={search} onChange={(event) => setSearch(event.target.value)}
           placeholder="搜索会话…" aria-label="搜索会话" />}
         {viewMenuOpen && <div className="view-menu" role="menu">
@@ -876,7 +927,8 @@ export function App() {
         </div>}
         <nav className="session-nav" aria-label="会话列表">
           {sessions.length ? sessions.map((session) => <div className={`session-row ${session.id === activeSession?.id ? "active" : ""}`} key={session.id}>
-            <button type="button" className="session-link" onClick={() => void openSession(session)}>
+            <button type="button" className="session-link" aria-current={session.id === activeSession?.id ? "page" : undefined}
+              title={`${session.name || "未命名会话"} · ${session.messageCount} 条消息`} onClick={() => void openSession(session)}>
               <span className="session-title">{session.name || "未命名会话"}</span>
               <span className="session-meta">{session.messageCount} 条消息 · {session.updatedAt ? new Date(session.updatedAt).toLocaleDateString() : "刚刚"}</span>
             </button>
@@ -894,13 +946,12 @@ export function App() {
     </aside>
     {mobileSidebar && <button className="mobile-scrim" aria-label="关闭导航" onClick={() => setMobileSidebar(false)} />}
 
-    <main className="main-panel">
+    <main ref={mainElement} className="main-panel">
       {!activeSession ? <section className="new-session-view">
         <button className="mobile-nav-button" type="button" onClick={() => setMobileSidebar(true)} aria-label="打开导航"><Icon name="menu" /></button>
         <div className="new-session-center">
           <div className="welcome-copy">
-            <h1>今天想完成什么？</h1>
-            <p>描述目标，在项目中开始协作。</p>
+            <BrandMark size={34} /><h1>探索未至之境</h1>
           </div>
           <div className="draft-workbench">
             <div className="draft-context">
@@ -947,10 +998,10 @@ export function App() {
           calls={projection?.summary.calls ?? 0} waitingCount={projection?.interactions.length ?? 0}
           context={contextStatus} />
         <div className={`timeline ${conversationView === "trajectory" ? "trajectory-mode" : ""}`} ref={timeline} tabIndex={0} aria-label="会话内容">
-          {conversationView === "chat" && projection && <Timeline key={activeSession.id} projection={projection} scrollRef={timeline} pluginSlots={pluginSlots} />}
+          {conversationView === "chat" && projection && <Timeline key={activeSession.id} projection={projection} scrollRef={timeline} pluginSlots={pluginSlots} view={stepsView} />}
           {conversationView === "trajectory" && <Trajectory key={activeSession.id} events={projection?.events || []} />}
         </div>
-        <div className="composer-wrap">{composerNode}<div className="session-run-summary">{runSummary}</div></div>
+        <div className="composer-wrap"><SubagentPanel jobs={subagents?.jobs || []} />{composerNode}<div className="session-run-summary">{runSummary}</div></div>
       </section>}
     </main>
 
@@ -958,8 +1009,7 @@ export function App() {
       <header><h2>会话日志</h2><button className="icon-button" type="button" onClick={() => setDetailsOpen(false)} aria-label="关闭详情"><Icon name="x" /></button></header>
       <section><h3>会话</h3><dl><div><dt>工作区</dt><dd>{activeWorkspace?.name}</dd></div><div><dt>连接</dt><dd>{connected ? "实时" : "重连中"}</dd></div>
         <div><dt>状态</dt><dd>{phaseLabel(phase)}</dd></div><div><dt>事件</dt><dd>{projection?.events.length || 0}</dd></div></dl></section>
-      <section><h3>子代理</h3>{subagents?.jobs.length ? subagents.jobs.map((job) => <div className="detail-job" key={job.id}>
-        <strong>{job.label}</strong><span>{job.provider} · {job.status}</span></div>) : <p>暂无子代理任务</p>}</section>
+      <section><h3>子代理</h3>{subagents?.jobs.length ? <SubagentPanel jobs={subagents.jobs} /> : <p>暂无子代理任务</p>}</section>
       <section><h3>能力</h3><div className="detail-metrics"><span><strong>{runtime?.tools.length ?? "—"}</strong>工具</span>
         <span><strong>{runtime?.plugins.length ?? "—"}</strong>插件</span></div></section>
     </aside>}
@@ -989,6 +1039,7 @@ export function App() {
     {fullAccessDialogOpen && <FullAccessDialog onClose={() => setFullAccessDialogOpen(false)}
       onConfirm={() => { setFullAccessDialogOpen(false); void selectPolicy("allow"); }} />}
     {settingsOpen && <SettingsDialog workspaces={bootstrap?.workspaces || []} runtime={runtime}
+      view={stepsView} onViewChange={value => { setStepsView(value); localStorage.setItem("qi-agent.transcript-view", value); }}
       theme={theme} onThemeChange={setTheme} onClose={() => setSettingsOpen(false)}
       onProvidersChanged={async () => {
         const current = captureOperation();

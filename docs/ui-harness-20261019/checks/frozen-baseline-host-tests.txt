@@ -1,0 +1,231 @@
+
+> @rainmote/qi-agent-web@0.1.0 test:web
+> cargo build --manifest-path apps/tui-rs/Cargo.toml && QI_AGENT_BIN="$PWD/apps/tui-rs/target/debug/qi-agent" tsx --test apps/web-host/*.test.ts
+
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.24
+   Compiling libc v0.2.190
+   Compiling serde_core v1.0.229
+   Compiling allocator-api2 v0.2.21
+   Compiling foldhash v0.2.0
+   Compiling equivalent v1.0.2
+   Compiling cfg-if v1.0.4
+   Compiling unicode-segmentation v1.13.3
+   Compiling rustversion v1.0.23
+   Compiling serde v1.0.229
+   Compiling thiserror v2.0.20
+   Compiling ident_case v1.0.1
+   Compiling strsim v0.11.1
+   Compiling itoa v1.0.18
+   Compiling either v1.18.0
+   Compiling hashbrown v0.17.1
+   Compiling heck v0.5.0
+   Compiling itertools v0.14.0
+   Compiling hashbrown v0.16.1
+   Compiling instability v0.3.13
+   Compiling smallvec v1.15.2
+   Compiling ryu v1.0.23
+   Compiling signal-hook v0.3.18
+   Compiling thiserror v1.0.69
+   Compiling parking_lot_core v0.9.12
+   Compiling static_assertions v1.1.0
+   Compiling unicode-width v0.2.2
+   Compiling lru v0.18.2
+   Compiling convert_case v0.10.0
+   Compiling critical-section v1.2.0
+   Compiling scopeguard v1.2.0
+   Compiling autocfg v1.5.1
+   Compiling log v0.4.34
+   Compiling find-msvc-tools v0.1.11
+   Compiling rustix v1.1.4
+   Compiling shlex v2.0.1
+   Compiling indoc v2.0.7
+   Compiling cc v1.4.4
+   Compiling castaway v0.2.4
+   Compiling lock_api v0.4.14
+   Compiling litrs v1.0.0
+   Compiling pkg-config v0.3.34
+   Compiling num-traits v0.2.19
+   Compiling syn v3.0.3
+   Compiling syn v2.0.119
+   Compiling errno v0.3.14
+   Compiling unicode-truncate v2.0.1
+   Compiling mio v1.2.2
+   Compiling signal-hook-registry v1.4.8
+   Compiling num_threads v0.1.7
+   Compiling vcpkg v0.2.15
+   Compiling num-conv v0.2.2
+   Compiling powerfmt v0.2.0
+   Compiling deranged v0.5.8
+   Compiling time-core v0.1.9
+   Compiling document-features v0.2.12
+   Compiling parking_lot v0.12.5
+   Compiling signal-hook-mio v0.2.5
+   Compiling zmij v1.0.23
+   Compiling siphasher v1.0.3
+   Compiling getrandom v0.4.3
+   Compiling phf_shared v0.12.1
+   Compiling serde_json v1.0.154
+   Compiling chrono-tz v0.10.4
+   Compiling anyhow v1.0.104
+   Compiling phf v0.12.1
+   Compiling hashlink v0.12.2
+   Compiling sha1_smol v1.0.1
+   Compiling bitflags v2.13.1
+   Compiling libsqlite3-sys v0.38.2
+   Compiling chrono v0.4.45
+   Compiling fallible-streaming-iterator v0.1.9
+   Compiling time v0.3.55
+   Compiling fallible-iterator v0.3.0
+   Compiling line-clipping v0.3.8
+   Compiling memchr v2.8.3
+   Compiling uuid v1.26.1
+   Compiling fs2 v0.4.3
+   Compiling strum_macros v0.28.0
+   Compiling thiserror-impl v1.0.69
+   Compiling derive_more-impl v2.1.1
+   Compiling derive_more v2.1.1
+   Compiling darling_core v0.24.1
+   Compiling filedescriptor v0.8.3
+   Compiling serde_derive v1.0.229
+   Compiling thiserror-impl v2.0.20
+   Compiling strum v0.28.0
+   Compiling kasuari v0.4.12
+   Compiling darling_macro v0.24.1
+   Compiling darling v0.24.1
+   Compiling compact_str v0.9.1
+   Compiling crossterm v0.29.0
+   Compiling rusqlite v0.40.2
+   Compiling ratatui-core v0.1.2
+   Compiling ratatui-widgets v0.3.2
+   Compiling ratatui-crossterm v0.1.2
+   Compiling ratatui-macros v0.7.2
+   Compiling ratatui v0.30.2
+   Compiling qi-agent-tui v0.1.0 (/Users/geb/Documents/Codex/2026-10-19/task-2/baseline-source/apps/tui-rs)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.94s
+✔ twenty verifier evidence faults cannot promote a candidate to PASS (1.556542ms)
+✔ verification state stays distinct from execution completion (0.145917ms)
+✖ candidate ownership survives two controllers, duplicate commands and a lost reply (507.861417ms)
+✖ a live or unknown writer retains ownership across host restart (199.186959ms)
+✔ changed contracts, base SHA, controller and browser overrides cannot reuse admission (235.263166ms)
+✔ candidate state cannot be placed inside an original checkout (111.823916ms)
+✖ independent verification gates writers, deduplicates jobs, survives refresh and becomes stale (176.903916ms)
+✔ real daemon reconciles a timed-out side effect after Web Host reconnection without repeating it (2312.589209ms)
+✔ quota pressure releases unviewed Web attachments and resumes their histories later (898.280625ms)
+✔ browser detach preserves approvals and capacity pressure cannot evict a waiting task (1000.002209ms)
+✔ real daemon completion is bound to its admission request and releases the turn snapshot pin (484.788459ms)
+✔ provider registry persists secrets privately and returns redacted settings (114.102042ms)
+✔ provider registry discovers the local Codex ChatGPT login without exposing tokens (12.577584ms)
+✔ provider registry discovers OpenAI-compatible model catalogs (23.338875ms)
+✔ web transport rejects malformed Host without terminating the server (148.555084ms)
+✔ web transport rejects archive destination overrides before opening a worker (126.208083ms)
+✔ web transport installs one snapshot with only uncovered events during continuous updates (123.756041ms)
+✔ web transport replays a continuous cursor and resnapshots buffer gaps and generations (112.845125ms)
+✔ web transport cleans subscriptions when a worker exits during snapshot capture (114.057625ms)
+✔ web transport cleans subscriptions on browser abort and snapshot failure (120.619959ms)
+✔ web transport exposes a warning for legacy snapshot state without revisions (114.239834ms)
+✔ workspace registry persists canonical allowlisted roots (57.264959ms)
+✔ workspace registry rejects a symbolic-link state directory (0.694083ms)
+✔ web host authenticates, catalogs, creates a real worker, and invokes RPC (1130.563667ms)
+✔ web host rejects network exposure unless it is explicitly acknowledged (0.206167ms)
+✔ network-exposed web host accepts an HTTPS proxy origin and secures its cookie (116.959417ms)
+✔ web host increments the port until one is available (118.160916ms)
+✔ provider save exposes reload failures and retry does not resave credentials (120.896584ms)
+✔ RPC errors retain uncertain outcomes and the caller's command identity (130.776958ms)
+✔ an opening snapshot cursor avoids SSE snapshots and Last-Event-ID takes precedence (112.349333ms)
+✔ catalog incrementally completes partial UTF-8 lines and counts an unterminated event once (25.175042ms)
+✔ catalog invalidates truncated, rewritten, replaced, renamed and deleted logs (45.468083ms)
+✔ catalog refreshes same-size edits, skips invalid lines, and excludes linked logs (14.343292ms)
+✔ catalog handles a message spanning many read chunks and a partial following record (12.830292ms)
+✔ catalog discovers legacy sessions and never resolves IDs outside current allowed workspaces (11.509042ms)
+✔ catalog excludes linked session directories and invalidates a cached path if its parent becomes linked (14.493416ms)
+✔ catalog coalesces concurrent scans, bounds I/O, and measures warm-list and append work (39.475167ms)
+ℹ {"sample":"24 files, 4824 events","coldReadBytes":1617062,"warmReadBytes":0,"appendReadBytes":2133,"appendParsedLines":1,"peakConcurrentIO":4}
+✔ SessionManager archives through the real isolated daemon and retains lifecycle across restart (803.257208ms)
+✔ catalog keeps legacy .bb-agent sessions visible (35.483416ms)
+✔ create closes an uncommitted worker and rolls back its profile (35.05475ms)
+✔ open closes a worker when initialization fails (12.110292ms)
+✔ open returns session metadata appended by startup plugins (12.670083ms)
+✔ fork closes the destination worker and rolls back its inherited profile (29.621667ms)
+✔ archive delegates unopened legacy history to daemon without starting a worker and preserves its profile (29.186625ms)
+✔ failed archive keeps history and the attached worker available for a retry (23.165666ms)
+✔ archive retries after a lost acknowledgement and host restart, and prevents concurrent reopening (19.880125ms)
+✔ persisted archive retries cannot bypass workspace boundaries or target a replaced session (11.226334ms)
+✔ archive rejects linked or invalid source replacements without touching the external history (7.89375ms)
+✔ corrected profile and archive state can be loaded again without restarting the host (17.095833ms)
+✔ opening a previously listed session uses its indexed path without rescanning workspaces (15.032ms)
+✔ shutdown after archiving the last session uses a daemon control connection without hydrating it (21.609375ms)
+✔ provider reload reports partial failures and retries only selected sessions (19.572584ms)
+✔ workspace revocation invalidates a delayed open even when the same path is added again (32.154208ms)
+✔ workspace revocation invalidates a delayed create even when the same path is added again (17.693375ms)
+✔ workspace revocation invalidates a delayed fork even when the same path is added again (16.414583ms)
+✔ cached workers cannot bypass revocation even if connection close fails (38.636792ms)
+✔ failed workspace persistence restores access through fresh connections only (15.042791ms)
+{"snapshotHandoff":[{"kind":"cold","fullSnapshots":1,"snapshotBytes":589925,"elapsedMs":14},{"kind":"warm","fullSnapshots":1,"snapshotBytes":589925,"elapsedMs":7}]}
+✔ cold and warm snapshot handoff each transfer history once and preserve intervening events (163.060084ms)
+✔ identical command IDs in different sessions have independent snapshots and admission (2.878333ms)
+✔ turn snapshots preserve actual execution outcomes without asserting acceptance (1.632041ms)
+✔ only the independent receipt for the complete unchanged workspace can display PASS (252.907667ms)
+✔ full source proof includes hidden and binary files and refuses symbolic links (68.154334ms)
+✔ worker replay detects initial, malformed, stale, future, and foreign cursors (14.972041ms)
+✔ worker generation changes reset the host epoch and retained events (5.487875ms)
+✔ worker uses the attached snapshot generation before any live event arrives (4.917958ms)
+✔ worker reports both socket loss and explicit detach to stream subscribers (2.5155ms)
+✔ daemon socket resets reject pending calls without an uncaught readline error (1.2725ms)
+✔ worker exit notifications terminate streams even while the daemon socket remains open (1.4195ms)
+✔ worker exit rejects agent calls but preserves the session.archive response (7.818708ms)
+✔ worker exit rejects agent calls but preserves the agent.stop response (8.058917ms)
+✔ worker exit rejects agent calls but preserves the daemon.update response (3.40875ms)
+✔ daemon socket EOF still rejects pending daemon control outcomes after worker exit (1.199917ms)
+✔ unknown outcomes retain command identity across socket reconnects and completed replay (24.412125ms)
+✔ snapshot reuse carries an earlier cursor so events during and after snapshot remain replayable (6.899542ms)
+✔ idle detach respects multiple browser references and in-flight calls without stopping the agent (173.119041ms)
+✔ file tree and reads stay inside an allowlisted workspace and hide sensitive directories (62.631166ms)
+✔ uploads use private ID storage, reject invalid images and preserve workspace ownership (31.365833ms)
+✔ an allowlisted workspace root cannot be replaced by a symbolic link to another directory (24.778584ms)
+✔ upload references cannot follow symlinks or relaxed permissions (22.198542ms)
+✔ HTML responses cannot execute same-origin script or submit forms; Office support is explicit (29.610791ms)
+✔ turn snapshots report added, modified and deleted text without exposing secrets; finish retries are idempotent (57.904542ms)
+✔ startup recovery marks unfinished snapshots partial without pretending the agent stopped (64.272417ms)
+✔ authenticated HTTP uploads have a dedicated 12 MiB bound and safe download headers (201.583334ms)
+✔ file references quote actual bounded content and session references enforce workspace eligibility (119.767375ms)
+✔ real RPC route brackets accepted turns with snapshots and resolves latest changes after restart (142.657041ms)
+ℹ tests 85
+ℹ suites 0
+ℹ pass 82
+ℹ fail 3
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4897.091667
+
+✖ failing tests:
+
+test at apps/web-host/coding-candidates.test.ts:45:1
+✖ candidate ownership survives two controllers, duplicate commands and a lost reply (507.861417ms)
+  Error: Unknown task
+      at Module.loadTask (file:///private/tmp/qi-coding-test-nZMWRy/controller/maintenance/lib/controller.mjs:168:21)
+      at async <anonymous> (/Users/geb/Documents/Codex/2026-10-19/task-2/baseline-source/apps/web-host/coding-candidates.ts:220:25)
+      at async CodingCandidates.locked (/Users/geb/Documents/Codex/2026-10-19/task-2/baseline-source/apps/web-host/coding-candidates.ts:127:14)
+      at async TestContext.<anonymous> (/Users/geb/Documents/Codex/2026-10-19/task-2/baseline-source/apps/web-host/coding-candidates.test.ts:57:19)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
+
+test at apps/web-host/coding-candidates.test.ts:62:1
+✖ a live or unknown writer retains ownership across host restart (199.186959ms)
+  AssertionError [ERR_ASSERTION]: Missing expected rejection.
+      at async TestContext.<anonymous> (/Users/geb/Documents/Codex/2026-10-19/task-2/baseline-source/apps/web-host/coding-candidates.test.ts:67:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: /another writer/,
+    operator: 'rejects',
+    diff: 'simple'
+  }
+
+test at apps/web-host/coding-candidates.test.ts:107:1
+✖ independent verification gates writers, deduplicates jobs, survives refresh and becomes stale (176.903916ms)
+  [Error: ENOENT: no such file or directory, open '/private/tmp/qi-coding-test-nc4mKi/candidates/coding-a459d10e190d284c5903795ddefc6674/workspaces/coding-a459d10e190d284c5903795ddefc6674/src/value.mjs'] { errno: -2, code: 'ENOENT', syscall: 'open', path: '/private/tmp/qi-coding-test-nc4mKi/candidates/coding-a459d10e190d284c5903795ddefc6674/workspaces/coding-a459d10e190d284c5903795ddefc6674/src/value.mjs' }

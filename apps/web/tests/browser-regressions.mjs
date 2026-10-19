@@ -40,7 +40,7 @@ async function fixture(initialCount=2){
    if(method==='trust.status') result={configured:false};
    else if(method==='runtime.status') result={plugins:[],tools:[],commands:[]};
    else if(method==='plugins.ui-slots') result={slots:[]};
-   else if(method==='subagent.status') result={providers:[],jobs:[]};
+   else if(method==='subagent.status') result={providers:[],jobs:controls.jobs || []};
    else if(method==='policy.status') {result=policy;if(id===controls.holdPolicy?.id){held=controls.holdPolicy;result={...policy,mode:'allow'};}}
    else if(method==='turn.submit'){controls.submissions.push(route.request().postDataJSON());if(controls.dropSubmit){controls.dropSubmit=false;await route.abort();return;}if(controls.rejectSubmit){controls.rejectSubmit=false;await route.fulfill({status:400,json:{ok:false,error:{message:'Fixture rejected before acceptance'}}});return;}result={accepted:true};}
    else if(method==='turn.steer'){controls.steers.push(route.request().postDataJSON());result={id:'steer-fixture'};}
@@ -271,7 +271,7 @@ try{
   await page.locator('.session-header-title button').filter({hasText:'会话B'}).waitFor();
   await page.getByRole('button',{name:'打开导航',exact:true}).click();
   await page.locator('.sidebar .new-session').click();
-  await page.getByRole('heading',{name:'今天想完成什么？',exact:true}).waitFor();
+  await page.getByRole('heading',{name:'探索未至之境',exact:true}).waitFor();
   assert.equal(await page.getByRole('combobox',{name:'Agent 模式',exact:true}).inputValue(),'standard');
   await page.getByRole('button',{name:'分析项目',exact:true}).click();
   assert.match(await page.getByRole('textbox',{name:'给代理发送消息',exact:true}).inputValue(),/分析当前项目结构/);
@@ -305,7 +305,9 @@ try{
   }
   await page.locator('.permission-trigger').click();await page.keyboard.press('Home');await page.keyboard.press('Enter');
   assert.equal(await page.locator('.permission-trigger').getAttribute('aria-label'),'访问权限：Read Only');
-  await trigger.click();await page.locator('textarea').click();assert.equal(await page.locator('.model-menu').count(),0);
+  // The centered hero's upward menu may cover the textarea's center on a phone.
+  // Test the focus-out contract without targeting a point covered by the open menu.
+  await trigger.click();await page.locator('textarea').focus();assert.equal(await page.locator('.model-menu').count(),0);
   await page.close();console.log(JSON.stringify({composerSelection:'passed',cases:['search and empty state','IME guard','keyboard selection and focus return','1440/768/414/375/320 bounds','outside focus closes']}));
  }
  {
@@ -332,6 +334,84 @@ try{
   await page.setViewportSize({width:320,height:840});await settle(page);
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
   await page.close();console.log(JSON.stringify({compactToolGroups:'passed',cases:['collapsed summary','failure stays visible','stopped call is unconfirmed','independent details','expansion retained','320px viewport']}));
+ }
+ {
+  const {page,controls}=await fixture();
+  const data=[['message',{message:{role:'user',content:'检查文件'}}],['tool/call',{'call-id':'harness-read',name:'read',arguments:{path:'README.md'}}],
+   ['tool/result',{'call-id':'harness-read',ok:true,content:'HARNESS-TOOL-DETAIL'}],
+   ['message',{message:{role:'assistant',content:'HARNESS-FINAL-ANSWER',reasoning_content:'HARNESS-REASONING'}}],
+   ['agent/run/end',{'run-id':'harness-ui',status:'completed',verification:'not-run'}]];
+  controls.snapshotOverride={...snapshot('A',0),events:data.map(([type,data],i)=>({id:`harness-${i}`,seq:i+1,at:'2026-10-19T00:00:00Z',type,data}))};
+  controls.jobs=[{id:'child-1',label:'离线子任务',provider:'fixture',status:'completed',result:'HARNESS-CHILD-RESULT'}];
+  await page.goto(base);await page.getByText('HARNESS-FINAL-ANSWER',{exact:true}).waitFor();
+  assert.equal(await page.locator('.tool-summary').count(),0,'settled process starts folded');
+  await page.getByRole('button',{name:/工作步骤 ·/}).click();await page.locator('.tool-summary').waitFor();
+  await page.locator('.reasoning-row summary').click();await page.locator('.reasoning-row[open] .markdown-content').getByText('HARNESS-REASONING',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'设置',exact:true}).click();
+  assert.equal(await page.locator('#root').evaluate(e=>e.inert),true);
+  await page.getByRole('combobox',{name:'工作步骤展示'}).selectOption('verbose');
+  await page.keyboard.press('Escape');await page.getByRole('dialog',{name:'设置',exact:true}).waitFor({state:'hidden'});
+  assert.equal(await page.getByRole('button',{name:'设置',exact:true}).evaluate(e=>e===document.activeElement),true);
+  assert.equal(await page.locator('.tool-summary').count(),0,'verbose removes group headers');
+  await page.locator('.tool-batch-row').click();await page.getByText('HARNESS-TOOL-DETAIL',{exact:true}).waitFor();
+  assert.equal(controls.submissions.length,0,'presentation controls cannot submit a command');
+  await page.reload();await page.locator('.tool-batch-row').waitFor();
+  await page.locator('.subagent-disclosure summary').first().click();await page.getByText('HARNESS-CHILD-RESULT',{exact:true}).waitFor();
+  for(const width of [768,390,320]){
+   await page.setViewportSize({width,height:844});await settle(page);
+   if(width===768)await page.locator('.sidebar-toggle').click();else await page.getByRole('button',{name:'打开导航',exact:true}).click();
+   await page.getByRole('dialog',{name:'导航',exact:true}).waitFor();
+   assert.equal(await page.locator('main').evaluate(e=>e.inert),true);
+   await page.locator('.session-link').filter({hasText:'会话B'}).click();await page.locator('.session-header-title button').filter({hasText:'会话B'}).waitFor();
+   if(width===768)await page.locator('.sidebar-toggle').click();else await page.getByRole('button',{name:'打开导航',exact:true}).click();
+   await page.getByRole('button',{name:'设置',exact:true}).click();
+   const navigation=await page.locator('.settings-layout > nav').boundingBox();
+   for(const button of await page.locator('.settings-layout > nav > button').all()){
+    const box=await button.boundingBox();assert.ok(box.y>=navigation.y&&box.y+box.height<=navigation.y+navigation.height,'settings labels cannot be vertically clipped');
+   }
+   await page.keyboard.press('Escape');await page.getByRole('dialog',{name:'设置',exact:true}).waitFor({state:'hidden'});
+   await page.keyboard.press('Escape');await page.getByRole('dialog',{name:'导航',exact:true}).waitFor({state:'hidden'});
+  }
+  await page.close();console.log(JSON.stringify({harnessPresentation:'passed',cases:['settled process and reasoning','verbose tools','no mutation','persisted mode','subtask result','768/390/320 session access','modal focus return','settings labels fit']}));
+ }
+ {
+  const {page,controls}=await fixture(0);
+  await page.addInitScript(()=>localStorage.setItem('qi-agent.transcript-view','detailed'));
+  controls.snapshotOverride={...snapshot('A',0),state:{phase:'tool',revision:2},events:[
+   {id:'focus-user',seq:1,type:'message',at:'2026-10-19T00:00:00Z',data:{message:{role:'user',content:'焦点验收'}}},
+   {id:'focus-call',seq:2,type:'tool/call',at:'2026-10-19T00:00:00Z',data:{name:'read','call-id':'focus-read',arguments:{path:'README.md'}}}]};
+  await page.goto(base);const tool=page.locator('.tool-batch-row');await tool.waitFor();await tool.focus();
+  await page.evaluate(()=>{
+   const source=window.sources.findLast(source=>!source.closed);
+   for(const event of [
+    {type:'event',event:'tool/result',event_id:'focus-result',seq:3,durable:true,data:{'call-id':'focus-read',ok:true,content:'FOCUS-RESULT'}},
+    {type:'event',event:'agent/run/end',event_id:'focus-end',seq:4,durable:true,data:{'run-id':'focus-run',status:'completed',verification:'not-run'}},
+    {type:'event',event:'agent/state',data:{phase:'idle',revision:3}}])source.dispatchEvent(new MessageEvent('worker',{data:JSON.stringify(event)}));
+  });
+  await page.locator('.run-outcome').waitFor();
+  assert.equal(await tool.isVisible(),true,'settlement must not unmount the focused detailed tool');
+  assert.equal(await tool.evaluate(e=>e===document.activeElement),true,'settlement preserves the exact focused control');
+  const fold=page.getByRole('button',{name:/工作步骤 ·/});await fold.click();await fold.click();
+  await page.locator('.tool-summary').waitFor();assert.equal(await page.locator('.tool-details').count(),0,'whole-turn collapse resets child expansion');
+  const summary=page.locator('.tool-summary'),header=await summary.elementHandle();await summary.focus();await settle(page);
+  assert.equal(await header.evaluate(e=>e.isConnected&&e===document.activeElement),true,'focusing a settled group must preserve the grouped header');
+  await summary.click();assert.equal(await summary.getAttribute('aria-expanded'),'true');await page.getByText('FOCUS-RESULT',{exact:true}).waitFor();
+  await summary.click();assert.equal(await summary.getAttribute('aria-expanded'),'false');
+  await page.close();console.log(JSON.stringify({detailedSettlementFocus:'passed'}));
+ }
+ {
+  const {page}=await fixture(0);await page.goto(base);const input=page.locator('textarea');await input.waitFor();
+  for(const width of [390,320]){
+   await page.setViewportSize({width,height:844});await settle(page);
+   assert.equal(await input.evaluate(e=>{
+    const probe=e.cloneNode();probe.value=e.placeholder;Object.assign(probe.style,{height:'0px',minHeight:'0px',position:'absolute',visibility:'hidden',width:`${e.clientWidth}px`});
+    e.parentElement.append(probe);const required=probe.scrollHeight;probe.remove();return e.clientHeight>=required;
+   }),true,'wrapped empty placeholder must fit after a width change');
+  }
+  await page.setViewportSize({width:1440,height:1000});await input.fill('响应式输入 '.repeat(30));
+  await page.setViewportSize({width:390,height:844});await settle(page);
+  assert.equal(await input.evaluate(e=>e.scrollHeight<=e.clientHeight||getComputedStyle(e).overflowY==='auto'),true,'wrapped drafts remain visible or scrollable after a width change');
+  await page.close();console.log(JSON.stringify({composerResize:'passed'}));
  }
  assert.deepEqual(errors,[]);console.log(JSON.stringify({pageErrors:errors}));
 }finally{await browser.close();}

@@ -1,0 +1,144 @@
+{
+  "mode": "baseline",
+  "source": "d3173b5f01b86565bf300d54b7b24ea9d14d6060",
+  "evidence": [
+    {
+      "name": "conversation-dark-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "theme": "dark"
+    },
+    {
+      "name": "tools-open-dark-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "theme": "dark"
+    },
+    {
+      "name": "settings-dark-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "theme": "dark"
+    },
+    {
+      "name": "settings-light-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "theme": "light"
+    },
+    {
+      "name": "conversation-light-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "theme": "light"
+    },
+    {
+      "name": "new-session-light-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "theme": "light"
+    },
+    {
+      "name": "new-session-dark-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "theme": "dark"
+    },
+    {
+      "name": "new-session-dark-768",
+      "viewport": {
+        "width": 768,
+        "height": 844
+      },
+      "theme": "dark"
+    },
+    {
+      "name": "new-session-dark-390",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "theme": "dark"
+    },
+    {
+      "name": "new-session-light-1024",
+      "viewport": {
+        "width": 1024,
+        "height": 844
+      },
+      "theme": "light"
+    },
+    {
+      "name": "new-session-light-768",
+      "viewport": {
+        "width": 768,
+        "height": 844
+      },
+      "theme": "light"
+    },
+    {
+      "name": "new-session-light-390",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "theme": "light"
+    },
+    {
+      "name": "new-session-light-375",
+      "viewport": {
+        "width": 375,
+        "height": 844
+      },
+      "theme": "light"
+    },
+    {
+      "name": "new-session-light-320",
+      "viewport": {
+        "width": 320,
+        "height": 844
+      },
+      "theme": "light"
+    },
+    {
+      "name": "navigation-light-390",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "theme": "light"
+    },
+    {
+      "name": "conversation-light-390",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "theme": "light"
+    },
+    {
+      "name": "settings-light-390",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "theme": "light"
+    }
+  ],
+  "errors": [],
+  "backend": "deterministic API fixture; see separate real-host E2E"
+}

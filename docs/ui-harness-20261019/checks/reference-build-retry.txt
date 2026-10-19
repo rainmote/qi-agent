@@ -1,0 +1,22 @@
+
+> @deepseek-ai/dsh-root@0.2.1-rc.2 build:artifacts
+> tsx scripts/build.ts --scope artifacts
+
+run-gates: build:artifacts running 7 gate(s) with 7 worker(s) from 12 local default worker(s) of 12 CPU(s).
+run-gates: start native addon
+run-gates: PASS native addon (0.58s)
+run-gates: start host compiler
+run-gates: PASS host compiler (19.51s)
+run-gates: start Host bundle
+run-gates: PASS Host bundle (5.35s)
+run-gates: start Desktop bundle
+run-gates: PASS Desktop bundle (1.04s)
+run-gates: start client compiler
+run-gates: PASS client compiler (14.27s)
+run-gates: start Client bundle
+run-gates: PASS Client bundle (2.37s)
+run-gates: start Web build
+run-gates: PASS Web build (3.04s)
+
+run-gates: 7 passed, 0 failed, 0 skipped in 46.16s.
+build: recorded 325 client artifact(s) with 2 public value(s)

@@ -1,0 +1,17 @@
+{
+  "base": "d3173b5f01b86565bf300d54b7b24ea9d14d6060",
+  "paths": [
+    "apps/web-host",
+    "src",
+    "maintenance",
+    "agent.edn",
+    "apps/web/src/api.ts",
+    "apps/web/src/projection.ts",
+    "apps/web/src/request-scope.ts",
+    "package.json",
+    "package-lock.json"
+  ],
+  "diff_from_base": [],
+  "receipt": "not-issued",
+  "container_image": "not-verified"
+}

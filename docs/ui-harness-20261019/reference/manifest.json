@@ -1,0 +1,63 @@
+{
+  "source": "687f282e8625c6b8d11ff58211a90524be2e4317",
+  "assembly": "official built client + shipped isolated scaffold, recorded history; zero model calls",
+  "evidence": [
+    {
+      "name": "conversation-light-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      }
+    },
+    {
+      "name": "process-open-light-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      }
+    },
+    {
+      "name": "settings-light-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      }
+    },
+    {
+      "name": "settings-dark-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      }
+    },
+    {
+      "name": "new-session-dark-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      }
+    },
+    {
+      "name": "new-session-dark-768",
+      "viewport": {
+        "width": 768,
+        "height": 844
+      }
+    },
+    {
+      "name": "new-session-dark-390",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    {
+      "name": "new-session-dark-320",
+      "viewport": {
+        "width": 320,
+        "height": 844
+      }
+    }
+  ],
+  "errors": []
+}

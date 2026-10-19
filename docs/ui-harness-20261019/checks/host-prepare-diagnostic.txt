@@ -1,0 +1,17 @@
+{
+  "candidate_id": "coding-da54628d92cd4c8e462b417748173161",
+  "workspace_id": "872a9d1884e31196",
+  "command_id": "coding-command-1",
+  "base_sha": "5f7c0f5bc7c50f597b2acce979c5fdbe7e1ebb3d",
+  "intent_sha256": "4cc59e2896b0af24cd39f3def82947e25c623d8039f27b9248ddde00dd76b0b5",
+  "controller_sha": "c37fd0afa0012c0336fe64e7bec0dd14bc5f4565",
+  "controller_path": "/private/tmp/qi-coding-test-yrrh7u/controller",
+  "state_root": "/private/tmp/qi-coding-test-yrrh7u/candidates/coding-da54628d92cd4c8e462b417748173161",
+  "cwd": "/private/tmp/qi-coding-test-yrrh7u/candidates/coding-da54628d92cd4c8e462b417748173161/workspaces/coding-da54628d92cd4c8e462b417748173161",
+  "candidate_workspace_id": "25ee3db576b0829b",
+  "status": "unknown",
+  "lease_owner": "coding-da54628d92cd4c8e462b417748173161",
+  "writer_session": null,
+  "original_dirty": false,
+  "reason": "spawnSync /bin/ps EPERM"
+}

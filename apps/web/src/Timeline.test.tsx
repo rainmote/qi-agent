@@ -78,3 +78,14 @@ test("a stopped call with no result is unconfirmed, and only an active group may
   assert.equal(toolBatchStatus(batch, new Map(), true).running, true);
   assert.equal(toolBatchStatus(batch, new Map([["a", event("result1", "tool/result", { ok: false })]]), true).running, false);
 });
+
+test("reasoning-only assistant messages remain readable instead of disappearing", () => {
+  const snapshot = fixtureSnapshot(0);
+  snapshot.events = [event("reason1", "message", { message: {
+    role: "assistant", content: null, reasoning_content: "先核对文件，再决定下一步。",
+  } })];
+  const projection = fromSnapshot(snapshot);
+  assert.equal(projection.timeline.rows.length, 1, "persisted reasoning must reach the conversation");
+  const html = renderToStaticMarkup(<Timeline projection={projection} scrollRef={createRef<HTMLDivElement>()} />);
+  assert.match(html, /先核对文件，再决定下一步/);
+});
