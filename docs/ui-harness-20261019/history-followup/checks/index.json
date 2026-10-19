@@ -1,0 +1,76 @@
+{
+  "checks": [
+    {
+      "name": "history-reviewed-typecheck",
+      "exit_code": 0,
+      "metadata": "history-reviewed-typecheck.json",
+      "output": "history-reviewed-typecheck.txt",
+      "role": "final check"
+    },
+    {
+      "name": "history-reviewed-web-ui",
+      "exit_code": 0,
+      "metadata": "history-reviewed-web-ui.json",
+      "output": "history-reviewed-web-ui.txt",
+      "role": "final check"
+    },
+    {
+      "name": "history-reviewed-build",
+      "exit_code": 0,
+      "metadata": "history-reviewed-build.json",
+      "output": "history-reviewed-build.txt",
+      "role": "final check"
+    },
+    {
+      "name": "history-reviewed-browser",
+      "exit_code": 0,
+      "metadata": "history-reviewed-browser.json",
+      "output": "history-reviewed-browser.txt",
+      "role": "final check"
+    },
+    {
+      "name": "history-reviewed-real-e2e",
+      "exit_code": 0,
+      "metadata": "history-reviewed-real-e2e.json",
+      "output": "history-reviewed-real-e2e.txt",
+      "role": "final check"
+    },
+    {
+      "name": "history-reviewed-captures",
+      "exit_code": 0,
+      "metadata": "history-reviewed-captures.json",
+      "output": "history-reviewed-captures.txt",
+      "role": "final check"
+    },
+    {
+      "name": "red-browser-history",
+      "exit_code": 1,
+      "metadata": "red-browser-history.json",
+      "output": "red-browser-history.txt",
+      "role": "initial probe timeout; not the valid red"
+    },
+    {
+      "name": "red-browser-history-assertion",
+      "exit_code": 1,
+      "metadata": "red-browser-history-assertion.json",
+      "output": "red-browser-history-assertion.txt",
+      "role": "behavior assertion red"
+    },
+    {
+      "name": "red-history-catalog",
+      "exit_code": 1,
+      "metadata": "red-history-catalog.json",
+      "output": "red-history-catalog.txt",
+      "role": "behavior assertion red"
+    },
+    {
+      "name": "red-history-stale-catalog",
+      "exit_code": 1,
+      "metadata": "red-history-stale-catalog.json",
+      "output": "red-history-stale-catalog.txt",
+      "role": "behavior assertion red"
+    }
+  ],
+  "isolation_unchanged": true,
+  "prior_candidate": "4838bb2c1c7810eb83798baba733d7335cebbf2c"
+}

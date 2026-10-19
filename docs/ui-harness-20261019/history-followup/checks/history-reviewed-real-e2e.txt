@@ -1,0 +1,42 @@
+
+> @rainmote/qi-agent-web@0.1.0 test:web-e2e
+> npm run web:build && cargo build --locked --manifest-path apps/tui-rs/Cargo.toml && tsx --test apps/web/tests/interaction-e2e.test.ts
+
+
+> @rainmote/qi-agent-web@0.1.0 web:build
+> vite build
+
+vite v8.3.4 building client environment for production...
+transforming...
+✓ 296 modules transformed.
+rendering chunks...
+computing gzip size...
+apps/web/dist/index.html                   0.45 kB │ gzip:   0.30 kB
+apps/web/dist/assets/index-DtER2qUE.css   90.14 kB │ gzip:  16.94 kB
+apps/web/dist/assets/index-BJacSuXb.js   542.64 kB │ gzip: 165.21 kB │ map: 2,501.62 kB
+
+✓ built in 76ms
+[plugin builtin:vite-reporter] 
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.18s
+▶ production Web trust, cancellation, recovery and composer E2E
+  ✔ adding a project asks before any turn, cancel preserves the draft and failure never submits (1019.9685ms)
+  ✔ stop works inside approval, handles failure, suppresses repeat clicks and survives refresh (491.674542ms)
+  ✔ composer menu, IME, multiline draft, focus and responsive geometry remain usable (219.47575ms)
+  ✔ stop cancels a blocking direct-command approval even when no model turn is running (201.165292ms)
+  ✔ trust inheritance is respected and an approved real write succeeds only after approval (800.232292ms)
+  ✔ declining trust persists, stays visible and does not trust a sibling project (797.70125ms)
+{"realWebE2E":"passed","externalModelCalls":0,"assertions":"browser + runtime snapshot + persisted trust + actual filesystem"}
+  ✔ a finishing run cannot unlock a new submission while its stop request is still in flight (807.250125ms)
+✔ production Web trust, cancellation, recovery and composer E2E (8417.107083ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 8
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 8681.086959

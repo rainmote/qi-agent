@@ -15,12 +15,17 @@ async function fixture(initialCount=2){
  const page=await browser.newPage({viewport:{width:1440,height:1000}});
  page.on('pageerror',e=>errors.push(e.message));
  await page.addInitScript(()=>{window.sources=[];window.EventSource=class extends EventTarget{constructor(url){super();this.url=url;window.sources.push(this);queueMicrotask(()=>this.dispatchEvent(new Event('ready')));}close(){this.closed=true;}}});
- const controls={holdSnapshot:null,holdOpen:null,holdPolicy:null,holdModels:null,snapshotOverride:null,steers:[],modelCatalog:models,providerSaves:0,providerRetries:0,dropSubmit:false,rejectSubmit:false,uploads:[],submissions:[],operationStatus:"completed",preferenceEvents:{A:[],B:[]},rejectPreference:false,verification:undefined};
+ const controls={holdSnapshot:null,holdOpen:null,holdPolicy:null,holdModels:null,holdCatalog:null,catalogGates:[],additionalSessions:[],forks:0,snapshotOverride:null,steers:[],modelCatalog:models,providerSaves:0,providerRetries:0,dropSubmit:false,rejectSubmit:false,uploads:[],submissions:[],operationStatus:"completed",preferenceEvents:{A:[],B:[]},rejectPreference:false,verification:undefined};
  const sessionSnapshot=(id,n=2)=>{const value=snapshot(id,n);value.events.push(...controls.preferenceEvents[id]);return value;};
  const provider={id:"mock-provider",name:"Mock Provider",protocol:"openai-completions",baseUrl:"https://example.invalid/v1",apiKeyConfigured:true,authType:"api-key",authStatus:"configured",models:[{id:"mock-model",name:"Mock Model"}]};
  await page.route('**/api/**', async route=>{
   const path=new URL(route.request().url()).pathname; let result; let held;
-  if(path==='/api/bootstrap') result={workspaces:[{id:workspaceId,name:'隔离复现',path:'/mock',addedAt:'2026-10-02'}],catalogs:[{workspaceId,sessions}],activeWorkspaceId:workspaceId};
+  if(path==='/api/bootstrap') result={workspaces:[{id:workspaceId,name:'隔离复现',path:'/mock',addedAt:'2026-10-02'}],catalogs:[{workspaceId,sessions:[...sessions,...controls.additionalSessions]}],activeWorkspaceId:workspaceId};
+  else if(path==='/api/sessions'&&route.request().method()==='GET'){result=[...sessions,...controls.additionalSessions];held=controls.catalogGates.shift()||controls.holdCatalog;}
+  else if(path.endsWith('/fork')){
+   controls.forks++;const session={...sessions[0],id:'C',name:'会话C',path:'/mock/C.jsonl'};
+   controls.additionalSessions.push(session);controls.preferenceEvents.C=[];result={session,snapshot:sessionSnapshot('C'),eventCursor:'fixture:0'};
+  }
   else if(path.endsWith('/attachments')) {const input=route.request().postDataJSON();controls.uploads.push(input);result={type:'attachment',id:`fixture-upload-${controls.uploads.length}`,workspaceId,name:input.name,mime:input.mime,size:Buffer.from(input.base64,'base64').length};}
   else if(path.endsWith('/files') || path.endsWith('/search')) result={path:'',entries:[{name:'note.md',path:'note.md',kind:'file'},{name:'example.html',path:'example.html',kind:'file'}],truncated:false};
   else if(path.endsWith('/preview')) {const html=new URL(route.request().url()).searchParams.get('path')==='example.html';result={path:html?'example.html':'note.md',name:html?'example.html':'note.md',mime:html?'text/html':'text/markdown',size:200,kind:html?'html':'text',text:html?'<h1>Static fixture</h1><script>parent.fixtureScriptRan=true</script>':'# bounded file fixture'};}
@@ -34,7 +39,7 @@ async function fixture(initialCount=2){
   }
   else if(path==='/api/providers/reload'){controls.providerRetries++;assert.deepEqual(route.request().postDataJSON(),{sessionIds:['A']});result={scope:'open-web-sessions',applied:['A'],failures:[]};}
   else if(path.includes('/operations/')) result={status:controls.operationStatus,result:{accepted:true}};
-  else if(path.endsWith('/open')) {const id=path.split('/')[3]; result={session:sessions.find(s=>s.id===id),snapshot:controls.snapshotOverride||sessionSnapshot(id,initialCount),eventCursor:"fixture:0"};if(id===controls.holdOpen?.id)held=controls.holdOpen;}
+  else if(path.endsWith('/open')) {const id=path.split('/')[3]; result={session:[...sessions,...controls.additionalSessions].find(s=>s.id===id),snapshot:controls.snapshotOverride||sessionSnapshot(id,initialCount),eventCursor:"fixture:0"};if(id===controls.holdOpen?.id)held=controls.holdOpen;}
   else if(path.endsWith('/rpc')){
    const {method}=route.request().postDataJSON(); const id=path.split('/')[3];
    if(method==='trust.status') result={configured:false};
@@ -45,6 +50,7 @@ async function fixture(initialCount=2){
    else if(method==='turn.submit'){controls.submissions.push(route.request().postDataJSON());if(controls.dropSubmit){controls.dropSubmit=false;await route.abort();return;}if(controls.rejectSubmit){controls.rejectSubmit=false;await route.fulfill({status:400,json:{ok:false,error:{message:'Fixture rejected before acceptance'}}});return;}result={accepted:true};}
    else if(method==='turn.steer'){controls.steers.push(route.request().postDataJSON());result={id:'steer-fixture'};}
    else if(method==='command.execute') result={output:'test-only'};
+   else if(method==='session.rename') result={renamed:true};
    else if(method==='session.preferences.set') {if(controls.rejectPreference){controls.rejectPreference=false;await route.fulfill({status:400,json:{ok:false,error:{message:'Fixture preference not saved'}}});return;}const {response_detail}=route.request().postDataJSON().params;assert.ok(['short','auto','detailed'].includes(response_detail));const events=controls.preferenceEvents[id];const event={id:`preference-${id}-${events.length}`,seq:10000+events.length,at:'2026-10-15T15:00:00Z',type:'session/preferences',data:{response_detail}};events.push(event);result={response_detail,event};}
    else if(method==='session.snapshot') {result=sessionSnapshot(id);if(id===controls.holdSnapshot?.id){held=controls.holdSnapshot;result.events[1].data.message.content='STALE-SNAPSHOT';}}
    else if(method==='context.status') result=null;
@@ -412,6 +418,66 @@ try{
   await page.setViewportSize({width:390,height:844});await settle(page);
   assert.equal(await input.evaluate(e=>e.scrollHeight<=e.clientHeight||getComputedStyle(e).overflowY==='auto'),true,'wrapped drafts remain visible or scrollable after a width change');
   await page.close();console.log(JSON.stringify({composerResize:'passed'}));
+ }
+ for(const width of [1440,390]){
+  const {page,controls}=await fixture();await page.setViewportSize({width,height:width===1440?1000:844});
+  const choose=async id=>{
+   if(width===390)await page.getByRole('button',{name:'打开导航',exact:true}).click();
+   await open(page,id);
+  };
+  await page.goto(base);await page.locator('.session-header-title button').filter({hasText:'会话A'}).waitFor();
+  await choose('B');await page.goBack();await settle(page);
+  assert.equal(await page.locator('.session-header-title button').count(),1,'browser Back must stay in the recorded session history');
+  await page.locator('.session-header-title button').filter({hasText:'会话A'}).waitFor();
+  assert.equal(await page.locator('.session-header-title button').innerText(),'会话A','browser Back must return to the prior session');
+  await page.goForward();await page.locator('.session-header-title button').filter({hasText:'会话B'}).waitFor();
+  if(width===390)await page.getByRole('button',{name:'打开导航',exact:true}).click();
+  await page.locator('.new-session').click();await page.locator('.new-session-center').waitFor();
+  await page.goBack();await page.locator('.session-header-title button').filter({hasText:'会话B'}).waitFor();
+  await page.goForward();await page.locator('.new-session-center').waitFor();
+  await page.reload();await page.locator('.new-session-center').waitFor();
+  await page.goBack();await page.locator('.session-header-title button').filter({hasText:'会话B'}).waitFor();
+  await page.reload();await page.locator('.session-header-title button').filter({hasText:'会话B'}).waitFor();
+  await page.route('**/history-away',route=>route.fulfill({contentType:'text/html',body:'<title>Local history fixture</title><p>Local history fixture</p>'}));
+  await page.goto(`${base}/history-away`);await page.goBack();await page.locator('.session-header-title button').filter({hasText:'会话B'}).waitFor();
+  await page.goForward();assert.equal(await page.title(),'Local history fixture');
+  await page.goBack();await page.locator('.session-header-title button').filter({hasText:'会话B'}).waitFor();
+  assert.equal(controls.submissions.length,0,'browser history must never replay a submission');
+  assert.equal(await page.locator('main').evaluate(e=>e.inert),false);
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  if(process.env.QI_AGENT_BROWSER_ARTIFACTS)await page.screenshot({path:`${process.env.QI_AGENT_BROWSER_ARTIFACTS}/browser-history-return-${width}.png`,animations:'disabled'});
+  await page.close();console.log(JSON.stringify({browserHistory:'passed',width,cases:['session Back/Forward','new-session Back/Forward','reload selected session and new view','leave page and return selected session','no submission replay']}));
+ }
+ for(const width of [1440,390]){
+  const {page,controls}=await fixture();const held=gate('catalog');controls.holdCatalog=held;
+  await page.setViewportSize({width,height:width===1440?1000:844});await page.goto(base);await page.locator('.session-header-title button').waitFor();
+  if(width===390)await page.getByRole('button',{name:'打开导航',exact:true}).click();
+  await page.getByRole('button',{name:'会话操作: 会话A',exact:true}).click();await page.getByRole('menuitem',{name:'创建分支',exact:true}).click();
+  await page.locator('.session-header-title button').filter({hasText:'会话C'}).waitFor();await held.seen.promise;
+  try{
+   await page.goBack();await page.locator('.session-header-title button').filter({hasText:'会话A'}).waitFor();
+   await page.goForward();await settle(page);
+   assert.equal(await page.locator('.session-header-title button').count(),1,'a confirmed fork must remain in history while catalog refresh is pending');
+   await page.locator('.session-header-title button').filter({hasText:'会话C'}).waitFor();
+   assert.equal(new URL(page.url()).hash.includes('session=C'),true);assert.equal(controls.forks,1);assert.equal(controls.submissions.length,0);
+  }finally{held.release.resolve();await held.done.promise;}
+  await page.close();console.log(JSON.stringify({browserHistoryPendingCatalog:'passed',width,forkRequests:controls.forks}));
+ }
+ {
+  const {page,controls}=await fixture();const old=gate('old-catalog'),latest=gate('new-catalog');controls.catalogGates=[old,latest];
+  await page.goto(base);await page.locator('.session-header-title button').waitFor();
+  await page.getByRole('button',{name:'会话操作: 会话A',exact:true}).click();page.once('dialog',dialog=>dialog.accept('会话A renamed'));
+  await page.getByRole('menuitem',{name:'重命名',exact:true}).click();await old.seen.promise;
+  await page.getByRole('button',{name:'会话操作: 会话A',exact:true}).click();await page.getByRole('menuitem',{name:'创建分支',exact:true}).click();
+  await page.locator('.session-header-title button').filter({hasText:'会话C'}).waitFor();await latest.seen.promise;
+  try{
+   old.release.resolve();await old.done.promise;await settle(page);
+   await page.goBack();await page.locator('.session-header-title button').filter({hasText:'会话A'}).waitFor();
+   await page.goForward();await settle(page);
+   assert.equal(await page.locator('.session-header-title button').count(),1,'a stale catalog response must not erase a confirmed session history entry');
+   await page.locator('.session-header-title button').filter({hasText:'会话C'}).waitFor();assert.equal(controls.forks,1);assert.equal(controls.submissions.length,0);
+  }finally{old.release.resolve();latest.release.resolve();await Promise.all([old.done.promise,latest.done.promise]);}
+  await page.close();console.log(JSON.stringify({browserHistoryStaleCatalog:'passed',width:1440,forkRequests:controls.forks}));
  }
  assert.deepEqual(errors,[]);console.log(JSON.stringify({pageErrors:errors}));
 }finally{await browser.close();}

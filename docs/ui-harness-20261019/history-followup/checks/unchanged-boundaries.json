@@ -1,0 +1,19 @@
+{
+  "previous_candidate": "4838bb2c1c7810eb83798baba733d7335cebbf2c",
+  "paths": [
+    "apps/web-host",
+    "src",
+    "maintenance",
+    "agent.edn",
+    "apps/web/src/api.ts",
+    "apps/web/src/projection.ts",
+    "apps/web/src/request-scope.ts",
+    "package.json",
+    "package-lock.json"
+  ],
+  "diff_from_previous_candidate": [],
+  "test_isolation": "byte-identical to initial delivery",
+  "bin_ps_permission": "unchanged; no retry with expanded permission",
+  "controller_receipt": "not-issued",
+  "container_image": "not-verified"
+}

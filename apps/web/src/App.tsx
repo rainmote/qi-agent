@@ -24,6 +24,27 @@ type Theme = "dark" | "light" | "system";
 type ConversationView = "chat" | "trajectory";
 type CommandResult = { output?: unknown; error?: string; ui?: string };
 type AgentPresetId = string;
+type NavigationMode = "push" | "replace" | "restore";
+
+function writeNavigation(workspaceId: string | null, sessionId: string | null, mode: NavigationMode) {
+  if (!workspaceId || mode === "restore") return;
+  const url = new URL(window.location.href);
+  const route = new URLSearchParams({ workspace: workspaceId });
+  if (sessionId) route.set("session", sessionId);
+  url.hash = route.toString();
+  if (url.href !== window.location.href) window.history[mode === "push" ? "pushState" : "replaceState"](null, "", url);
+}
+
+function readNavigation(data: Bootstrap) {
+  const route = new URLSearchParams(window.location.hash.slice(1));
+  const requestedWorkspace = route.get("workspace");
+  const workspaceId = data.workspaces.find(workspace => workspace.id === requestedWorkspace)?.id || data.activeWorkspaceId;
+  const sessions = data.catalogs.find(catalog => catalog.workspaceId === workspaceId)?.sessions || [];
+  const requestedSession = route.get("session");
+  const explicit = route.has("workspace") || route.has("session");
+  const session = explicit ? sessions.find(session => session.id === requestedSession) : sessions[0];
+  return { workspaceId, session, missing: Boolean((requestedWorkspace && requestedWorkspace !== workspaceId) || (requestedSession && !session)) };
+}
 
 function phaseLabel(phase: string) {
   return ({ idle: "就绪", model: "模型响应", tool: "执行工具", retry: "正在重试", compacting: "整理上下文" } as Record<string, string>)[phase] || phase;
@@ -141,6 +162,11 @@ export function App() {
   const [viewRevision, setViewRevision] = useState(0);
   const viewScope = useRef(new RequestScope());
   const navigationScope = useRef(new RequestScope());
+  const catalogScopes = useRef(new Map<string, RequestScope>());
+  const catalogScope = useCallback((id: string) => {
+    if (!catalogScopes.current.has(id)) catalogScopes.current.set(id, new RequestScope());
+    return catalogScopes.current.get(id)!;
+  }, []);
   const modelScope = useRef(new RequestScope());
   const policyScope = useRef(new RequestScope());
   const captureOperation = () => {
@@ -287,7 +313,7 @@ export function App() {
     trust.setStatus(snapshot.trust || null);
   }, []);
 
-  const acceptOpen = useCallback((session: SessionSummary, snapshot: SessionSnapshot, eventCursor?: string) => {
+  const acceptOpen = useCallback((session: SessionSummary, snapshot: SessionSnapshot, eventCursor?: string, navigation: NavigationMode = "push") => {
     trust.reset(); stopInFlight.current = false; setStopping(false); setStopRequestPending(false); setStopError(null);
     openingCursor.current = eventCursor;
     setPendingOperation(api.pendingOperation(session.id));
@@ -305,17 +331,30 @@ export function App() {
     setSessionMenu(null);
     setNotice(null);
     setConversationView("chat");
+    // A confirmed create/fork must be restorable before the slower catalog
+    // refresh returns. Only register it inside an already allowed workspace.
+    catalogScope(session.workspaceId).advance();
+    setBootstrap(current => {
+      if (!current?.workspaces.some(workspace => workspace.id === session.workspaceId)) return current;
+      const catalog = current.catalogs.find(catalog => catalog.workspaceId === session.workspaceId);
+      const nextCatalog = { workspaceId: session.workspaceId, sessions: catalog?.sessions.some(entry => entry.id === session.id)
+        ? catalog.sessions.map(entry => entry.id === session.id ? session : entry)
+        : [session, ...(catalog?.sessions || [])] };
+      return { ...current, catalogs: catalog ? current.catalogs.map(entry => entry === catalog ? nextCatalog : entry)
+        : [...current.catalogs, nextCatalog] };
+    });
+    writeNavigation(session.workspaceId, session.id, navigation);
     const current = viewScope.current.capture();
     void loadRuntime(session.id).catch((error) => { if (current()) showError(error); });
-  }, [acceptSnapshot, loadRuntime, showError]);
+  }, [acceptSnapshot, loadRuntime, showError, catalogScope]);
 
-  const openSession = useCallback(async (session: SessionSummary) => {
+  const openSession = useCallback(async (session: SessionSummary, navigation: NavigationMode = "push") => {
     const current = navigationScope.current.advance();
     trust.reset();
     setBusy(true);
     try {
       const opened = await api.openSession(session.id);
-      if (current()) acceptOpen(opened.session, opened.snapshot, opened.eventCursor);
+      if (current()) acceptOpen(opened.session, opened.snapshot, opened.eventCursor, navigation);
     } catch (error) { if (current()) showError(error); }
     finally { if (current()) setBusy(false); }
   }, [acceptOpen, showError]);
@@ -330,11 +369,13 @@ export function App() {
       setBootstrap(data);
       setPresets(available);
       setPendingPreset(initialPreset);
-      setWorkspaceId(data.activeWorkspaceId);
-      const first = data.catalogs.find((entry) => entry.workspaceId === data.activeWorkspaceId)?.sessions[0];
-      if (first) void openSession(first);
+      const route = readNavigation(data);
+      setWorkspaceId(route.workspaceId);
+      if (route.session) void openSession(route.session, "replace");
+      else writeNavigation(route.workspaceId, null, "replace");
+      if (route.missing) flashNotice("历史位置中的会话或工作区已不可用，请重新选择。", 8_000);
     }).catch(showError);
-  }, [loadRuntime, openSession, showError]);
+  }, [loadRuntime, openSession, showError, flashNotice]);
 
   useEffect(() => {
     if (!activeSession) { setConnected(false); return; }
@@ -376,12 +417,15 @@ export function App() {
 
   const refreshCatalog = useCallback(async (targetWorkspace = workspaceId) => {
     if (!targetWorkspace) return;
+    const current = catalogScope(targetWorkspace).advance();
     const next = await api.listSessions(targetWorkspace);
-    setBootstrap((current) => current ? { ...current, catalogs: current.catalogs.map((catalog) =>
-      catalog.workspaceId === targetWorkspace ? { ...catalog, sessions: next } : catalog) } : current);
-  }, [workspaceId]);
+    if (!current()) return;
+    setBootstrap((data) => current() && data?.workspaces.some(workspace => workspace.id === targetWorkspace)
+      ? { ...data, catalogs: data.catalogs.map((catalog) =>
+        catalog.workspaceId === targetWorkspace ? { ...catalog, sessions: next } : catalog) } : data);
+  }, [workspaceId, catalogScope]);
 
-  const startNewSession = () => {
+  const resetSessionView = useCallback((targetWorkspace: string | null, navigation: NavigationMode = "push") => {
     trust.reset(); stopInFlight.current = false; setStopping(false); setStopRequestPending(false); setStopError(null);
     navigationScope.current.advance();
     const current = viewScope.current.advance();
@@ -393,6 +437,8 @@ export function App() {
     activeSessionId.current = null;
     setPendingOperation(null); setOperationMissing(false);
     setActiveSession(null); setDraftSession(null); setProjection(null); setConnected(false); setSubagents(null); setContextStatus(null);
+    setWorkspaceId(targetWorkspace);
+    writeNavigation(targetWorkspace, null, navigation);
     setComposer(""); setAttachments([]); setWorkbench(null); setCommandIndex(0); setDetailsOpen(false); setMobileSidebar(false); setConversationView("chat");
     const modelCurrent = modelScope.current.capture();
     const policyCurrent = policyScope.current.capture();
@@ -413,7 +459,21 @@ export function App() {
         if (policyCurrent()) { setPolicy(nextPolicy); setPendingPolicy(nextPolicy.mode); }
       }).catch((error) => { if (current()) showError(error); });
     }
-  };
+  }, [models, policy, presets, activeSession, showError]);
+  const startNewSession = () => resetSessionView(workspaceId);
+
+  useEffect(() => {
+    if (!bootstrap) return;
+    const restore = () => {
+      const route = readNavigation(bootstrap);
+      setSettingsOpen(false); setWorkspaceDialogOpen(false);
+      if (route.session) void openSession(route.session, "restore");
+      else resetSessionView(route.workspaceId, route.missing ? "replace" : "restore");
+      if (route.missing) flashNotice("历史位置中的会话或工作区已不可用，请重新选择。", 8_000);
+    };
+    window.addEventListener("popstate", restore);
+    return () => window.removeEventListener("popstate", restore);
+  }, [bootstrap, openSession, resetSessionView, flashNotice]);
 
   const startCreatorDraft = () => {
     const creator = creatorDraftPresetId(presets);
@@ -705,7 +765,7 @@ export function App() {
   const addWorkspace = async (path: string) => {
     const workspace = await api.addWorkspace(path);
     const data = await api.bootstrap();
-    setBootstrap(data); setWorkspaceId(workspace.id); startNewSession();
+    setBootstrap(data); resetSessionView(workspace.id);
     setPendingPreset(pendingPreset);
     setWorkspaceDialogOpen(false);
     flashNotice(`已添加并切换到工作区“${workspace.name}”`);
@@ -726,7 +786,7 @@ export function App() {
     await api.removeWorkspace(workspace.id);
     const data = await api.bootstrap();
     setBootstrap(data);
-    if (workspace.id === workspaceId) { setWorkspaceId(data.activeWorkspaceId); startNewSession(); }
+    if (workspace.id === workspaceId) resetSessionView(data.activeWorkspaceId);
   };
 
   const activeWorkspace = bootstrap?.workspaces.find((entry) => entry.id === workspaceId);
@@ -914,7 +974,7 @@ export function App() {
         </div></div>
         <div className="sidebar-workspace">
           <label className="workspace-select"><Icon name="folder" /><select value={workspaceId || ""} aria-label="工作区"
-            onChange={(event) => { setWorkspaceId(event.target.value); startNewSession(); }}>
+            onChange={(event) => resetSessionView(event.target.value)}>
             {bootstrap?.workspaces.map((workspace) => <option value={workspace.id} key={workspace.id}>{workspace.name}</option>)}</select></label>
         </div>
         {searchOpen && <input className="session-search" value={search} onChange={(event) => setSearch(event.target.value)}
@@ -956,7 +1016,7 @@ export function App() {
           <div className="draft-workbench">
             <div className="draft-context">
               <WorkspaceSelector workspaces={bootstrap?.workspaces || []} value={workspaceId || ""}
-                onChange={id => { startNewSession(); setWorkspaceId(id); }} onAdd={() => setWorkspaceDialogOpen(true)} />
+                onChange={id => resetSessionView(id)} onAdd={() => setWorkspaceDialogOpen(true)} />
               <label className="draft-preset"><Icon name="bot" />
                 <PresetSelector presets={presets} value={pendingPreset} onChange={setPendingPreset} /><Icon name="chevron" />
               </label>

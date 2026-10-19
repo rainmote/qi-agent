@@ -1,0 +1,63 @@
+{
+  "browser": "Chrome (Playwright channel chrome), new isolated contexts",
+  "api": "deterministic offline fixture",
+  "records": [
+    {
+      "browserHistory": "passed",
+      "width": 1440,
+      "cases": [
+        "session Back/Forward",
+        "new-session Back/Forward",
+        "reload selected session and new view",
+        "leave page and return selected session",
+        "no submission replay"
+      ]
+    },
+    {
+      "browserHistory": "passed",
+      "width": 390,
+      "cases": [
+        "session Back/Forward",
+        "new-session Back/Forward",
+        "reload selected session and new view",
+        "leave page and return selected session",
+        "no submission replay"
+      ]
+    },
+    {
+      "browserHistoryPendingCatalog": "passed",
+      "width": 1440,
+      "forkRequests": 1
+    },
+    {
+      "browserHistoryPendingCatalog": "passed",
+      "width": 390,
+      "forkRequests": 1
+    },
+    {
+      "browserHistoryStaleCatalog": "passed",
+      "width": 1440,
+      "forkRequests": 1
+    },
+    {
+      "pageErrors": []
+    }
+  ],
+  "screenshots": [
+    {
+      "path": "history/browser-history-return-1440.png",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      }
+    },
+    {
+      "path": "history/browser-history-return-390.png",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      }
+    }
+  ],
+  "scope": "1440/390 history scenarios; stale catalog overwrite additionally at1440. Not exhaustive browser coverage."
+}

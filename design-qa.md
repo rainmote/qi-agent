@@ -2,6 +2,8 @@
 
 参考固定为 `deepseek-ai/deepseek-harness@687f282e8625c6b8d11ff58211a90524be2e4317`；实现基线为 qi-agent `d3173b5f01b86565bf300d54b7b24ea9d14d6060`。完整说明见 [对照报告](docs/webui-harness-comparison.md)。
 
+后续历史导航补测及最小修复：[范围与结果](docs/ui-harness-20261019/history-followup/README.md)、[当前源码指纹](docs/ui-harness-20261019/history-followup/tested-ui-source.json)。初次证据及下方基线历史记录保留；“浏览器回归通过”仅限现有 Chrome 脚本实际覆盖的场景。
+
 ## 证据
 
 官方真实构建使用随仓 scaffold 和录制历史；候选/基线使用相同确定性 API fixture。独立真实后端 E2E 使用隔离 Host、daemon、Worker 与离线 provider。未用截图替换可交互组件。
@@ -28,7 +30,7 @@
 
 设计 QA 的已验证页面范围通过；最终只读代码复核范围内无已知 P1/P2。差异保留并记录：qì 品牌、快捷开始、业务设置、手机抽屉；没有声称整个官方产品逐像素一致。
 
-官方真实模型的流式/审批/子任务交互未实测；物理手机键盘与安全区、Electron、浏览器历史按钮未验证。广义 Host 测试仍有 3 项隔离环境失败，冻结基线相同；设计 QA 通过不等于完整维护控制器验收 PASS 或发布批准。
+官方真实模型的流式/审批/子任务交互未实测；物理手机键盘与安全区、Electron及其他浏览器未验证。历史按钮已补测桌面/移动基本路径和目录挂起，旧目录覆盖仅桌面验证，详见后续报告。广义 Host 测试仍有 3 项隔离环境失败，冻结基线相同；设计 QA 通过不等于完整维护控制器验收 PASS 或发布批准。
 
 final result: passed（仅本轮已验证的设计范围；完整维护验收仍受上述阻碍）
 

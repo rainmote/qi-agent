@@ -1,0 +1,39 @@
+
+> @rainmote/qi-agent-web@0.1.0 test:web-browser:ci
+> node apps/web/tests/production-browser.mjs
+
+  ➜  Local:   http://127.0.0.1:4179/
+{"nativeOutcomesAndCompactionProgress":"passed","cases":["four outcomes","live and durable deduplication","reload","375px","steer receipt","progress closes"]}
+{"submissionRecovery":"passed","cases":["response lost","page reload","completed without resend","not found retry with original identity","snapshot cursor handoff"]}
+{"sessionRaces":"passed","cases":["late snapshot","leave and return","reversed opens","late permissions","same-session SSE reconnect","draft choices survive late defaults"]}
+{"computerScreenshotPreview":"passed","cases":["streamed output","embedded raster only","bounded thumbnail","original size scroll preview","320px viewport","tool message deduplication"]}
+{"trajectoryEvents":2000,"mountedRows":32,"overviewButtons":236,"tabSwitchMs":67,"searchJumpCollapseAndNarrowWidths":"passed"}
+{"trajectoryEvents":8000,"mountedRows":32,"overviewButtons":240,"tabSwitchMs":58,"searchJumpCollapseAndNarrowWidths":"passed"}
+{"providerPartialFailureAndRetry":"passed","configurationWrites":1}
+{"workspaceTools":"passed","cases":["sandbox HTML","text diff","1440/768/414/375/320px","attachment IDs only","actual selected reference payload","definitive failure restores draft","unknown then failed restores after reload"]}
+{"compactNavigation":"passed","cases":["desktop collapse persists","phone drawer restores sessions","vertical session list","session switch","new session","quick start draft"]}
+{"composerSelection":"passed","cases":["search and empty state","IME guard","keyboard selection and focus return","1440/768/414/375/320 bounds","outside focus closes"]}
+{"compactToolGroups":"passed","cases":["collapsed summary","failure stays visible","stopped call is unconfirmed","independent details","expansion retained","320px viewport"]}
+{"harnessPresentation":"passed","cases":["settled process and reasoning","verbose tools","no mutation","persisted mode","subtask result","768/390/320 session access","modal focus return","settings labels fit"]}
+{"detailedSettlementFocus":"passed"}
+{"composerResize":"passed"}
+{"browserHistory":"passed","width":1440,"cases":["session Back/Forward","new-session Back/Forward","reload selected session and new view","leave page and return selected session","no submission replay"]}
+{"browserHistory":"passed","width":390,"cases":["session Back/Forward","new-session Back/Forward","reload selected session and new view","leave page and return selected session","no submission replay"]}
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: a confirmed fork must remain in history while catalog refresh is pending
+
+0 !== 1
+
+    at file:///Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/tests/browser-regressions.mjs:459:11 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: 0,
+  expected: 1,
+  operator: 'strictEqual',
+  diff: 'simple'
+}
+
+Node.js v26.9.0
