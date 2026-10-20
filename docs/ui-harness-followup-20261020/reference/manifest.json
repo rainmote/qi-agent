@@ -1,0 +1,207 @@
+{
+  "sha": "687f282e8625c6b8d11ff58211a90524be2e4317",
+  "assembly": "shipped web + isolated scaffold + recorded fixture, zero model calls",
+  "browser": "155.0.8059.85",
+  "locale": "zh-CN",
+  "timezone": "UTC",
+  "dpr": 1,
+  "evidence": [
+    {
+      "name": "conversation-light-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      }
+    },
+    {
+      "name": "process-open-light-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      }
+    },
+    {
+      "name": "reasoning-open-light-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      }
+    },
+    {
+      "name": "reasoning-body-open-light-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      }
+    },
+    {
+      "name": "tools-open-light-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      }
+    },
+    {
+      "name": "permission-menu-light-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      }
+    },
+    {
+      "name": "model-menu-light-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      }
+    },
+    {
+      "name": "model-options-light-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      }
+    },
+    {
+      "name": "account-menu-light-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      }
+    },
+    {
+      "name": "settings-light-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      }
+    },
+    {
+      "name": "settings-transcript-menu-light-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      }
+    },
+    {
+      "name": "settings-collapse-menu-light-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      }
+    },
+    {
+      "name": "settings-dark-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      }
+    },
+    {
+      "name": "process-open-dark-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      }
+    },
+    {
+      "name": "new-session-dark-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      }
+    },
+    {
+      "name": "new-session-light-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      }
+    },
+    {
+      "name": "preset-menu-light-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      }
+    },
+    {
+      "name": "workspace-menu-light-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      }
+    },
+    {
+      "name": "new-session-light-1024",
+      "viewport": {
+        "width": 1024,
+        "height": 844
+      }
+    },
+    {
+      "name": "new-session-light-768",
+      "viewport": {
+        "width": 768,
+        "height": 844
+      }
+    },
+    {
+      "name": "new-session-light-390",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    {
+      "name": "model-options-light-390",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    {
+      "name": "new-session-light-320",
+      "viewport": {
+        "width": 320,
+        "height": 844
+      }
+    },
+    {
+      "name": "model-options-light-320",
+      "viewport": {
+        "width": 320,
+        "height": 844
+      }
+    },
+    {
+      "name": "preset-menu-light-320",
+      "viewport": {
+        "width": 320,
+        "height": 844
+      }
+    },
+    {
+      "name": "settings-light-390",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    {
+      "name": "settings-dark-390",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    {
+      "name": "new-session-dark-390",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      }
+    }
+  ],
+  "errors": []
+}

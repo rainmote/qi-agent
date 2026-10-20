@@ -2,11 +2,12 @@ import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 
 import { createPortal } from "react-dom";
 import { api } from "./api";
 import { Icon } from "./icons";
-import { PermissionControl, SettingsLanguageControl } from "./ComposerControls";
+import { PermissionControl, SettingsLanguageControl, useComposerPopover } from "./ComposerControls";
+import { MenuSurface } from "./MenuSurface";
 import type { PolicyStatus } from "./types";
 import { ProviderSettingsPanel } from "./ProviderSettingsPanel";
 import type { Interaction, ProjectTrust, RuntimeStatus, Workspace } from "./types";
-import { transcriptViews, type TranscriptView } from "./transcript-display";
+import { collapseTimings, transcriptViews, type CollapseTiming, type TranscriptView } from "./transcript-display";
 
 function DialogFrame({ title, children, onClose, className = "", dangerous = false }: {
   title: string; children: ReactNode; onClose?: () => void; className?: string; dangerous?: boolean;
@@ -163,7 +164,7 @@ export function WorkspaceDialog({ initialPath, onClose, onSelect }: {
   </DialogFrame>;
 }
 
-type SettingsTab = "general" | "models" | "plugins" | "tools";
+type SettingsTab = "general" | "models" | "plugins" | "tools" | "workspaces";
 
 function ContentFontControl() {
   const [size, setSize] = useState(() => {
@@ -196,33 +197,55 @@ function ContentFontControl() {
   </div>;
 }
 
-export function SettingsDialog({ workspaces, runtime, theme, onThemeChange, onClose, view, onViewChange,
+function SettingsPreferenceControl<T extends string>({ label, value, options, onChange }: {
+  label: string; value: T; options: Array<{ id: T; label: string }>; onChange: (value: T) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const popover = useComposerPopover(open, () => setOpen(false), true, "below", true);
+  return <div className="settings-preference-control" ref={popover.root} onKeyDown={popover.onKeyDown}>
+    <button ref={popover.trigger} type="button" className="settings-preference-trigger" aria-label={label}
+      aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(value => !value)}>
+      {options.find(item => item.id === value)?.label}<Icon name="chevronDown" />
+    </button>
+    {open && <MenuSurface ref={popover.panel} className="composer-popover settings-preference-menu" role="menu" aria-label={`${label}选项`}>
+      {options.map(item => <button type="button" key={item.id} role="menuitemradio" aria-checked={item.id === value}
+        onClick={() => { popover.dismiss(); onChange(item.id); }}><span>{item.label}</span>{item.id === value && <Icon name="check" />}</button>)}
+    </MenuSurface>}
+  </div>;
+}
+
+export function SettingsDialog({ workspaces, runtime, theme, onThemeChange, onClose, view, onViewChange, collapseTiming, onCollapseTimingChange,
   onAddWorkspace, onRemoveWorkspace, onProvidersChanged, policy, onPolicyChange }: {
   workspaces: Workspace[]; runtime: RuntimeStatus | null;
   policy?: PolicyStatus | null; onPolicyChange?: (mode: PolicyStatus["mode"]) => void;
   theme: "dark" | "light" | "system"; onThemeChange: (theme: "dark" | "light" | "system") => void;
   view: TranscriptView; onViewChange: (view: TranscriptView) => void;
+  collapseTiming: CollapseTiming; onCollapseTimingChange: (timing: CollapseTiming) => void;
   onClose: () => void; onAddWorkspace: () => void;
   onRemoveWorkspace?: (workspace: Workspace) => Promise<void>;
   onProvidersChanged?: () => Promise<void> | void;
 }) {
   const [tab, setTab] = useState<SettingsTab>("general");
-  const tabs: Array<{ id: SettingsTab; label: string; icon: "settingsGeneral" | "settingsModels" | "settingsPlugins" | "terminal" }> = [
+  const tabs: Array<{ id: SettingsTab; label: string; icon: "settingsGeneral" | "settingsModels" | "settingsPlugins" | "terminal" | "folderClosed" }> = [
     { id: "general", label: "通用设置", icon: "settingsGeneral" },
     { id: "models", label: "模型", icon: "settingsModels" },
     { id: "plugins", label: "插件", icon: "settingsPlugins" },
     { id: "tools", label: "工具", icon: "terminal" },
+    { id: "workspaces", label: "工作区", icon: "folderClosed" },
   ];
   return <DialogFrame title="设置" onClose={onClose} className="settings-dialog">
     <div className="settings-layout">
-      <button type="button" className="icon-button settings-close" aria-label="关闭设置" onClick={onClose}>
-        <Icon name="x" />
-      </button>
       <nav aria-label="设置分区">
         <div className="settings-brand"><strong>设置</strong></div>
         {tabs.map((entry) => <button type="button" key={entry.id} className={tab === entry.id ? "active" : ""}
           onClick={() => setTab(entry.id)}><Icon name={entry.icon} />{entry.label}</button>)}
       </nav>
+      <div className="settings-main">
+      <div className="settings-header">
+        <button type="button" className="icon-button settings-close" aria-label="关闭设置" onClick={onClose}>
+          <Icon name="x" />
+        </button>
+      </div>
       <div className="settings-content">
         {tab === "general" && <>
           <section className="settings-option-row"><div><h3>权限</h3><p>选择此会话的访问权限模式</p></div>
@@ -240,11 +263,14 @@ export function SettingsDialog({ workspaces, runtime, theme, onThemeChange, onCl
           <section className="settings-option-row"><div><h3>字号大小</h3><p>仅影响会话内容的字号</p></div>
             <ContentFontControl />
           </section>
-          <section className="settings-option-row"><div><h3>工作步骤展示</h3><p>选择希望看到多少工具调用细节</p></div>
-            <select aria-label="工作步骤展示" value={view} onChange={event => onViewChange(event.target.value as TranscriptView)}>
-              {transcriptViews.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
-            </select>
+          <section className="settings-option-row settings-preference-row"><div><h3>工作步骤展示</h3><p>选择希望看到多少工具调用细节</p></div>
+            <SettingsPreferenceControl label="工作步骤展示" value={view} options={transcriptViews} onChange={onViewChange} />
           </section>
+          <section className="settings-option-row settings-preference-row"><div><h3>工作步骤收起时机</h3><p>选择何时自动收起工作步骤</p></div>
+            <SettingsPreferenceControl label="工作步骤收起时机" value={collapseTiming} options={collapseTimings} onChange={onCollapseTimingChange} />
+          </section>
+        </>}
+        {tab === "workspaces" && <>
           <section><div className="section-title-row"><div><h3>工作区</h3><p>管理 Web UI 可以访问的本机目录。</p></div>
             <button type="button" className="button secondary compact-button" onClick={onAddWorkspace}><Icon name="plus" />添加</button></div>
             <div className="workspace-list">{workspaces.map((workspace) => <div className="workspace-row" key={workspace.id}>
@@ -265,6 +291,7 @@ export function SettingsDialog({ workspaces, runtime, theme, onThemeChange, onCl
             <Icon name="terminal" /><div><strong>{tool.name}</strong><span>{tool.description}</span></div>
           </div>)}</div>
         </section>}
+      </div>
       </div>
     </div>
   </DialogFrame>;

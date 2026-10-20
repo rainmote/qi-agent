@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { uncertainOperation, type PendingOperation, api, type Bootstrap } from "./api";
 import { RequestScope } from "./request-scope";
 import { BrandMark } from "./BrandMark";
+import { version as webVersion } from "../../../package.json";
 import { useComposerPopover, SidebarMenu, ComposerTools, SessionActions, ContextMeter, ModelControl, PermissionControl } from "./ComposerControls";
 import { useProjectTrust } from "./ProjectTrust";
 import { ApprovalPanel, FullAccessDialog, SettingsDialog, WorkspaceDialog } from "./Dialogs";
@@ -11,7 +12,7 @@ import { applyHostEvent, fromSnapshot, type Projection } from "./projection";
 import { Timeline } from "./Timeline";
 import { RunOverview } from "./RunOverview";
 import { SubagentMenu, SubagentPanel } from "./SubagentPanel";
-import { transcriptView, type TranscriptView } from "./transcript-display";
+import { collapseTiming, transcriptView, type CollapseTiming, type TranscriptView } from "./transcript-display";
 import { Trajectory } from "./Trajectory";
 import { WorkspacePanel } from "./WorkspacePanel";
 import { ComposerAttachments, ComposerReferences, type AttachmentRef } from "./ComposerAttachments";
@@ -26,6 +27,13 @@ type ConversationView = "chat" | "trajectory";
 type CommandResult = { output?: unknown; error?: string; ui?: string };
 type AgentPresetId = string;
 type NavigationMode = "push" | "replace" | "restore";
+
+function workbenchControls(panel: HTMLElement): HTMLElement[] {
+  return [...panel.querySelectorAll<HTMLElement>("button, input, select, textarea, a[href], summary, iframe, [tabindex]")]
+    .filter(element => element.tabIndex >= 0 && !element.matches(":disabled")
+      && !element.closest("[inert], [data-focus-boundary]") && element.getClientRects().length > 0
+      && getComputedStyle(element).visibility !== "hidden");
+}
 
 function writeNavigation(workspaceId: string | null, sessionId: string | null, mode: NavigationMode) {
   if (!workspaceId || mode === "restore") return;
@@ -152,15 +160,17 @@ export function WorkspaceSelector({ workspaces, value, onChange, onAdd }: {
 
 function Brand({ collapsed = false }: { collapsed?: boolean }) {
   return <div className="brand-identity" aria-label="器，qì agent" title="器以载道">
-    <BrandMark size={collapsed ? 24 : 23} />{!collapsed && <>
-    <strong>qì</strong><span>agent</span>
-  </>}</div>;
+    <BrandMark size={24} />{!collapsed && <div className="brand-copy">
+      <strong>qì agent</strong><span>Web {webVersion}</span>
+    </div>}</div>;
 }
 
 export function App() {
   const started = useRef(false);
   const sidebarElement = useRef<HTMLElement>(null);
   const mainElement = useRef<HTMLElement>(null);
+  const workbenchElement = useRef<HTMLElement>(null);
+  const workbenchReturnFocus = useRef<HTMLElement | null>(null);
   const timeline = useRef<HTMLDivElement>(null);
   const composerInput = useRef<HTMLTextAreaElement>(null);
   const attachmentInput = useRef<HTMLInputElement>(null);
@@ -208,6 +218,7 @@ export function App() {
   const [attachments, setAttachments] = useState<AttachmentRef[]>([]);
   const [uploading, setUploading] = useState(false);
   const [workbench, setWorkbench] = useState<"files" | "automation" | "plugins" | "orchestration" | null>(null);
+  const [workbenchModal, setWorkbenchModal] = useState(false);
   const [pluginSlots, setPluginSlots] = useState<PluginSlot[]>([]);
   const [commandIndex, setCommandIndex] = useState(0);
   const [pendingModel, setPendingModel] = useState<string | null>(null);
@@ -232,10 +243,46 @@ export function App() {
       if (opener?.isConnected) opener.focus();
     };
   }, [mobileSidebar]);
+  useEffect(() => {
+    if (!workbench || !workspaceId || !workbenchElement.current) return;
+    const panel = workbenchElement.current;
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    workbenchReturnFocus.current = opener;
+    const main = mainElement.current, sidebar = sidebarElement.current;
+    const wasMainInert = main?.inert ?? false, wasSidebarInert = sidebar?.inert ?? false;
+    const width = window.matchMedia("(max-width: 600px)");
+    const focusFirst = () => workbenchControls(panel)[0]?.focus();
+    const keepFocus = () => {
+      if (!width.matches || !panel.isConnected || panel.closest("[inert]")) return;
+      const active = document.activeElement;
+      if (!panel.contains(active) && !active?.closest('[role="menu"], [role="listbox"], [role="dialog"][aria-modal="true"]')) focusFirst();
+    };
+    const resize = () => {
+      setWorkbenchModal(width.matches);
+      if (main) main.inert = width.matches || wasMainInert;
+      if (sidebar) sidebar.inert = width.matches || wasSidebarInert;
+    };
+    resize(); width.addEventListener("change", resize);
+    focusFirst();
+    // Async listings can disable or remove the focused control between key presses.
+    const changes = new MutationObserver(keepFocus);
+    changes.observe(panel, { childList: true, subtree: true, attributes: true, attributeFilter: ["disabled", "hidden"] });
+    document.addEventListener("focusin", keepFocus);
+    return () => {
+      changes.disconnect(); document.removeEventListener("focusin", keepFocus);
+      width.removeEventListener("change", resize);
+      if (main) main.inert = wasMainInert;
+      if (sidebar) sidebar.inert = wasSidebarInert;
+      const target = workbenchReturnFocus.current;
+      workbenchReturnFocus.current = null;
+      if (target?.isConnected && !target.closest("[inert]")) target.focus();
+    };
+  }, [workbench, workspaceId]);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [returnToSettings, setReturnToSettings] = useState(false);
   const [stepsView, setStepsView] = useState<TranscriptView>(() => transcriptView(localStorage.getItem("qi-agent.transcript-view")));
+  const [stepsCollapseTiming, setStepsCollapseTiming] = useState<CollapseTiming>(() => collapseTiming(localStorage.getItem("qi-agent.collapse-timing")));
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
   const [fullAccessDialogOpen, setFullAccessDialogOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -1065,6 +1112,9 @@ export function App() {
     <main ref={mainElement} className="main-panel">
       {!activeSession ? <section className="new-session-view">
         <button className="mobile-nav-button" type="button" onClick={() => setMobileSidebar(true)} aria-label="打开导航"><BrandMark size={24} /></button>
+        {workspaceId && <button type="button" className={`header-action draft-files-trigger ${workbench === "files" ? "active" : ""}`}
+          aria-label="文件与变更" title="文件与变更" aria-expanded={workbench === "files"}
+          onClick={() => setWorkbench(value => value === "files" ? null : "files")}><Icon name="panel" /></button>}
         <div className="new-session-center">
           <div className="welcome-copy">
             <BrandMark size={34} /><div className="welcome-title-group"><h1>探索未至之境</h1><span className="preview-badge">预览版</span></div>
@@ -1106,7 +1156,7 @@ export function App() {
           calls={projection?.summary.calls ?? 0} waitingCount={projection?.interactions.length ?? 0}
           context={contextStatus} />}
         <div className={`timeline ${conversationView === "trajectory" ? "trajectory-mode" : ""}`} ref={timeline} tabIndex={0} aria-label="会话内容">
-          {conversationView === "chat" && projection && <Timeline key={activeSession.id} projection={projection} scrollRef={timeline} pluginSlots={pluginSlots} view={stepsView} />}
+          {conversationView === "chat" && projection && <Timeline key={activeSession.id} projection={projection} scrollRef={timeline} pluginSlots={pluginSlots} view={stepsView} collapseTiming={stepsCollapseTiming} />}
           {conversationView === "trajectory" && <Trajectory key={activeSession.id} events={projection?.events || []} />}
         </div>
         <div className="composer-wrap">{composerNode}<div className="session-run-summary">{runSummary}</div></div>
@@ -1129,7 +1179,19 @@ export function App() {
         <span><strong>{runtime?.plugins.length ?? "—"}</strong>插件</span></div></section>
     </aside>}
 
-    {workbench && workspaceId && <section className="workbench-drawer" aria-label="工作台" onKeyDown={event => { if (event.key === "Escape") setWorkbench(null); }}>
+    {workbench && workspaceId && <section ref={workbenchElement} className="workbench-drawer" aria-label="工作台"
+      role={workbenchModal ? "dialog" : undefined} aria-modal={workbenchModal || undefined} onKeyDown={event => {
+        if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setWorkbench(null); }
+        if (event.key === "Tab") {
+          const controls = workbenchControls(event.currentTarget);
+          const index = controls.indexOf(document.activeElement as HTMLElement);
+          const next = controls[index + (event.shiftKey ? -1 : 1)];
+          // Chromium skips otherwise static iframe documents in native Tab traversal.
+          if (index >= 0 && next instanceof HTMLIFrameElement) { event.preventDefault(); next.focus(); }
+        }
+      }}>
+      <span tabIndex={workbenchModal ? 0 : -1} data-focus-boundary="start" className="workbench-focus-boundary"
+        onFocus={() => { if (workbenchElement.current) workbenchControls(workbenchElement.current).at(-1)?.focus(); }} />
       <div className="workbench-content">{workbench === "files" ? <WorkspacePanel key={activeSession?.id || workspaceId} workspaceId={workspaceId} sessionId={activeSession?.id} api={api.workspaceFiles}
         responseDetail={([...projection?.events || []].reverse().find(event => event.type === "session/preferences")?.data.response_detail as "short" | "auto" | "detailed") || "auto"}
         onResponseDetail={async value => {
@@ -1138,7 +1200,7 @@ export function App() {
           await api.rpc(id, "session.preferences.set", { response_detail: value });
           if (current()) await refreshSnapshot(id);
         }}
-        onClose={() => setWorkbench(null)} onReference={reference => { setComposer(value => `${value}${value ? " " : ""}${reference} `); setWorkbench(null); composerInput.current?.focus(); }} />
+        onClose={() => setWorkbench(null)} onReference={reference => { setComposer(value => `${value}${value ? " " : ""}${reference} `); workbenchReturnFocus.current = composerInput.current; setWorkbench(null); }} />
         : <><header className="workbench-heading"><strong>{workbench === "automation" ? "自动化" : workbench === "plugins" ? "插件" : "计划与协作"}</strong>
           <button type="button" onClick={() => setWorkbench(null)} aria-label="关闭工作台">×</button></header>
           {activeSession && workbench === "automation" && <AutomationPanel agentId={activeSession.id} readOnly={policy?.mode === "deny"}
@@ -1148,6 +1210,8 @@ export function App() {
           {activeSession && workbench === "orchestration" && <OrchestrationPanel sessionId={activeSession.id} onError={showError} />}</>}
       </div>
       {approvalNode && <div className="workbench-approval">{approvalNode}</div>}
+      <span tabIndex={workbenchModal ? 0 : -1} data-focus-boundary="end" className="workbench-focus-boundary"
+        onFocus={() => { if (workbenchElement.current) workbenchControls(workbenchElement.current)[0]?.focus(); }} />
     </section>}
 
     {trust.dialog}
@@ -1162,6 +1226,7 @@ export function App() {
       }} />}
     {settingsOpen && <SettingsDialog workspaces={bootstrap?.workspaces || []} runtime={runtime}
       view={stepsView} onViewChange={value => { setStepsView(value); localStorage.setItem("qi-agent.transcript-view", value); }}
+      collapseTiming={stepsCollapseTiming} onCollapseTimingChange={value => { setStepsCollapseTiming(value); localStorage.setItem("qi-agent.collapse-timing", value); }}
       theme={theme} onThemeChange={setTheme} onClose={() => setSettingsOpen(false)}
       policy={policy} onPolicyChange={mode => {
         if (needsFullAccessConfirmation(mode)) { setReturnToSettings(true); setSettingsOpen(false); }

@@ -1,0 +1,14 @@
+{
+  "command": [
+    "node",
+    "tools/draft-files-focused-run.mjs"
+  ],
+  "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2",
+  "start": "2026-10-20T13:08:32.393088+00:00",
+  "end": "2026-10-20T13:08:40.597231+00:00",
+  "exit_code": 1,
+  "status": "completed",
+  "runner_pid": 89497,
+  "isolation": "tools/isolation.sb; whitelisted environment",
+  "platform": "Darwin 27.0.0 arm64"
+}

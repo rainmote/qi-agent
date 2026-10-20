@@ -114,9 +114,9 @@ export function WorkspacePanel({ workspaceId, sessionId, api, onReference, onClo
         {preview.kind === "text" && (preview.mime === "text/markdown" ? <><div className="workspace-markdown"><Markdown remarkPlugins={[remarkGfm]}
           components={{ img: ({ alt }) => <span>[图片：{alt || "未加载"}]</span>, a: ({ children, href }) => <a href={href} target="_blank" rel="noreferrer noopener">{children}</a> }}>{preview.text || ""}</Markdown></div>
           <details><summary>Markdown 源文</summary><pre tabIndex={0}>{preview.text}</pre></details></> : <pre tabIndex={0}>{preview.text}</pre>)}
-        {preview.kind === "html" && <><p className="workspace-muted">静态 HTML 预览：脚本、网络和表单已禁用。</p><iframe title={`${preview.name} 静态预览`} sandbox="" referrerPolicy="no-referrer" srcDoc={sandboxedHtml(preview.text || "")} /></>}
+        {preview.kind === "html" && <><p className="workspace-muted">静态 HTML 预览：脚本、网络和表单已禁用。</p><iframe title={`${preview.name} 静态预览`} tabIndex={0} sandbox="" referrerPolicy="no-referrer" srcDoc={sandboxedHtml(preview.text || "")} /></>}
         {preview.kind === "image" && <img src={api.contentUrl(workspaceId, preview.path)} alt={preview.name} />}
-        {preview.kind === "pdf" && <><iframe title={`${preview.name} PDF 预览`} src={api.contentUrl(workspaceId, preview.path)} referrerPolicy="no-referrer" /><p className="workspace-muted">若浏览器无法显示 PDF，可下载后打开。</p></>}
+        {preview.kind === "pdf" && <><iframe title={`${preview.name} PDF 预览`} tabIndex={0} src={api.contentUrl(workspaceId, preview.path)} referrerPolicy="no-referrer" /><p className="workspace-muted">若浏览器无法显示 PDF，可下载后打开。</p></>}
       </section>}
       {tab === "changes" && !busy && !changes && <p className="workspace-muted">本会话暂无已完成回合的文件快照。</p>}
       {tab === "changes" && changes && <>

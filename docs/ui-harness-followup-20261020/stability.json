@@ -1,0 +1,296 @@
+[
+  {
+    "source": "reference",
+    "state": "model-options-light-1440",
+    "repeats": [
+      {
+        "repeat": 1,
+        "nonzero": 0,
+        "max": 0
+      },
+      {
+        "repeat": 2,
+        "nonzero": 0,
+        "max": 0
+      },
+      {
+        "repeat": 3,
+        "nonzero": 0,
+        "max": 0
+      }
+    ]
+  },
+  {
+    "source": "reference",
+    "state": "model-options-light-320",
+    "repeats": [
+      {
+        "repeat": 1,
+        "nonzero": 0,
+        "max": 0
+      },
+      {
+        "repeat": 2,
+        "nonzero": 0,
+        "max": 0
+      },
+      {
+        "repeat": 3,
+        "nonzero": 0,
+        "max": 0
+      }
+    ]
+  },
+  {
+    "source": "reference",
+    "state": "new-session-dark-1440",
+    "repeats": [
+      {
+        "repeat": 1,
+        "nonzero": 0,
+        "max": 0
+      },
+      {
+        "repeat": 2,
+        "nonzero": 0,
+        "max": 0
+      },
+      {
+        "repeat": 3,
+        "nonzero": 0,
+        "max": 0
+      }
+    ]
+  },
+  {
+    "source": "reference",
+    "state": "permission-menu-light-1440",
+    "repeats": [
+      {
+        "repeat": 1,
+        "nonzero": 0,
+        "max": 0
+      },
+      {
+        "repeat": 2,
+        "nonzero": 0,
+        "max": 0
+      },
+      {
+        "repeat": 3,
+        "nonzero": 0,
+        "max": 0
+      }
+    ]
+  },
+  {
+    "source": "reference",
+    "state": "settings-dark-1440",
+    "repeats": [
+      {
+        "repeat": 1,
+        "nonzero": 0,
+        "max": 0
+      },
+      {
+        "repeat": 2,
+        "nonzero": 0,
+        "max": 0
+      },
+      {
+        "repeat": 3,
+        "nonzero": 0,
+        "max": 0
+      }
+    ]
+  },
+  {
+    "source": "reference",
+    "state": "settings-light-1440",
+    "repeats": [
+      {
+        "repeat": 1,
+        "nonzero": 0,
+        "max": 0
+      },
+      {
+        "repeat": 2,
+        "nonzero": 0,
+        "max": 0
+      },
+      {
+        "repeat": 3,
+        "nonzero": 0,
+        "max": 0
+      }
+    ]
+  },
+  {
+    "source": "reference",
+    "state": "workspace-menu-light-1440",
+    "repeats": [
+      {
+        "repeat": 1,
+        "nonzero": 0,
+        "max": 0
+      },
+      {
+        "repeat": 2,
+        "nonzero": 0,
+        "max": 0
+      },
+      {
+        "repeat": 3,
+        "nonzero": 0,
+        "max": 0
+      }
+    ]
+  },
+  {
+    "source": "candidate",
+    "state": "model-options-light-1440",
+    "repeats": [
+      {
+        "repeat": 1,
+        "nonzero": 0,
+        "max": 0
+      },
+      {
+        "repeat": 2,
+        "nonzero": 0,
+        "max": 0
+      },
+      {
+        "repeat": 3,
+        "nonzero": 0,
+        "max": 0
+      }
+    ]
+  },
+  {
+    "source": "candidate",
+    "state": "model-options-light-320",
+    "repeats": [
+      {
+        "repeat": 1,
+        "nonzero": 0,
+        "max": 0
+      },
+      {
+        "repeat": 2,
+        "nonzero": 0,
+        "max": 0
+      },
+      {
+        "repeat": 3,
+        "nonzero": 0,
+        "max": 0
+      }
+    ]
+  },
+  {
+    "source": "candidate",
+    "state": "new-session-dark-1440",
+    "repeats": [
+      {
+        "repeat": 1,
+        "nonzero": 0,
+        "max": 0
+      },
+      {
+        "repeat": 2,
+        "nonzero": 0,
+        "max": 0
+      },
+      {
+        "repeat": 3,
+        "nonzero": 0,
+        "max": 0
+      }
+    ]
+  },
+  {
+    "source": "candidate",
+    "state": "permission-menu-light-1440",
+    "repeats": [
+      {
+        "repeat": 1,
+        "nonzero": 0,
+        "max": 0
+      },
+      {
+        "repeat": 2,
+        "nonzero": 0,
+        "max": 0
+      },
+      {
+        "repeat": 3,
+        "nonzero": 0,
+        "max": 0
+      }
+    ]
+  },
+  {
+    "source": "candidate",
+    "state": "settings-dark-1440",
+    "repeats": [
+      {
+        "repeat": 1,
+        "nonzero": 0,
+        "max": 0
+      },
+      {
+        "repeat": 2,
+        "nonzero": 0,
+        "max": 0
+      },
+      {
+        "repeat": 3,
+        "nonzero": 0,
+        "max": 0
+      }
+    ]
+  },
+  {
+    "source": "candidate",
+    "state": "settings-light-1440",
+    "repeats": [
+      {
+        "repeat": 1,
+        "nonzero": 0,
+        "max": 0
+      },
+      {
+        "repeat": 2,
+        "nonzero": 0,
+        "max": 0
+      },
+      {
+        "repeat": 3,
+        "nonzero": 0,
+        "max": 0
+      }
+    ]
+  },
+  {
+    "source": "candidate",
+    "state": "workspace-menu-light-1440",
+    "repeats": [
+      {
+        "repeat": 1,
+        "nonzero": 0,
+        "max": 0
+      },
+      {
+        "repeat": 2,
+        "nonzero": 0,
+        "max": 0
+      },
+      {
+        "repeat": 3,
+        "nonzero": 0,
+        "max": 0
+      }
+    ]
+  }
+]

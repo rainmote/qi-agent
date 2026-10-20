@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { buildTimeline } from "./timeline-model";
-import { displayTranscript, transcriptView } from "./transcript-display";
+import { collapseTiming, displayTranscript, transcriptView } from "./transcript-display";
 import { SubagentPanel } from "./SubagentPanel";
 import type { DurableEvent } from "./types";
 
@@ -40,6 +40,25 @@ test("interleaved user input and active turns keep every step in original order"
   const active=buildTimeline(events([["message",user],["tool/call",tool]]));
   assert.deepEqual(displayTranscript(active,"standard",new Map()).rows,active.rows);
   assert.deepEqual(displayTranscript(model(),"verbose",new Map()).rows,model().rows);
+});
+
+test("next-input folding retains the latest process, respects manual choices and folds on a later user message", () => {
+  const current = model();
+  const latest = displayTranscript(current,"standard",new Map(),null,"next-input");
+  const control = latest.rows.find(row => row.kind === "turn-control")!;
+  assert.equal(control.open,true);
+  assert.equal(latest.rows.filter(row => row.kind === "tools").length,1);
+  assert.equal(displayTranscript(current,"standard",new Map([[control.id,false]]),null,"next-input")
+    .rows.find(row => row.kind === "turn-control")!.open,false);
+  const later = buildTimeline([...events([
+    ["message",user],["tool/call",tool],["tool/result",{"call-id":"read-1",ok:true,content:"read"}],
+    ["message",answer],["agent/run/end",outcome],
+  ]),{id:"next-user",seq:100,at:"2026-10-19T00:01:00Z",type:"message",data:user}]);
+  const history = displayTranscript(later,"standard",new Map(),null,"next-input");
+  assert.equal(history.rows.find(row => row.kind === "turn-control")!.open,false);
+  assert.equal(history.rows.at(-1)?.id,"next-user");
+  assert.equal(collapseTiming("next-input"),"next-input");
+  assert.equal(collapseTiming("unknown"),"completion");
 });
 
 test("failed, cancelled and uncertain turns retain their process without a whole-turn fold", () => {

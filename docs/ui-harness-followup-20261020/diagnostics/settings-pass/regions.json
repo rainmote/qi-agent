@@ -1,0 +1,1203 @@
+{
+  "method": "Exact RGB comparison within explicitly listed diagnostic rectangles, using floor/ceil to include partial edge pixels. No region is excluded from the full viewport metrics. These diagnostics do not constitute whole-page acceptance.",
+  "reference_sha": "687f282e8625c6b8d11ff58211a90524be2e4317",
+  "regions": [
+    {
+      "state": "new-session-dark-1440",
+      "region": "input-card",
+      "source_box_css_px": {
+        "x": 469.296875,
+        "y": 493,
+        "width": 774.390625,
+        "height": 114
+      },
+      "raster_box": [
+        469,
+        493,
+        1244,
+        607
+      ],
+      "pixels": 88350,
+      "nonzero": 1312,
+      "exact_equal": false,
+      "max_channel_delta": 1,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0.0,
+        "y": 0,
+        "width": 0.0,
+        "height": 0
+      }
+    },
+    {
+      "state": "new-session-dark-1440",
+      "region": "title-and-badge",
+      "source_box_css_px": {
+        "x": 769.59375,
+        "y": 401,
+        "width": 217.796875,
+        "height": 32
+      },
+      "raster_box": [
+        769,
+        401,
+        988,
+        433
+      ],
+      "pixels": 7008,
+      "nonzero": 0,
+      "exact_equal": true,
+      "max_channel_delta": 0,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0.0,
+        "y": 0,
+        "width": 0.0,
+        "height": 0
+      }
+    },
+    {
+      "state": "new-session-dark-1440",
+      "region": "workspace-chip",
+      "source_box_css_px": {
+        "x": 473.296875,
+        "y": 457,
+        "width": 118.859375,
+        "height": 28
+      },
+      "raster_box": [
+        473,
+        457,
+        593,
+        485
+      ],
+      "pixels": 3360,
+      "nonzero": 0,
+      "exact_equal": true,
+      "max_channel_delta": 0,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0.0,
+        "y": 0,
+        "width": 0.0,
+        "height": 0
+      }
+    },
+    {
+      "state": "new-session-dark-1440",
+      "region": "preset-chip",
+      "source_box_css_px": {
+        "x": 596.15625,
+        "y": 457,
+        "width": 107.046875,
+        "height": 28
+      },
+      "raster_box": [
+        596,
+        457,
+        704,
+        485
+      ],
+      "pixels": 3024,
+      "nonzero": 0,
+      "exact_equal": true,
+      "max_channel_delta": 0,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0.0,
+        "y": 0,
+        "width": 0.0,
+        "height": 0
+      }
+    },
+    {
+      "state": "new-session-dark-1440",
+      "region": "session-list",
+      "source_box_css_px": {
+        "x": 12,
+        "y": 282,
+        "width": 256,
+        "height": 100
+      },
+      "raster_box": [
+        12,
+        282,
+        268,
+        382
+      ],
+      "pixels": 25600,
+      "nonzero": 0,
+      "exact_equal": true,
+      "max_channel_delta": 0,
+      "pixels_gt16": 0
+    },
+    {
+      "state": "new-session-dark-390",
+      "region": "input-card",
+      "source_box_css_px": {
+        "x": 72,
+        "y": 415,
+        "width": 295,
+        "height": 114
+      },
+      "raster_box": [
+        72,
+        415,
+        367,
+        529
+      ],
+      "pixels": 33630,
+      "nonzero": 0,
+      "exact_equal": true,
+      "max_channel_delta": 0,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0
+      }
+    },
+    {
+      "state": "new-session-dark-390",
+      "region": "title-and-badge",
+      "source_box_css_px": {
+        "x": 132.59375,
+        "y": 323,
+        "width": 217.796875,
+        "height": 32
+      },
+      "raster_box": [
+        132,
+        323,
+        351,
+        355
+      ],
+      "pixels": 7008,
+      "nonzero": 0,
+      "exact_equal": true,
+      "max_channel_delta": 0,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0.0,
+        "y": 0,
+        "width": 0.0,
+        "height": 0
+      }
+    },
+    {
+      "state": "new-session-dark-390",
+      "region": "workspace-chip",
+      "source_box_css_px": {
+        "x": 76,
+        "y": 379,
+        "width": 118.859375,
+        "height": 28
+      },
+      "raster_box": [
+        76,
+        379,
+        195,
+        407
+      ],
+      "pixels": 3332,
+      "nonzero": 0,
+      "exact_equal": true,
+      "max_channel_delta": 0,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0,
+        "y": 0,
+        "width": 0.0,
+        "height": 0
+      }
+    },
+    {
+      "state": "new-session-dark-390",
+      "region": "preset-chip",
+      "source_box_css_px": {
+        "x": 198.859375,
+        "y": 379,
+        "width": 107.046875,
+        "height": 28
+      },
+      "raster_box": [
+        198,
+        379,
+        306,
+        407
+      ],
+      "pixels": 3024,
+      "nonzero": 0,
+      "exact_equal": true,
+      "max_channel_delta": 0,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0.0,
+        "y": 0,
+        "width": 0.0,
+        "height": 0
+      }
+    },
+    {
+      "state": "new-session-light-1024",
+      "region": "input-card",
+      "source_box_css_px": {
+        "x": 296,
+        "y": 415,
+        "width": 705,
+        "height": 114
+      },
+      "raster_box": [
+        296,
+        415,
+        1001,
+        529
+      ],
+      "pixels": 80370,
+      "nonzero": 0,
+      "exact_equal": true,
+      "max_channel_delta": 0,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0
+      }
+    },
+    {
+      "state": "new-session-light-1024",
+      "region": "title-and-badge",
+      "source_box_css_px": {
+        "x": 561.59375,
+        "y": 323,
+        "width": 217.796875,
+        "height": 32
+      },
+      "raster_box": [
+        561,
+        323,
+        780,
+        355
+      ],
+      "pixels": 7008,
+      "nonzero": 0,
+      "exact_equal": true,
+      "max_channel_delta": 0,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0.0,
+        "y": 0,
+        "width": 0.0,
+        "height": 0
+      }
+    },
+    {
+      "state": "new-session-light-1024",
+      "region": "workspace-chip",
+      "source_box_css_px": {
+        "x": 300,
+        "y": 379,
+        "width": 118.859375,
+        "height": 28
+      },
+      "raster_box": [
+        300,
+        379,
+        419,
+        407
+      ],
+      "pixels": 3332,
+      "nonzero": 0,
+      "exact_equal": true,
+      "max_channel_delta": 0,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0,
+        "y": 0,
+        "width": 0.0,
+        "height": 0
+      }
+    },
+    {
+      "state": "new-session-light-1024",
+      "region": "preset-chip",
+      "source_box_css_px": {
+        "x": 422.859375,
+        "y": 379,
+        "width": 107.046875,
+        "height": 28
+      },
+      "raster_box": [
+        422,
+        379,
+        530,
+        407
+      ],
+      "pixels": 3024,
+      "nonzero": 0,
+      "exact_equal": true,
+      "max_channel_delta": 0,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0.0,
+        "y": 0,
+        "width": 0.0,
+        "height": 0
+      }
+    },
+    {
+      "state": "new-session-light-1024",
+      "region": "session-list",
+      "source_box_css_px": {
+        "x": 12,
+        "y": 282,
+        "width": 256,
+        "height": 100
+      },
+      "raster_box": [
+        12,
+        282,
+        268,
+        382
+      ],
+      "pixels": 25600,
+      "nonzero": 0,
+      "exact_equal": true,
+      "max_channel_delta": 0,
+      "pixels_gt16": 0
+    },
+    {
+      "state": "new-session-light-1440",
+      "region": "input-card",
+      "source_box_css_px": {
+        "x": 469.296875,
+        "y": 493,
+        "width": 774.390625,
+        "height": 114
+      },
+      "raster_box": [
+        469,
+        493,
+        1244,
+        607
+      ],
+      "pixels": 88350,
+      "nonzero": 0,
+      "exact_equal": true,
+      "max_channel_delta": 0,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0.0,
+        "y": 0,
+        "width": 0.0,
+        "height": 0
+      }
+    },
+    {
+      "state": "new-session-light-1440",
+      "region": "title-and-badge",
+      "source_box_css_px": {
+        "x": 769.59375,
+        "y": 401,
+        "width": 217.796875,
+        "height": 32
+      },
+      "raster_box": [
+        769,
+        401,
+        988,
+        433
+      ],
+      "pixels": 7008,
+      "nonzero": 0,
+      "exact_equal": true,
+      "max_channel_delta": 0,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0.0,
+        "y": 0,
+        "width": 0.0,
+        "height": 0
+      }
+    },
+    {
+      "state": "new-session-light-1440",
+      "region": "workspace-chip",
+      "source_box_css_px": {
+        "x": 473.296875,
+        "y": 457,
+        "width": 118.859375,
+        "height": 28
+      },
+      "raster_box": [
+        473,
+        457,
+        593,
+        485
+      ],
+      "pixels": 3360,
+      "nonzero": 0,
+      "exact_equal": true,
+      "max_channel_delta": 0,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0.0,
+        "y": 0,
+        "width": 0.0,
+        "height": 0
+      }
+    },
+    {
+      "state": "new-session-light-1440",
+      "region": "preset-chip",
+      "source_box_css_px": {
+        "x": 596.15625,
+        "y": 457,
+        "width": 107.046875,
+        "height": 28
+      },
+      "raster_box": [
+        596,
+        457,
+        704,
+        485
+      ],
+      "pixels": 3024,
+      "nonzero": 0,
+      "exact_equal": true,
+      "max_channel_delta": 0,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0.0,
+        "y": 0,
+        "width": 0.0,
+        "height": 0
+      }
+    },
+    {
+      "state": "new-session-light-1440",
+      "region": "session-list",
+      "source_box_css_px": {
+        "x": 12,
+        "y": 282,
+        "width": 256,
+        "height": 100
+      },
+      "raster_box": [
+        12,
+        282,
+        268,
+        382
+      ],
+      "pixels": 25600,
+      "nonzero": 0,
+      "exact_equal": true,
+      "max_channel_delta": 0,
+      "pixels_gt16": 0
+    },
+    {
+      "state": "new-session-light-320",
+      "region": "input-card",
+      "source_box_css_px": {
+        "x": 72,
+        "y": 447,
+        "width": 225,
+        "height": 114
+      },
+      "raster_box": [
+        72,
+        447,
+        297,
+        561
+      ],
+      "pixels": 25650,
+      "nonzero": 0,
+      "exact_equal": true,
+      "max_channel_delta": 0,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0
+      }
+    },
+    {
+      "state": "new-session-light-320",
+      "region": "title-and-badge",
+      "source_box_css_px": {
+        "x": 80,
+        "y": 328,
+        "width": 209,
+        "height": 59
+      },
+      "raster_box": [
+        80,
+        328,
+        289,
+        387
+      ],
+      "pixels": 12331,
+      "nonzero": 0,
+      "exact_equal": true,
+      "max_channel_delta": 0,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0
+      }
+    },
+    {
+      "state": "new-session-light-320",
+      "region": "workspace-chip",
+      "source_box_css_px": {
+        "x": 76,
+        "y": 411,
+        "width": 118.859375,
+        "height": 28
+      },
+      "raster_box": [
+        76,
+        411,
+        195,
+        439
+      ],
+      "pixels": 3332,
+      "nonzero": 0,
+      "exact_equal": true,
+      "max_channel_delta": 0,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0,
+        "y": 0,
+        "width": 0.0,
+        "height": 0
+      }
+    },
+    {
+      "state": "new-session-light-320",
+      "region": "preset-chip",
+      "source_box_css_px": {
+        "x": 198.859375,
+        "y": 411,
+        "width": 96.140625,
+        "height": 28
+      },
+      "raster_box": [
+        198,
+        411,
+        295,
+        439
+      ],
+      "pixels": 2716,
+      "nonzero": 0,
+      "exact_equal": true,
+      "max_channel_delta": 0,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0.0,
+        "y": 0,
+        "width": 0.0,
+        "height": 0
+      }
+    },
+    {
+      "state": "new-session-light-390",
+      "region": "input-card",
+      "source_box_css_px": {
+        "x": 72,
+        "y": 415,
+        "width": 295,
+        "height": 114
+      },
+      "raster_box": [
+        72,
+        415,
+        367,
+        529
+      ],
+      "pixels": 33630,
+      "nonzero": 0,
+      "exact_equal": true,
+      "max_channel_delta": 0,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0
+      }
+    },
+    {
+      "state": "new-session-light-390",
+      "region": "title-and-badge",
+      "source_box_css_px": {
+        "x": 132.59375,
+        "y": 323,
+        "width": 217.796875,
+        "height": 32
+      },
+      "raster_box": [
+        132,
+        323,
+        351,
+        355
+      ],
+      "pixels": 7008,
+      "nonzero": 0,
+      "exact_equal": true,
+      "max_channel_delta": 0,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0.0,
+        "y": 0,
+        "width": 0.0,
+        "height": 0
+      }
+    },
+    {
+      "state": "new-session-light-390",
+      "region": "workspace-chip",
+      "source_box_css_px": {
+        "x": 76,
+        "y": 379,
+        "width": 118.859375,
+        "height": 28
+      },
+      "raster_box": [
+        76,
+        379,
+        195,
+        407
+      ],
+      "pixels": 3332,
+      "nonzero": 0,
+      "exact_equal": true,
+      "max_channel_delta": 0,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0,
+        "y": 0,
+        "width": 0.0,
+        "height": 0
+      }
+    },
+    {
+      "state": "new-session-light-390",
+      "region": "preset-chip",
+      "source_box_css_px": {
+        "x": 198.859375,
+        "y": 379,
+        "width": 107.046875,
+        "height": 28
+      },
+      "raster_box": [
+        198,
+        379,
+        306,
+        407
+      ],
+      "pixels": 3024,
+      "nonzero": 0,
+      "exact_equal": true,
+      "max_channel_delta": 0,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0.0,
+        "y": 0,
+        "width": 0.0,
+        "height": 0
+      }
+    },
+    {
+      "state": "new-session-light-768",
+      "region": "input-card",
+      "source_box_css_px": {
+        "x": 72,
+        "y": 415,
+        "width": 673,
+        "height": 114
+      },
+      "raster_box": [
+        72,
+        415,
+        745,
+        529
+      ],
+      "pixels": 76722,
+      "nonzero": 0,
+      "exact_equal": true,
+      "max_channel_delta": 0,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0
+      }
+    },
+    {
+      "state": "new-session-light-768",
+      "region": "title-and-badge",
+      "source_box_css_px": {
+        "x": 321.59375,
+        "y": 323,
+        "width": 217.796875,
+        "height": 32
+      },
+      "raster_box": [
+        321,
+        323,
+        540,
+        355
+      ],
+      "pixels": 7008,
+      "nonzero": 0,
+      "exact_equal": true,
+      "max_channel_delta": 0,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0.0,
+        "y": 0,
+        "width": 0.0,
+        "height": 0
+      }
+    },
+    {
+      "state": "new-session-light-768",
+      "region": "workspace-chip",
+      "source_box_css_px": {
+        "x": 76,
+        "y": 379,
+        "width": 118.859375,
+        "height": 28
+      },
+      "raster_box": [
+        76,
+        379,
+        195,
+        407
+      ],
+      "pixels": 3332,
+      "nonzero": 0,
+      "exact_equal": true,
+      "max_channel_delta": 0,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0,
+        "y": 0,
+        "width": 0.0,
+        "height": 0
+      }
+    },
+    {
+      "state": "new-session-light-768",
+      "region": "preset-chip",
+      "source_box_css_px": {
+        "x": 198.859375,
+        "y": 379,
+        "width": 107.046875,
+        "height": 28
+      },
+      "raster_box": [
+        198,
+        379,
+        306,
+        407
+      ],
+      "pixels": 3024,
+      "nonzero": 0,
+      "exact_equal": true,
+      "max_channel_delta": 0,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0.0,
+        "y": 0,
+        "width": 0.0,
+        "height": 0
+      }
+    },
+    {
+      "state": "permission-menu-light-1440",
+      "region": "menu",
+      "source_box_css_px": {
+        "x": 517.296875,
+        "y": 819,
+        "width": 144,
+        "height": 110
+      },
+      "raster_box": [
+        517,
+        819,
+        662,
+        929
+      ],
+      "pixels": 15950,
+      "nonzero": 1,
+      "exact_equal": false,
+      "max_channel_delta": 1,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0.0,
+        "y": 0,
+        "width": 0,
+        "height": 0
+      }
+    },
+    {
+      "state": "workspace-menu-light-1440",
+      "region": "menu",
+      "source_box_css_px": {
+        "x": 473.296875,
+        "y": 489,
+        "width": 144,
+        "height": 83
+      },
+      "raster_box": [
+        473,
+        489,
+        618,
+        572
+      ],
+      "pixels": 12035,
+      "nonzero": 1,
+      "exact_equal": false,
+      "max_channel_delta": 1,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0.0,
+        "y": 0,
+        "width": 0,
+        "height": 0
+      }
+    },
+    {
+      "state": "model-menu-light-1440",
+      "region": "menu",
+      "source_box_css_px": {
+        "x": 929.6875,
+        "y": 883,
+        "width": 248,
+        "height": 42
+      },
+      "raster_box": [
+        929,
+        883,
+        1178,
+        925
+      ],
+      "pixels": 10458,
+      "nonzero": 0,
+      "exact_equal": true,
+      "max_channel_delta": 0,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0.0,
+        "y": 0,
+        "width": 0,
+        "height": 0
+      }
+    },
+    {
+      "state": "model-options-light-1440",
+      "region": "menu",
+      "source_box_css_px": {
+        "x": 929.6875,
+        "y": 827,
+        "width": 248,
+        "height": 98
+      },
+      "raster_box": [
+        929,
+        827,
+        1178,
+        925
+      ],
+      "pixels": 24402,
+      "nonzero": 1,
+      "exact_equal": false,
+      "max_channel_delta": 1,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0.0,
+        "y": 0,
+        "width": 0,
+        "height": 0
+      }
+    },
+    {
+      "state": "model-options-light-390",
+      "region": "menu",
+      "source_box_css_px": {
+        "x": 61,
+        "y": 386,
+        "width": 248,
+        "height": 98
+      },
+      "raster_box": [
+        61,
+        386,
+        309,
+        484
+      ],
+      "pixels": 24304,
+      "nonzero": 0,
+      "exact_equal": true,
+      "max_channel_delta": 0,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0
+      }
+    },
+    {
+      "state": "model-options-light-320",
+      "region": "menu",
+      "source_box_css_px": {
+        "x": 12,
+        "y": 418,
+        "width": 248,
+        "height": 98
+      },
+      "raster_box": [
+        12,
+        418,
+        260,
+        516
+      ],
+      "pixels": 24304,
+      "nonzero": 1925,
+      "exact_equal": false,
+      "max_channel_delta": 1,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0
+      }
+    },
+    {
+      "state": "settings-light-1440",
+      "region": "appearance-light",
+      "source_box_css_px": {
+        "x": 532,
+        "y": 346,
+        "width": 182.65625,
+        "height": 84
+      },
+      "raster_box": [
+        532,
+        346,
+        715,
+        430
+      ],
+      "pixels": 15372,
+      "nonzero": 108,
+      "exact_equal": false,
+      "max_channel_delta": 17,
+      "pixels_gt16": 1,
+      "geometry_delta_css_px": {
+        "x": 0,
+        "y": 0,
+        "width": 0.0,
+        "height": 0
+      }
+    },
+    {
+      "state": "settings-light-1440",
+      "region": "appearance-dark",
+      "source_box_css_px": {
+        "x": 722.65625,
+        "y": 346,
+        "width": 182.671875,
+        "height": 84
+      },
+      "raster_box": [
+        722,
+        346,
+        906,
+        430
+      ],
+      "pixels": 15456,
+      "nonzero": 77,
+      "exact_equal": false,
+      "max_channel_delta": 1,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0.0,
+        "y": 0,
+        "width": 0.0,
+        "height": 0
+      }
+    },
+    {
+      "state": "settings-light-1440",
+      "region": "appearance-system",
+      "source_box_css_px": {
+        "x": 913.328125,
+        "y": 346,
+        "width": 182.671875,
+        "height": 84
+      },
+      "raster_box": [
+        913,
+        346,
+        1096,
+        430
+      ],
+      "pixels": 15372,
+      "nonzero": 76,
+      "exact_equal": false,
+      "max_channel_delta": 1,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0.0,
+        "y": 0,
+        "width": 0.0,
+        "height": 0
+      }
+    },
+    {
+      "state": "settings-light-1440",
+      "region": "font-size-stepper",
+      "source_box_css_px": {
+        "x": 968.75,
+        "y": 467,
+        "width": 72,
+        "height": 36
+      },
+      "raster_box": [
+        968,
+        467,
+        1041,
+        503
+      ],
+      "pixels": 2628,
+      "nonzero": 40,
+      "exact_equal": false,
+      "max_channel_delta": 1,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0.0,
+        "y": 0,
+        "width": 0,
+        "height": 0
+      }
+    },
+    {
+      "state": "settings-dark-1440",
+      "region": "appearance-light",
+      "source_box_css_px": {
+        "x": 532,
+        "y": 346,
+        "width": 182.65625,
+        "height": 84
+      },
+      "raster_box": [
+        532,
+        346,
+        715,
+        430
+      ],
+      "pixels": 15372,
+      "nonzero": 227,
+      "exact_equal": false,
+      "max_channel_delta": 8,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0,
+        "y": 0,
+        "width": 0.0,
+        "height": 0
+      }
+    },
+    {
+      "state": "settings-dark-1440",
+      "region": "appearance-dark",
+      "source_box_css_px": {
+        "x": 722.65625,
+        "y": 346,
+        "width": 182.671875,
+        "height": 84
+      },
+      "raster_box": [
+        722,
+        346,
+        906,
+        430
+      ],
+      "pixels": 15456,
+      "nonzero": 16,
+      "exact_equal": false,
+      "max_channel_delta": 1,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0.0,
+        "y": 0,
+        "width": 0.0,
+        "height": 0
+      }
+    },
+    {
+      "state": "settings-dark-1440",
+      "region": "appearance-system",
+      "source_box_css_px": {
+        "x": 913.328125,
+        "y": 346,
+        "width": 182.671875,
+        "height": 84
+      },
+      "raster_box": [
+        913,
+        346,
+        1096,
+        430
+      ],
+      "pixels": 15372,
+      "nonzero": 341,
+      "exact_equal": false,
+      "max_channel_delta": 1,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0.0,
+        "y": 0,
+        "width": 0.0,
+        "height": 0
+      }
+    },
+    {
+      "state": "settings-dark-1440",
+      "region": "font-size-stepper",
+      "source_box_css_px": {
+        "x": 968.75,
+        "y": 467,
+        "width": 72,
+        "height": 36
+      },
+      "raster_box": [
+        968,
+        467,
+        1041,
+        503
+      ],
+      "pixels": 2628,
+      "nonzero": 12,
+      "exact_equal": false,
+      "max_channel_delta": 1,
+      "pixels_gt16": 0,
+      "geometry_delta_css_px": {
+        "x": 0.0,
+        "y": 0,
+        "width": 0,
+        "height": 0
+      }
+    }
+  ]
+}

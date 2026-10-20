@@ -1,0 +1,350 @@
+[
+  {
+    "name": "followup-static-frame-focus-build",
+    "command": [
+      "npm",
+      "run",
+      "web:build"
+    ],
+    "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent",
+    "start": "2026-10-20T13:17:54.502656+00:00",
+    "end": "2026-10-20T13:17:54.797032+00:00",
+    "exit_code": 0,
+    "status": "completed",
+    "runner_pid": 93734,
+    "isolation": "tools/isolation.sb; whitelisted environment",
+    "platform": "Darwin 27.0.0 arm64"
+  },
+  {
+    "name": "followup-frozen-typecheck",
+    "command": [
+      "npm",
+      "run",
+      "typecheck"
+    ],
+    "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent",
+    "start": "2026-10-20T13:18:47.953664+00:00",
+    "end": "2026-10-20T13:18:48.470779+00:00",
+    "exit_code": 0,
+    "status": "completed",
+    "runner_pid": 94330,
+    "isolation": "tools/isolation.sb; whitelisted environment",
+    "platform": "Darwin 27.0.0 arm64"
+  },
+  {
+    "name": "followup-frozen-ui-tests",
+    "command": [
+      "npm",
+      "run",
+      "test:web-ui"
+    ],
+    "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent",
+    "start": "2026-10-20T13:18:45.113156+00:00",
+    "end": "2026-10-20T13:18:46.107690+00:00",
+    "exit_code": 0,
+    "status": "completed",
+    "runner_pid": 94162,
+    "isolation": "tools/isolation.sb; whitelisted environment",
+    "platform": "Darwin 27.0.0 arm64"
+  },
+  {
+    "name": "followup-frozen-browser",
+    "command": [
+      "npm",
+      "run",
+      "test:web-browser:ci"
+    ],
+    "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent",
+    "start": "2026-10-20T13:18:45.229166+00:00",
+    "end": "2026-10-20T13:19:18.198667+00:00",
+    "exit_code": 0,
+    "status": "completed",
+    "runner_pid": 94187,
+    "isolation": "tools/isolation.sb; whitelisted environment",
+    "platform": "Darwin 27.0.0 arm64"
+  },
+  {
+    "name": "followup-frozen-real-e2e",
+    "command": [
+      "node",
+      "node_modules/tsx/dist/cli.mjs",
+      "--test",
+      "apps/web/tests/interaction-e2e.test.ts"
+    ],
+    "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent",
+    "start": "2026-10-20T13:18:44.729260+00:00",
+    "end": "2026-10-20T13:18:51.934672+00:00",
+    "exit_code": 0,
+    "status": "completed",
+    "runner_pid": 94150,
+    "isolation": "tools/isolation.sb; whitelisted environment",
+    "platform": "Darwin 27.0.0 arm64"
+  },
+  {
+    "name": "followup-frozen-candidate",
+    "command": [
+      "node",
+      "tools/capture-raster-followup.mjs",
+      "candidate",
+      "/Users/geb/Documents/Codex/2026-10-19/task-2/pixel-followup-20261020/final"
+    ],
+    "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2",
+    "start": "2026-10-20T13:18:45.206031+00:00",
+    "end": "2026-10-20T13:19:10.902419+00:00",
+    "exit_code": 0,
+    "status": "completed",
+    "runner_pid": 94178,
+    "isolation": "tools/isolation.sb; whitelisted environment",
+    "platform": "Darwin 27.0.0 arm64"
+  },
+  {
+    "name": "followup-final-reference-scoped",
+    "command": [
+      "node",
+      "node_modules/vitest/vitest.mjs",
+      "run",
+      "--config",
+      "vitest.web.config.ts",
+      "apps/web/tests/qi-raster-followup.e2e.ts"
+    ],
+    "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2/reference-harness",
+    "start": "2026-10-20T13:00:32.509826+00:00",
+    "end": "2026-10-20T13:01:20.410868+00:00",
+    "exit_code": 0,
+    "status": "completed",
+    "runner_pid": 85769,
+    "isolation": "tools/isolation.sb; whitelisted environment",
+    "platform": "Darwin 27.0.0 arm64"
+  },
+  {
+    "name": "followup-focus-repeat-green",
+    "command": [
+      "node",
+      "tools/draft-files-focused-run.mjs"
+    ],
+    "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2",
+    "start": "2026-10-20T13:09:42.163916+00:00",
+    "end": "2026-10-20T13:09:53.595457+00:00",
+    "exit_code": 0,
+    "status": "completed",
+    "runner_pid": 90025,
+    "isolation": "tools/isolation.sb; whitelisted environment",
+    "platform": "Darwin 27.0.0 arm64"
+  },
+  {
+    "name": "followup-preview-focus-final-eight",
+    "command": [
+      "node",
+      "tools/draft-files-complete-run.mjs"
+    ],
+    "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2",
+    "start": "2026-10-20T13:17:58.403462+00:00",
+    "end": "2026-10-20T13:18:14.601540+00:00",
+    "exit_code": 0,
+    "status": "completed",
+    "runner_pid": 93804,
+    "isolation": "tools/isolation.sb; whitelisted environment",
+    "platform": "Darwin 27.0.0 arm64"
+  },
+  {
+    "name": "followup-reference-probe",
+    "command": [
+      "node",
+      "node_modules/vitest/vitest.mjs",
+      "run",
+      "--config",
+      "vitest.web.config.ts",
+      "apps/web/tests/qi-raster-followup.e2e.ts"
+    ],
+    "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2/reference-harness",
+    "start": "2026-10-20T12:42:17.224189+00:00",
+    "end": "2026-10-20T12:43:05.019919+00:00",
+    "exit_code": 0,
+    "status": "completed",
+    "runner_pid": 77478,
+    "isolation": "tools/isolation.sb; whitelisted environment",
+    "platform": "Darwin 27.0.0 arm64"
+  },
+  {
+    "name": "followup-candidate-probe",
+    "command": [
+      "node",
+      "tools/capture-raster-followup.mjs",
+      "candidate",
+      "/Users/geb/Documents/Codex/2026-10-19/task-2/pixel-followup-20261020"
+    ],
+    "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2",
+    "start": "2026-10-20T12:42:16.981934+00:00",
+    "end": "2026-10-20T12:42:40.622387+00:00",
+    "exit_code": 0,
+    "status": "completed",
+    "runner_pid": 77468,
+    "isolation": "tools/isolation.sb; whitelisted environment",
+    "platform": "Darwin 27.0.0 arm64"
+  },
+  {
+    "name": "followup-settings-capture",
+    "command": [
+      "node",
+      "tools/capture-raster-followup.mjs",
+      "candidate",
+      "/Users/geb/Documents/Codex/2026-10-19/task-2/pixel-followup-20261020/settings-pass"
+    ],
+    "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2",
+    "start": "2026-10-20T12:50:30.110522+00:00",
+    "end": "2026-10-20T12:50:54.475380+00:00",
+    "exit_code": 0,
+    "status": "completed",
+    "runner_pid": 81089,
+    "isolation": "tools/isolation.sb; whitelisted environment",
+    "platform": "Darwin 27.0.0 arm64"
+  },
+  {
+    "name": "followup-raster-capture",
+    "command": [
+      "node",
+      "tools/capture-raster-followup.mjs",
+      "candidate",
+      "/Users/geb/Documents/Codex/2026-10-19/task-2/pixel-followup-20261020/raster-pass"
+    ],
+    "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2",
+    "start": "2026-10-20T12:52:57.839884+00:00",
+    "end": "2026-10-20T12:53:21.909433+00:00",
+    "exit_code": 0,
+    "status": "completed",
+    "runner_pid": 82194,
+    "isolation": "tools/isolation.sb; whitelisted environment",
+    "platform": "Darwin 27.0.0 arm64"
+  },
+  {
+    "name": "followup-final-reference",
+    "command": [
+      "node",
+      "reference-harness/node_modules/vitest/vitest.mjs",
+      "run",
+      "--root",
+      "reference-harness",
+      "--config",
+      "vitest.web.config.ts",
+      "apps/web/tests/qi-raster-followup.e2e.ts"
+    ],
+    "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2",
+    "start": "2026-10-20T12:58:27.272010+00:00",
+    "end": "2026-10-20T12:58:29.391360+00:00",
+    "exit_code": 1,
+    "status": "completed",
+    "runner_pid": 84830,
+    "isolation": "tools/isolation.sb; whitelisted environment",
+    "platform": "Darwin 27.0.0 arm64"
+  },
+  {
+    "name": "followup-final-reference-correct",
+    "command": [
+      "node",
+      "node_modules/vitest/vitest.mjs",
+      "run",
+      "--config",
+      "vitest.web.config.ts",
+      "apps/web/tests/qi-raster-followup.e2e.ts"
+    ],
+    "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2/reference-harness",
+    "start": "2026-10-20T12:58:53.495321+00:00",
+    "end": "2026-10-20T12:59:03.911604+00:00",
+    "exit_code": 1,
+    "status": "completed",
+    "runner_pid": 85021,
+    "isolation": "tools/isolation.sb; whitelisted environment",
+    "platform": "Darwin 27.0.0 arm64"
+  },
+  {
+    "name": "followup-review-fix-browser",
+    "command": [
+      "npm",
+      "run",
+      "test:web-browser:ci"
+    ],
+    "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent",
+    "start": "2026-10-20T13:05:25.071652+00:00",
+    "end": "2026-10-20T13:05:26.545944+00:00",
+    "exit_code": 1,
+    "status": "completed",
+    "runner_pid": 88012,
+    "isolation": "tools/isolation.sb; whitelisted environment",
+    "platform": "Darwin 27.0.0 arm64"
+  },
+  {
+    "name": "followup-focus-repeat-red",
+    "command": [
+      "node",
+      "tools/draft-files-focused-run.mjs"
+    ],
+    "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2",
+    "start": "2026-10-20T13:08:32.393088+00:00",
+    "end": "2026-10-20T13:08:40.597231+00:00",
+    "exit_code": 1,
+    "status": "completed",
+    "runner_pid": 89497,
+    "isolation": "tools/isolation.sb; whitelisted environment",
+    "platform": "Darwin 27.0.0 arm64"
+  },
+  {
+    "name": "followup-preview-focus-eight",
+    "command": [
+      "node",
+      "tools/draft-files-complete-run.mjs"
+    ],
+    "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2",
+    "start": "2026-10-20T13:15:01.511617+00:00",
+    "end": "2026-10-20T13:15:03.067629+00:00",
+    "exit_code": 1,
+    "status": "completed",
+    "runner_pid": 92543,
+    "isolation": "tools/isolation.sb; whitelisted environment",
+    "platform": "Darwin 27.0.0 arm64"
+  },
+  {
+    "name": "followup-preview-focus-eight-explicit-frame",
+    "command": [
+      "node",
+      "tools/draft-files-complete-run.mjs"
+    ],
+    "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2",
+    "start": "2026-10-20T13:15:54.983776+00:00",
+    "end": "2026-10-20T13:15:56.580483+00:00",
+    "exit_code": 1,
+    "status": "completed",
+    "runner_pid": 92931,
+    "isolation": "tools/isolation.sb; whitelisted environment",
+    "platform": "Darwin 27.0.0 arm64"
+  },
+  {
+    "name": "followup-preview-frame-ready",
+    "command": [
+      "node",
+      "tools/draft-files-complete-run.mjs"
+    ],
+    "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2",
+    "start": "2026-10-20T13:17:04.228411+00:00",
+    "end": "2026-10-20T13:17:05.780234+00:00",
+    "exit_code": 1,
+    "status": "completed",
+    "runner_pid": 93389,
+    "isolation": "tools/isolation.sb; whitelisted environment",
+    "platform": "Darwin 27.0.0 arm64"
+  },
+  {
+    "name": "followup-gallery",
+    "command": [
+      "node",
+      "tools/verify-followup-gallery.mjs"
+    ],
+    "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2",
+    "start": "2026-10-20T13:22:06.722546+00:00",
+    "end": "2026-10-20T13:22:15.365830+00:00",
+    "exit_code": 0,
+    "status": "completed",
+    "runner_pid": 95775,
+    "isolation": "tools/isolation.sb; whitelisted environment",
+    "platform": "Darwin 27.0.0 arm64"
+  }
+]

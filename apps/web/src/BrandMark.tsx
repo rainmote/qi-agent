@@ -1,5 +1,5 @@
 export function BrandMark({ size = 24 }: { size?: number }) {
-  return <svg width={size} height={size} viewBox="0 0 850 800" fill="none" aria-hidden="true">
+  return <svg width={size} height={size} viewBox="165.29 165.29 516.79 469.43" fill="none" aria-hidden="true">
     <path
       fill="currentColor"
       fillRule="evenodd"

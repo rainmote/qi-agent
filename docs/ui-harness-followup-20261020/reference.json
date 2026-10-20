@@ -1,0 +1,10 @@
+{
+  "url": "https://github.com/deepseek-ai/deepseek-harness",
+  "sha": "687f282e8625c6b8d11ff58211a90524be2e4317",
+  "version": "0.2.1-rc.2",
+  "public_head_rechecked": true,
+  "method": "credential-free git ls-remote; GIT_CONFIG_GLOBAL=/dev/null; credential.helper empty",
+  "checked_date_utc": "2026-10-20",
+  "checked_time_precision": "day; exact command output preserved in task transcript",
+  "tracked_reference_product_files_changed": false
+}

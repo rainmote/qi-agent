@@ -8,7 +8,7 @@ import { type ToolBatch, type TimelineRow } from "./timeline-model";
 import { captureAnchor, restoreAnchor, timelineLayout, visibleRange, type RowMeasurement, type ScrollAnchor } from "./virtual-timeline";
 import type { DurableEvent } from "./types";
 import { outcomeText, runOutcome } from "./run-outcome";
-import { displayTranscript, type TranscriptView, type TurnControl } from "./transcript-display";
+import { displayTranscript, type CollapseTiming, type TranscriptView, type TurnControl } from "./transcript-display";
 
 function text(value: unknown): string {
   if (typeof value === "string") return value;
@@ -262,9 +262,9 @@ function estimateRow(row: DisplayRow, width: number): number {
   return Math.min(2_000, 62 + lines * 23);
 }
 
-export function Timeline({ projection, scrollRef, pluginSlots = [], view = "standard" }: {
+export function Timeline({ projection, scrollRef, pluginSlots = [], view = "standard", collapseTiming = "completion" }: {
   projection: Projection; scrollRef: RefObject<HTMLDivElement | null>; pluginSlots?: PluginSlot[];
-  view?: TranscriptView;
+  view?: TranscriptView; collapseTiming?: CollapseTiming;
 }) {
   const inner = useRef<HTMLDivElement>(null);
   const rowContainer = useRef<HTMLDivElement>(null);
@@ -288,7 +288,7 @@ export function Timeline({ projection, scrollRef, pluginSlots = [], view = "stan
   const partialAssistant = String(projection.state["partial-assistant"] || projection.state.partialAssistant || "");
   const partialReasoning = String(projection.state["partial-reasoning"] || projection.state.partialReasoning || "");
   const streaming = projection.state.phase !== "idle" && Boolean(partialAssistant || partialReasoning);
-  const transcript = useMemo(() => displayTranscript(projection.timeline, view, choices, focusedRow), [projection.timeline, view, choices, focusedRow]);
+  const transcript = useMemo(() => displayTranscript(projection.timeline, view, choices, focusedRow, collapseTiming), [projection.timeline, view, choices, focusedRow, collapseTiming]);
   const rememberFocusedProcess = () => {
     const retained = transcript.rows.filter(row => row.kind === "turn-control" && row.open
       && focusedRow !== null && row.members.includes(focusedRow));

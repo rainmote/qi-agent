@@ -1,0 +1,20 @@
+{
+  "command": [
+    "node",
+    "reference-harness/node_modules/vitest/vitest.mjs",
+    "run",
+    "--root",
+    "reference-harness",
+    "--config",
+    "vitest.web.config.ts",
+    "apps/web/tests/qi-raster-followup.e2e.ts"
+  ],
+  "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2",
+  "start": "2026-10-20T12:58:27.272010+00:00",
+  "end": "2026-10-20T12:58:29.391360+00:00",
+  "exit_code": 1,
+  "status": "completed",
+  "runner_pid": 84830,
+  "isolation": "tools/isolation.sb; whitelisted environment",
+  "platform": "Darwin 27.0.0 arm64"
+}

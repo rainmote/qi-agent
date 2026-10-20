@@ -69,6 +69,59 @@ const settle=(page)=>page.evaluate(()=>new Promise(resolve=>requestAnimationFram
 const open=async(page,id)=>{await page.locator('.session-link').filter({hasText:`会话${id}`}).click();await page.locator('.session-header-title button').filter({hasText:`会话${id}`}).waitFor();};
 try{
  {
+  const {page,controls}=await fixture();await page.goto(base);await page.locator('.session-header-title button').waitFor();
+  await page.locator('.new-session').click();
+  for(const width of [1440,390,320]){
+   await page.setViewportSize({width,height:844});
+   const files=page.getByRole('button',{name:'文件与变更',exact:true});
+   for(let i=0;i<2;i++){
+    await files.click();await page.getByRole('complementary',{name:'工作区文件',exact:true}).waitFor();
+    await page.locator('.workspace-file-list').getByRole('button',{name:'note.md',exact:true}).waitFor();
+    await page.getByRole('button',{name:'关闭文件面板',exact:true}).click();
+    assert.equal(await files.evaluate(el=>el===document.activeElement),true,'closing the panel restores its opener');
+   }
+   await files.focus();await page.keyboard.press('Enter');await page.getByRole('button',{name:'关闭文件面板',exact:true}).waitFor();
+   await page.keyboard.press('Escape');await page.locator('.workbench-drawer').waitFor({state:'hidden'});
+   assert.equal(await files.evaluate(el=>el===document.activeElement),true,'keyboard open and immediate Escape restore focus');
+   if(width<=600){
+    await files.press('Enter');await page.getByRole('dialog',{name:'工作台',exact:true}).waitFor();
+    assert.equal(await page.locator('main').evaluate(el=>el.inert),true);
+    for(let i=0;i<16;i++){
+     await page.keyboard.press('Tab');const inside=await page.locator('.workbench-drawer').evaluate(el=>el.contains(document.activeElement));
+     if(!inside){console.log(JSON.stringify({draftFilesFocusFailure:{width,tab:i,state:await page.evaluate(()=>({active:{tag:document.activeElement?.tagName,class:document.activeElement?.className,label:document.activeElement?.getAttribute('aria-label')},controls:[...document.querySelectorAll('.workbench-drawer button,.workbench-drawer input')].map(el=>({html:el.outerHTML,visible:!!el.getClientRects().length,disabled:el.disabled,tabIndex:el.tabIndex})),text:document.querySelector('.workbench-drawer')?.textContent}))}}));if(process.env.QI_AGENT_BROWSER_ARTIFACTS)await page.screenshot({path:`${process.env.QI_AGENT_BROWSER_ARTIFACTS}/draft-files-tab-failure-${width}.png`});}
+     assert.equal(inside,true,`mobile workbench focus escaped at Tab ${i}`);
+    }
+    await page.locator('.workspace-file-list').getByRole('button',{name:'note.md',exact:true}).click();
+    const source=page.getByText('Markdown 源文',{exact:true});await source.click();await source.focus();await page.keyboard.press('Tab');
+    assert.equal(await page.locator('.workspace-preview pre').evaluate(el=>el===document.activeElement),true,'Tab enters the actual source preview');
+    await page.getByRole('button',{name:'返回文件',exact:true}).click();
+    await page.locator('.workspace-file-list').getByRole('button',{name:'example.html',exact:true}).click();
+    await page.frameLocator('.workspace-preview iframe').getByRole('heading',{name:'Static fixture',exact:true}).waitFor();
+    await page.locator('.workspace-preview-title a[download]').focus();await page.keyboard.press('Tab');
+    if(!await page.locator('.workspace-preview iframe').evaluate(el=>el===document.activeElement))console.log(JSON.stringify({iframeTabFailure:await page.evaluate(()=>({active:document.activeElement?.outerHTML.slice(0,250),frame:document.querySelector('.workspace-preview iframe')?.outerHTML.slice(0,300)}))}));
+    assert.equal(await page.locator('.workspace-preview iframe').evaluate(el=>el===document.activeElement),true,'Tab enters the sandboxed HTML preview');
+    await page.keyboard.press('Tab');assert.equal(await page.locator('.workbench-drawer').evaluate(el=>el.contains(document.activeElement)),true,'native iframe traversal stays inside the full-screen panel');
+    await page.getByRole('button',{name:'返回文件',exact:true}).click();
+    await page.getByRole('button',{name:'引用 note.md',exact:true}).click();
+    assert.match(await page.getByRole('textbox',{name:'给代理发送消息',exact:true}).inputValue(),/@file:/);
+    assert.equal(await page.getByRole('textbox',{name:'给代理发送消息',exact:true}).evaluate(el=>el===document.activeElement),true,'reference returns to the draft after inert cleanup');
+    assert.equal(controls.submissions.length,0);
+    await files.click();
+    await page.keyboard.press('Escape');assert.equal(await page.locator('main').evaluate(el=>el.inert),false);
+   }
+   const box=await files.boundingBox();await page.mouse.click(box.x+box.width/2,box.y+box.height/2,{clickCount:2});
+   if(await page.getByRole('button',{name:'关闭文件面板',exact:true}).isVisible())await page.getByRole('button',{name:'关闭文件面板',exact:true}).click();
+   assert.equal(controls.submissions.length,0);assert.doesNotMatch(page.url(),/session=/);
+  }
+  await page.setViewportSize({width:1440,height:300});
+  await page.getByRole('button',{name:'设置',exact:true}).click();await page.getByRole('menuitem',{name:'设置',exact:true}).click();
+  const workspaces=page.getByRole('button',{name:'工作区',exact:true});await workspaces.scrollIntoViewIfNeeded();await workspaces.click();
+  await page.locator('.workspace-row').getByText('隔离复现',{exact:true}).waitFor();
+  assert.equal(await page.locator('.settings-layout > nav').evaluate(el=>el.scrollHeight>el.clientHeight&&el.scrollTop>0),true);
+  await page.getByRole('button',{name:'关闭设置',exact:true}).click();
+  await page.close();console.log(JSON.stringify({draftFilesEntry:'passed',cases:['1440/390/320','real workspace listing','repeated open/close','double click','keyboard immediate Escape and return','mobile Tab boundary and inert cleanup','text source and static HTML preview keyboard access','reference preserves draft and returns composer focus','1440x300 settings navigation scroll','no session creation or submission']}));
+ }
+ {
   const {page,controls}=await fixture();
   await page.addInitScript(({workspaceId})=>{
    const replace=history.replaceState.bind(history);
@@ -548,13 +601,21 @@ try{
   await page.locator('.reasoning-row > summary').click();await page.locator('.reasoning-content > summary').click();await page.locator('.reasoning-row[open] .markdown-content').getByText('HARNESS-REASONING',{exact:true}).waitFor();
   await page.getByRole('button',{name:'设置',exact:true}).click();await page.getByRole('menuitem',{name:'设置',exact:true}).click();
   assert.equal(await page.locator('#root').evaluate(e=>e.inert),true);
-  await page.getByRole('combobox',{name:'工作步骤展示'}).selectOption('verbose');
+  await page.getByRole('button',{name:'工作步骤收起时机',exact:true}).click();
+  await page.getByRole('menuitemradio',{name:'下次有新消息时',exact:true}).click();
+  assert.equal(await page.evaluate(()=>localStorage.getItem('qi-agent.collapse-timing')),'next-input');
+  await page.getByRole('button',{name:'工作区',exact:true}).click();
+  await page.locator('.workspace-row').getByText('隔离复现',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'通用设置',exact:true}).click();
+  await page.getByRole('button',{name:'工作步骤展示',exact:true}).click();
+  await page.getByRole('menuitemradio',{name:'完全展开',exact:true}).click();
   await page.keyboard.press('Escape');await page.getByRole('dialog',{name:'设置',exact:true}).waitFor({state:'hidden'});
   assert.equal(await page.getByRole('button',{name:'设置',exact:true}).evaluate(e=>e===document.activeElement),true);
   assert.equal(await page.locator('.tool-summary').count(),0,'verbose removes group headers');
   await page.locator('.tool-batch-row').click();await page.getByText('HARNESS-TOOL-DETAIL',{exact:true}).waitFor();
   assert.equal(controls.submissions.length,0,'presentation controls cannot submit a command');
   await page.reload();await page.locator('.tool-batch-row').waitFor();
+  assert.equal(await page.evaluate(()=>localStorage.getItem('qi-agent.collapse-timing')),'next-input');
   await page.locator('.session-subagents-trigger').click();await page.locator('.session-subagents .subagent-disclosure summary').first().click();await page.getByText('HARNESS-CHILD-RESULT',{exact:true}).waitFor();
   for(const width of [768,390,320]){
    await page.setViewportSize({width,height:844});await settle(page);

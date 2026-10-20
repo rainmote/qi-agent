@@ -1,0 +1,11 @@
+(version 1)
+(allow default)
+(deny file-read*
+  (subpath "/Users/geb/.codex")
+  (subpath "/Users/geb/.ssh")
+  (subpath "/Users/geb/.aws")
+  (subpath "/Users/geb/Library/Keychains")
+  (subpath "/Users/geb/Library/Application Support/Google/Chrome")
+  (subpath "/Users/Shared/FNOS"))
+(deny network-outbound (remote ip "*:*"))
+(allow network-outbound (remote ip "localhost:*"))

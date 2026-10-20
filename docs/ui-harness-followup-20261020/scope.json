@@ -1,0 +1,6 @@
+{
+  "created_at": "2026-10-20T12:41:40.196343+00:00",
+  "base_commit": "c72cbf2667e90245c9c16149f0bbb8681b8cc12f",
+  "reference_sha": "687f282e8625c6b8d11ff58211a90524be2e4317",
+  "purpose": "Bounded rendering-stability and ancestor-style diagnostics. No masking, retouching or modification of the official product UI. Saved original c72 evidence remains unchanged."
+}
