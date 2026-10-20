@@ -1,0 +1,28 @@
+The plugin "vite-tsconfig-paths" is detected. Vite now supports tsconfig paths resolution natively via the resolve.tsconfigPaths option. You can remove the plugin and set resolve.tsconfigPaths: true in your Vite config instead.
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.11 [39m[90m/Users/geb/Documents/Codex/2026-10-19/task-2/reference-harness[39m
+
+ [31m❯[39m apps/web/tests/qi-raster-followup.e2e.ts [2m([22m[2m1 test[22m[2m | [22m[31m1 failed[39m[2m)[22m[33m 1000[2mms[22m[39m
+[31m   [31m×[31m captures normalized official reference states[39m[33m 1000[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m apps/web/tests/qi-raster-followup.e2e.ts[2m > [22mcaptures normalized official reference states
+[31m[1mError[22m: ENOENT: no such file or directory, scandir '/Users/geb/Documents/Codex/2026-10-19/task-2/snapshots/web/turn-tail-actions'[39m
+[36m [2m❯[22m selectedSessionFixture apps/web/tests/scaffold.ts:[2m176:19[22m[39m
+    [90m174|[39m   [35mconst[39m requested [33m=[39m [34mparseSessionFixtureName[39m([34mbasename[39m(path))
+    [90m175|[39m   [35mif[39m (requested [33m===[39m undefined) [35mreturn[39m path
+    [90m176|[39m   [35mconst[39m entries [33m=[39m [35mawait[39m [34mreaddir[39m([34mdirname[39m(path))
+    [90m   |[39m                   [31m^[39m
+    [90m177|[39m   if (allowAbsent && !entries.some(name => parseSessionFixtureName(nam…
+    [90m178|[39m   [35mconst[39m selected [33m=[39m [34msessionFixtureFiles[39m(entries)
+[90m [2m❯[22m apps/web/tests/qi-raster-followup.e2e.ts:[2m10:16[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m   Start at [22m 20:58:27
+[2m   Duration [22m 1.79s[2m (transform 424ms, setup 0ms, import 688ms, tests 1.00s, environment 0ms)[22m
+

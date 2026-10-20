@@ -1,0 +1,33 @@
+The plugin "vite-tsconfig-paths" is detected. Vite now supports tsconfig paths resolution natively via the resolve.tsconfigPaths option. You can remove the plugin and set resolve.tsconfigPaths: true in your Vite config instead.
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.11 [39m[90m/Users/geb/Documents/Codex/2026-10-19/task-2/reference-harness[39m
+
+ [31m❯[39m apps/web/tests/qi-raster-followup.e2e.ts [2m([22m[2m1 test[22m[2m | [22m[31m1 failed[39m[2m)[22m[33m 9523[2mms[22m[39m
+[31m   [31m×[31m captures normalized official reference states[39m[33m 9522[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m apps/web/tests/qi-raster-followup.e2e.ts[2m > [22mcaptures normalized official reference states
+[31m[1mError[22m: locator.click: Error: strict mode violation: getByRole('button', { name: '详细', exact: true }) resolved to 2 elements:
+    1) <button type="button" aria-haspopup="menu" aria-expanded="false" class="aHfgia_selector">…</button> aka getByRole('button', { name: '详细' }).first()
+    2) <button type="button" aria-haspopup="menu" aria-expanded="false" class="aHfgia_selector">…</button> aka getByRole('button', { name: '详细' }).nth(1)
+
+Call log:
+  - waiting for getByRole('button', { name: '详细', exact: true })
+[39m
+[36m [2m❯[22m apps/web/tests/qi-raster-followup.e2e.ts:[2m57:56[22m[39m
+    [90m 55|[39m  await page.getByRole('button',{name:'账号菜单',exact:true}).click();await…
+    [90m 56|[39m  await page.getByText('设置',{exact:true}).click();await page.getByRole(…
+    [90m 57|[39m  await page.getByRole('button',{name:'详细',exact:true}).click();await s…
+    [90m   |[39m                                                        [31m^[39m
+    [90m 58|[39m  await page.getByRole('button',{name:'回答结束后',exact:true}).click();awai…
+    [90m 59|[39m  await page.getByRole('button',{name:'深色',exact:true}).click();await s…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m   Start at [22m 20:58:53
+[2m   Duration [22m 10.12s[2m (transform 305ms, setup 0ms, import 501ms, tests 9.52s, environment 0ms)[22m
+
