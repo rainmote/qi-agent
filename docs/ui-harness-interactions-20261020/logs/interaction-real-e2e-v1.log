@@ -1,0 +1,48 @@
+▶ production Web trust, cancellation, recovery and composer E2E
+  ✔ adding a project asks before any turn, cancel preserves the draft and failure never submits (1106.231292ms)
+  ✔ stop works inside approval, handles failure, suppresses repeat clicks and survives refresh (509.034084ms)
+  ✔ composer menu, IME, multiline draft, focus and responsive geometry remain usable (211.113417ms)
+  ✔ stop cancels a blocking direct-command approval even when no model turn is running (152.343083ms)
+  ✔ trust inheritance is respected and an approved real write succeeds only after approval (818.705208ms)
+  ✔ declining trust persists, stays visible and does not trust a sibling project (1015.468084ms)
+  ✔ a finishing run cannot unlock a new submission while its stop request is still in flight (941.256833ms)
+  ✖ workspace Markdown links use authorized preview and actual sandboxed new-tab content (12083.267583ms)
+✖ production Web trust, cancellation, recovery and composer E2E (17601.286833ms)
+ℹ tests 9
+ℹ suites 0
+ℹ pass 7
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 17884.091333
+
+✖ failing tests:
+
+test at apps/web/tests/interaction-e2e.test.ts:39:13
+✖ workspace Markdown links use authorized preview and actual sandboxed new-tab content (12083.267583ms)
+  page.waitForEvent: Timeout 12000ms exceeded while waiting for event "popup"
+  =========================== logs ===========================
+  waiting for event "popup"
+  ============================================================
+      at <anonymous> (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/tests/interaction-e2e.test.ts:371:30)
+      at async TestContext.<anonymous> (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/tests/interaction-e2e.test.ts:39:44)
+      at async scenario (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/tests/interaction-e2e.test.ts:39:5)
+      at async TestContext.<anonymous> (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/tests/interaction-e2e.test.ts:355:5) {
+    name: 'TimeoutError',
+    log: []
+  }
+
+test at apps/web/tests/interaction-e2e.test.ts:24:1
+✖ production Web trust, cancellation, recovery and composer E2E (17601.286833ms)
+  page.waitForEvent: Timeout 12000ms exceeded while waiting for event "popup"
+  =========================== logs ===========================
+  waiting for event "popup"
+  ============================================================
+      at <anonymous> (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/tests/interaction-e2e.test.ts:371:30)
+      at async TestContext.<anonymous> (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/tests/interaction-e2e.test.ts:39:44)
+      at async scenario (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/tests/interaction-e2e.test.ts:39:5)
+      at async TestContext.<anonymous> (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/tests/interaction-e2e.test.ts:355:5) {
+    name: 'TimeoutError',
+    log: []
+  }

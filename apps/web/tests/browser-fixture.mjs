@@ -21,6 +21,7 @@ async function fixture(initialCount=2, pageOptions={}){
  await page.route('**/api/**', async route=>{
   const path=new URL(route.request().url()).pathname; let result; let held;
   if(path==='/api/bootstrap') result={workspaces:[{id:workspaceId,name:'隔离复现',path:'/mock',addedAt:'2026-10-02'}],catalogs:[{workspaceId,sessions:[...sessions,...controls.additionalSessions]}],activeWorkspaceId:workspaceId};
+  else if(path==='/api/directories') result={path:'/mock',parent:null,directories:[]};
   else if(path==='/api/sessions'&&route.request().method()==='GET'){result=[...sessions,...controls.additionalSessions];held=controls.catalogGates.shift()||controls.holdCatalog;}
   else if(path.endsWith('/fork')){
    controls.forks++;const session={...sessions[0],id:'C',name:'会话C',path:'/mock/C.jsonl'};
@@ -28,7 +29,7 @@ async function fixture(initialCount=2, pageOptions={}){
   }
   else if(path.endsWith('/attachments')) {const input=route.request().postDataJSON();controls.uploads.push(input);result={type:'attachment',id:`fixture-upload-${controls.uploads.length}`,workspaceId,name:input.name,mime:input.mime,size:Buffer.from(input.base64,'base64').length};}
   else if(path.endsWith('/files') || path.endsWith('/search')) result={path:'',entries:[{name:'note.md',path:'note.md',kind:'file'},{name:'example.html',path:'example.html',kind:'file'}],truncated:false};
-  else if(path.endsWith('/preview')) {const html=new URL(route.request().url()).searchParams.get('path')==='example.html';result={path:html?'example.html':'note.md',name:html?'example.html':'note.md',mime:html?'text/html':'text/markdown',size:200,kind:html?'html':'text',text:html?'<h1>Static fixture</h1><script>parent.fixtureScriptRan=true</script>':'# bounded file fixture'};}
+  else if(path.endsWith('/preview')) {const file=new URL(route.request().url()).searchParams.get('path');controls.previewRequests??=[];controls.previewRequests.push(file);const html=file==='example.html';result=controls.filePreviews?.[file]||{path:html?'example.html':'note.md',name:html?'example.html':'note.md',mime:html?'text/html':'text/markdown',size:200,kind:html?'html':'text',text:html?'<h1>Static fixture</h1><script>parent.fixtureScriptRan=true</script>':'# bounded file fixture'};held=controls.holdPreview;}
   else if(path.endsWith('/changes')) result={turnId:'fixture-turn',partial:!controls.verification,verification:controls.verification,files:[{path:'note.md',status:'modified',before:'old',after:'new',diff:'--- a/note.md\n+++ b/note.md\n-old\n+new'}],notice:'Fixture changes only'};
   else if(path.endsWith('/references')) result={files:[{path:'note.md'}],sessions:[sessions[1]]};
   else if(path.endsWith('/resolve-references')) result=route.request().postDataJSON().message+'\n[User-selected source]\nbounded file fixture';
@@ -43,8 +44,9 @@ async function fixture(initialCount=2, pageOptions={}){
   else if(path.endsWith('/rpc')){
    const {method}=route.request().postDataJSON(); controls.rpcRequests.push(route.request().postDataJSON()); const id=path.split('/')[3];
    if(method==='trust.status') result={configured:false};
-   else if(method==='runtime.status') result={plugins:[],tools:[],commands:[]};
+   else if(method==='runtime.status') result=controls.runtimeStatus||{plugins:[],tools:[],commands:[]};
    else if(method==='plugins.ui-slots') result={slots:[]};
+   else if(method==='plugins.list') result={plugins:[]};
    else if(method==='subagent.status') result={providers:[],jobs:controls.jobs || []};
    else if(method==='policy.status') {result=policy;if(id===controls.holdPolicy?.id){held=controls.holdPolicy;result={...policy,mode:'allow'};}}
    else if(method==='policy.select') {controls.policySelections.push(route.request().postDataJSON());if(controls.rejectPolicy){controls.rejectPolicy=false;await route.fulfill({status:400,json:{ok:false,error:{message:'Fixture policy rejected'}}});return;}result={mode:route.request().postDataJSON().params.mode};}

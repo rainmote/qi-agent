@@ -1,0 +1,2 @@
+  ➜  Local:   http://127.0.0.1:4194/
+{"data":{"clicks":[],"storage":null,"rootInert":false,"links":[{"text":"工作区文档","href":"http://127.0.0.1:4194/api/workspaces/1234567890abcdef/content?path=docs%2Fguide.md"}]},"pages":["http://127.0.0.1:4194/#workspace=1234567890abcdef&session=A"]}

@@ -1,0 +1,49 @@
+{
+  "sha": "687f282e8625c6b8d11ff58211a90524be2e4317",
+  "assembly": "official shipped scaffold; public replay fixture; no model calls",
+  "browser": "155.0.8059.85",
+  "dpr": 1,
+  "locale": "zh-CN",
+  "evidence": [
+    {
+      "name": "01-settings-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "text": "DSH 本地构建\n0.2.1-rc.2-687f282\n新会话\n⌥\n⌘\nN\n插件\n自动化任务\n工作区\nworkspace\n新会话\nBegin your reply with the\n9小时\nPrevious conversation\n9小时\n更多\n探索未至之境\n预览版\nworkspace\n标准模式\n描述你想要构建的内容, / 调用指令, @ 文件或对话\n工作区内修改\nDeepSeek-V4-Flash\n设置\n通用设置\n模型\n内置插件\nAgent 预设\n打开配置文件\n关闭\n权限\n选择新会话的默认权限模式\n工作区内修改\n语言\n中文\n外观\n浅色\n深色\n跟随系统\n字号大小\n仅影响会话内容的字号\n14\npx\n工作步骤展示\n选择希望看到多少工具调用细节\n详细\n工作步骤收起时机\n选择何时自动收起工作步骤\n回答结束后\n显示代码工作视图\n开启后，显示轨迹、本轮代码差异，可选择完整的 Agent 预设切换\n快捷键\n\n查看和编辑当前可用的快捷键和输入操作\n\n编辑快捷键\n繁忙时的发送行为\n智能体运行时 Enter 键和发送按钮的行为；Cmd/Ctrl+Enter 使用另一行为\n排队发送\n性能与用量\n选择性能与用量信息展示的详细程度\n详细\n在使用官方模型 API 时上传 Session Log\n帮助改进 DeepSeek 模型与产品\n当前版本：0.2.1-rc.2"
+    },
+    {
+      "name": "02-shortcuts-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "text": "DSH 本地构建\n0.2.1-rc.2-687f282\n新会话\n⌥\n⌘\nN\n插件\n自动化任务\n工作区\nworkspace\n新会话\nBegin your reply with the\n9小时\nPrevious conversation\n9小时\n更多\n探索未至之境\n预览版\nworkspace\n标准模式\n描述你想要构建的内容, / 调用指令, @ 文件或对话\n工作区内修改\nDeepSeek-V4-Flash\n设置\n通用设置\n模型\n内置插件\nAgent 预设\n打开配置文件\n关闭\n权限\n选择新会话的默认权限模式\n工作区内修改\n语言\n中文\n外观\n浅色\n深色\n跟随系统\n字号大小\n仅影响会话内容的字号\n14\npx\n工作步骤展示\n选择希望看到多少工具调用细节\n详细\n工作步骤收起时机\n选择何时自动收起工作步骤\n回答结束后\n显示代码工作视图\n开启后，显示轨迹、本轮代码差异，可选择完整的 Agent 预设切换\n快捷键\n\n查看和编辑当前可用的快捷键和输入操作\n\n编辑快捷键\n繁忙时的发送行为\n智能体运行时 Enter 键和发送按钮的行为；Cmd/Ctrl+Enter 使用另一行为\n排队发送\n性能与用量\n选择性能与用量信息展示的详细程度\n详细\n在使用官方模型 API 时上传 Session Log\n帮助改进 DeepSeek 模型与产品\n当前版本：0.2.1-rc.2\n快捷键\n快捷键速查\n⌘\n/\n新会话\n⌥\n⌘\nN\n展开／收起左侧栏\n⌥\n⌘\nB\n搜索会话\n⌥\n⌘\nK\n添加工作区\n⌥\n⌘\nO\n重命名会话\n⌥\n⌘\nG\n分叉会话\n⇧\n⌘\nF\n归档会话\n⌥\n⌘\nA\n打开设置\n⌥\n⌘\n,\n展开／收起右侧栏\n⇧\n⌘\nB\n工作区文件\n⌥\n⌘\nP\n新建终端\n⌃\n`\n分栏\n⌘\n\\\n面板全屏／退出全屏\n⌥\n⌘\nEnter\n刷新当前页面\n暂无快捷键\n关闭当前页面／窗口\n⌥\n⌘\nW\n消息输入\n使用互补的 Queue／Steer 方式\n⌘\nEnter\n打开引用菜单\n@\n换行\n⇧\nEnter\n发送消息\nEnter\n打开命令菜单\n/\n停止生成\nEsc\nEsc\n菜单与弹层\n关闭菜单或顶层弹窗\nEsc\n移动菜单选择\n↑\n↓\n选择菜单项\nEnter\n审批区域\n允许一次\nEnter\n拒绝\nEsc\n恢复全部默认"
+    },
+    {
+      "name": "03-shortcuts-search-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "text": "DSH 本地构建\n0.2.1-rc.2-687f282\n新会话\n⌥\n⌘\nN\n插件\n自动化任务\n工作区\nworkspace\n新会话\nBegin your reply with the\n9小时\nPrevious conversation\n9小时\n更多\n探索未至之境\n预览版\nworkspace\n标准模式\n描述你想要构建的内容, / 调用指令, @ 文件或对话\n工作区内修改\nDeepSeek-V4-Flash\n设置\n通用设置\n模型\n内置插件\nAgent 预设\n打开配置文件\n关闭\n权限\n选择新会话的默认权限模式\n工作区内修改\n语言\n中文\n外观\n浅色\n深色\n跟随系统\n字号大小\n仅影响会话内容的字号\n14\npx\n工作步骤展示\n选择希望看到多少工具调用细节\n详细\n工作步骤收起时机\n选择何时自动收起工作步骤\n回答结束后\n显示代码工作视图\n开启后，显示轨迹、本轮代码差异，可选择完整的 Agent 预设切换\n快捷键\n\n查看和编辑当前可用的快捷键和输入操作\n\n编辑快捷键\n繁忙时的发送行为\n智能体运行时 Enter 键和发送按钮的行为；Cmd/Ctrl+Enter 使用另一行为\n排队发送\n性能与用量\n选择性能与用量信息展示的详细程度\n详细\n在使用官方模型 API 时上传 Session Log\n帮助改进 DeepSeek 模型与产品\n当前版本：0.2.1-rc.2\n快捷键\n工作区文件\n⌥\n⌘\nP\n添加工作区\n⌥\n⌘\nO\n恢复全部默认"
+    },
+    {
+      "name": "04-shortcut-editor-1440",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "text": "DSH 本地构建\n0.2.1-rc.2-687f282\n新会话\n⌥\n⌘\nN\n插件\n自动化任务\n工作区\nworkspace\n新会话\nBegin your reply with the\n9小时\nPrevious conversation\n9小时\n更多\n探索未至之境\n预览版\nworkspace\n标准模式\n描述你想要构建的内容, / 调用指令, @ 文件或对话\n工作区内修改\nDeepSeek-V4-Flash\n设置\n通用设置\n模型\n内置插件\nAgent 预设\n打开配置文件\n关闭\n权限\n选择新会话的默认权限模式\n工作区内修改\n语言\n中文\n外观\n浅色\n深色\n跟随系统\n字号大小\n仅影响会话内容的字号\n14\npx\n工作步骤展示\n选择希望看到多少工具调用细节\n详细\n工作步骤收起时机\n选择何时自动收起工作步骤\n回答结束后\n显示代码工作视图\n开启后，显示轨迹、本轮代码差异，可选择完整的 Agent 预设切换\n快捷键\n\n查看和编辑当前可用的快捷键和输入操作\n\n编辑快捷键\n繁忙时的发送行为\n智能体运行时 Enter 键和发送按钮的行为；Cmd/Ctrl+Enter 使用另一行为\n排队发送\n性能与用量\n选择性能与用量信息展示的详细程度\n详细\n在使用官方模型 API 时上传 Session Log\n帮助改进 DeepSeek 模型与产品\n当前版本：0.2.1-rc.2\n快捷键\n快捷键速查\n恢复默认\n移除\n按下快捷键\n可设置 Command+/、Command+,、Command+反斜杠、Control+反引号、Command+Option+按键或 Command+Shift+按键。也支持三个或四个不同修饰键的组合。浏览器或系统占用的组合可能无法送达页面。\n新会话\n⌥\n⌘\nN\n展开／收起左侧栏\n⌥\n⌘\nB\n搜索会话\n⌥\n⌘\nK\n添加工作区\n⌥\n⌘\nO\n重命名会话\n⌥\n⌘\nG\n分叉会话\n⇧\n⌘\nF\n归档会话\n⌥\n⌘\nA\n打开设置\n⌥\n⌘\n,\n展开／收起右侧栏\n⇧\n⌘\nB\n工作区文件\n⌥\n⌘\nP\n新建终端\n⌃\n`\n分栏\n⌘\n\\\n面板全屏／退出全屏\n⌥\n⌘\nEnter\n刷新当前页面\n暂无快捷键\n关闭当前页面／窗口\n⌥\n⌘\nW\n消息输入\n使用互补的 Queue／Steer 方式\n⌘\nEnter\n打开引用菜单\n@\n换行\n⇧\nEnter\n发送消息\nEnter\n打开命令菜单\n/\n停止生成\nEsc\nEsc\n菜单与弹层\n关闭菜单或顶层弹窗\nEsc\n移动菜单选择\n↑\n↓\n选择菜单项\nEnter\n审批区域\n允许一次\nEnter\n拒绝\nEsc\n恢复全部默认"
+    },
+    {
+      "name": "05-shortcuts-390",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "text": "探索未至之境\n预览版\nworkspace\n标准模式\n描述你想要构建的内容, / 调用指令, @ 文件或对话\nDeepSeek-V4-Flash\n设置\n通用设置\n模型\n内置插件\nAgent 预设\n打开配置文件\n关闭\n权限\n选择新会话的默认权限模式\n工作区内修改\n语言\n中文\n外观\n浅色\n深色\n跟随系统\n字号大小\n仅影响会话内容的字号\n14\npx\n工作步骤展示\n选择希望看到多少工具调用细节\n详细\n工作步骤收起时机\n选择何时自动收起工作步骤\n回答结束后\n显示代码工作视图\n开启后，显示轨迹、本轮代码差异，可选择完整的 Agent 预设切换\n快捷键\n\n查看和编辑当前可用的快捷键和输入操作\n\n编辑快捷键\n繁忙时的发送行为\n智能体运行时 Enter 键和发送按钮的行为；Cmd/Ctrl+Enter 使用另一行为\n排队发送\n性能与用量\n选择性能与用量信息展示的详细程度\n详细\n在使用官方模型 API 时上传 Session Log\n帮助改进 DeepSeek 模型与产品\n当前版本：0.2.1-rc.2\n快捷键\n快捷键速查\n⌘\n/\n新会话\n⌥\n⌘\nN\n展开／收起左侧栏\n⌥\n⌘\nB\n搜索会话\n⌥\n⌘\nK\n添加工作区\n⌥\n⌘\nO\n重命名会话\n⌥\n⌘\nG\n分叉会话\n⇧\n⌘\nF\n归档会话\n⌥\n⌘\nA\n打开设置\n⌥\n⌘\n,\n展开／收起右侧栏\n⇧\n⌘\nB\n工作区文件\n⌥\n⌘\nP\n新建终端\n⌃\n`\n分栏\n⌘\n\\\n面板全屏／退出全屏\n⌥\n⌘\nEnter\n刷新当前页面\n暂无快捷键\n关闭当前页面／窗口\n⌥\n⌘\nW\n消息输入\n使用互补的 Queue／Steer 方式\n⌘\nEnter\n打开引用菜单\n@\n换行\n⇧\nEnter\n发送消息\nEnter\n打开命令菜单\n/\n停止生成\nEsc\nEsc\n菜单与弹层\n关闭菜单或顶层弹窗\nEsc\n移动菜单选择\n↑\n↓\n选择菜单项\nEnter\n审批区域\n允许一次\nEnter\n拒绝\nEsc\n恢复全部默认"
+    }
+  ]
+}

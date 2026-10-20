@@ -1,0 +1,10 @@
+  ➜  Local:   http://127.0.0.1:4194/
+{"shortcutReference":"passed","cases":["searchable 11-action catalog and scoped fixed help","release/repeat/IME/dead/Tab/Escape","focus return","save failure retained binding/draft and explicit retry","stale review","confirmed reset and cancel","actual navigation keys","1440/768/390/320 and dark","no approval or turn mutation"]}
+{"filePreviewStart":{"url":"http://127.0.0.1:4194/#workspace=1234567890abcdef&session=A","drawer":1,"requests":["docs/guide.md"]}}
+{"workspaceLinksAndSettings":"passed","cases":["workspace-scoped content URL","relative preview navigation","root escape blocked","external URLs unchanged","native new-tab preference and reload","plugin/tool search and empty states","settings nav keys","real manager entry without mutations"]}
+{"interactionPageErrors":[]}
+{"webPreferences":"passed","cases":["code view controls actual trajectory/diffs","fonts validated and applied","shortcuts duplicate/reserved/IME/Escape/remap/clear/reset","English actual interface","raw message/file unchanged","reload persistence","320px controls","no backend mutations"]}
+{"preferencePersistenceFailure":"passed","cases":["memory updates with visible failure","error switches language","successful save clears warning and persists all current values"]}
+{"busyPreference":"passed","preferred":"queue","cases":["Enter preference","Ctrl+Enter complementary","idle Cmd+Enter submits","visible send button double click once","IME/Shift+Enter","approval/stopping/unknown-result guards","reconcile without resend","command_id","1440/320 no page overflow"]}
+{"busyPreference":"passed","preferred":"steer","cases":["Enter preference","Ctrl+Enter complementary","idle Cmd+Enter submits","visible send button double click once","IME/Shift+Enter","approval/stopping/unknown-result guards","reconcile without resend","command_id","1440/320 no page overflow"]}
+{"preferencePageErrors":[]}

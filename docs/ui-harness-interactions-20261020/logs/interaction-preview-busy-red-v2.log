@@ -1,0 +1,13 @@
+  ➜  Local:   http://127.0.0.1:4194/
+{"shortcutReference":"passed","cases":["searchable 11-action catalog and scoped fixed help","release/repeat/IME/dead/Tab/Escape","focus return","save failure retained binding/draft and explicit retry","stale review","confirmed reset and cancel","actual navigation keys","1440/768/390/320 and dark","no approval or turn mutation"]}
+{"filePreviewStart":{"url":"http://127.0.0.1:4194/#workspace=1234567890abcdef&session=A","drawer":0,"requests":[]}}
+file:///Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/tests/interaction-browser.mjs:88
+   await Promise.race([pendingPreview.seen.promise,new Promise((_,reject)=>setTimeout(()=>reject(Error('preview request was not issued within 5s')),5000))]);
+                                                                                                 ^
+
+Error: preview request was not issued within 5s
+    at Timeout._onTimeout (file:///Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/tests/interaction-browser.mjs:88:98)
+    at listOnTimeout (node:internal/timers:685:17)
+    at process.processTimers (node:internal/timers:618:7)
+
+Node.js v26.9.0

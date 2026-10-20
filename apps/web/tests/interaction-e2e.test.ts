@@ -352,6 +352,43 @@ test("production Web trust, cancellation, recovery and composer E2E", { timeout:
       assert.equal(submitCount(), before + 1);
       assert.equal(existsSync(join(raceProject, "approval.txt")), false);
     });
+    await scenario("workspace Markdown links use authorized preview and actual sandboxed new-tab content", async () => {
+      const projectPath = join(project, "finish-during-stop");
+      await writeFile(join(projectPath, "guide.md"), "# Actual link fixture\n[Related file](result.md)\n[Static page](result.html)\n[Blocked fixture](.env)\n[Root escape](../outside.md)\n");
+      await writeFile(join(projectPath, "result.md"), "# Actual linked file\nOffline content loaded through the real Host.\n");
+      await writeFile(join(projectPath, "result.html"), "<h1>Sandboxed linked HTML</h1><script>window.fixtureScriptRan=true</script>");
+      await writeFile(join(projectPath, ".env"), "TASK_ONLY_SECRET_FIXTURE=true\n");
+      const before = submitCount();
+      await p.keyboard.press("Alt+Shift+KeyF");
+      const files = p.getByRole("complementary", { name: "工作区文件", exact: true }); await files.waitFor();
+      await files.locator(".workspace-file-list").getByRole("button", { name: "guide.md", exact: true }).click();
+      await files.getByRole("heading", { name: "Actual link fixture", exact: true }).waitFor();
+      const related = files.getByRole("link", { name: "Related file", exact: true });
+      const contentUrl = await related.getAttribute("href"); assert.ok(contentUrl);
+      const response = await p.request.get(origin + contentUrl);
+      assert.equal(response.status(), 200); assert.match(response.headers()["content-security-policy"], /sandbox/);
+      assert.match(response.headers()["content-security-policy"], /default-src 'none'/);
+      assert.match(await response.text(), /Actual linked file/);
+      // noopener intentionally removes the opener relationship; observe the context's new page.
+      const popupPromise = p.context().waitForEvent("page"); await files.getByRole("link", { name: "Static page", exact: true }).click({ modifiers: ["Meta"] });
+      const popup = await popupPromise; await popup.waitForLoadState("domcontentloaded");
+      assert.match(await popup.locator("body").innerText(), /Sandboxed linked HTML/);
+      assert.equal(await popup.evaluate(() => (window as Window & { fixtureScriptRan?: boolean }).fixtureScriptRan), undefined);
+      assert.equal(await popup.evaluate(() => window.opener === null), true);
+      if (artifacts) await popup.screenshot({ path: join(artifacts, "interaction-real-file-new-tab.png") });
+      await popup.close();
+      await related.click(); await files.getByRole("heading", { name: "Actual linked file", exact: true }).waitFor();
+      await files.getByRole("button", { name: "返回文件", exact: true }).click();
+      await files.locator(".workspace-file-list").getByRole("button", { name: "guide.md", exact: true }).click();
+      const blocked = files.getByRole("link", { name: "Blocked fixture", exact: true });
+      const denied = await p.request.get(origin + await blocked.getAttribute("href")); assert.equal(denied.status(), 400);
+      assert.equal((await denied.json()).ok, false);
+      await blocked.click(); await files.getByRole("alert").waitFor();
+      assert.equal(await files.getByText("TASK_ONLY_SECRET_FIXTURE=true", { exact: true }).count(), 0);
+      if (artifacts) await p.screenshot({ path: join(artifacts, "interaction-real-file-denied.png") });
+      assert.equal(submitCount(), before, "file navigation cannot submit a turn or approval");
+      await files.getByRole("button", { name: "关闭文件面板", exact: true }).click();
+    });
     assert.deepEqual(errors, []);
     console.log(JSON.stringify({ realWebE2E: "passed", externalModelCalls: 0, assertions: "browser + runtime snapshot + persisted trust + actual filesystem" }));
   } catch (error) {

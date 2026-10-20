@@ -1,5 +1,6 @@
-import Markdown from "react-markdown";
+import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { WorkspaceLink } from "./WorkspaceLinks";
 
 interface MarkdownContentProps {
   content: string;
@@ -8,6 +9,10 @@ interface MarkdownContentProps {
 const tableDelimiter = /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/;
 const fenceStart = /^\s{0,3}(`{3,}|~{3,})/;
 const cjkStart = /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+// Stable component identity keeps the focused anchor mounted from pointer down to click.
+const markdownComponents: Components = {
+  a: ({ children, node: _node, ...props }) => <WorkspaceLink {...props}>{children}</WorkspaceLink>,
+};
 
 /**
  * Older OpenAI-compatible sessions may have lost standalone whitespace deltas.
@@ -54,10 +59,7 @@ export function MarkdownContent({ content }: MarkdownContentProps) {
   return <div className="markdown-content">
     <Markdown
       remarkPlugins={[remarkGfm]}
-      components={{
-        a: ({ children, ...props }) => <a {...props} target="_blank"
-          rel="noreferrer noopener">{children}</a>,
-      }}>
+      components={markdownComponents}>
       {normalizeMarkdown(content)}
     </Markdown>
   </div>;

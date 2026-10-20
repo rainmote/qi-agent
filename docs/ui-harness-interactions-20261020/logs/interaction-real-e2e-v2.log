@@ -1,0 +1,40 @@
+▶ production Web trust, cancellation, recovery and composer E2E
+  ✔ adding a project asks before any turn, cancel preserves the draft and failure never submits (1054.216875ms)
+  ✔ stop works inside approval, handles failure, suppresses repeat clicks and survives refresh (487.726834ms)
+  ✔ composer menu, IME, multiline draft, focus and responsive geometry remain usable (201.9115ms)
+  ✔ stop cancels a blocking direct-command approval even when no model turn is running (206.725667ms)
+  ✔ trust inheritance is respected and an approved real write succeeds only after approval (780.655917ms)
+  ✔ declining trust persists, stays visible and does not trust a sibling project (948.752875ms)
+  ✔ a finishing run cannot unlock a new submission while its stop request is still in flight (936.802333ms)
+  ✖ workspace Markdown links use authorized preview and actual sandboxed new-tab content (130.096166ms)
+✖ production Web trust, cancellation, recovery and composer E2E (5553.405416ms)
+ℹ tests 9
+ℹ suites 0
+ℹ pass 7
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5819.318834
+
+✖ failing tests:
+
+test at apps/web/tests/interaction-e2e.test.ts:39:13
+✖ workspace Markdown links use authorized preview and actual sandboxed new-tab content (130.096166ms)
+  page.waitForLoadState: Target page, context or browser has been closed
+      at <anonymous> (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/tests/interaction-e2e.test.ts:373:53)
+      at async TestContext.<anonymous> (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/tests/interaction-e2e.test.ts:39:44)
+      at async scenario (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/tests/interaction-e2e.test.ts:39:5)
+      at async TestContext.<anonymous> (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/tests/interaction-e2e.test.ts:355:5) {
+    log: []
+  }
+
+test at apps/web/tests/interaction-e2e.test.ts:24:1
+✖ production Web trust, cancellation, recovery and composer E2E (5553.405416ms)
+  page.waitForLoadState: Target page, context or browser has been closed
+      at <anonymous> (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/tests/interaction-e2e.test.ts:373:53)
+      at async TestContext.<anonymous> (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/tests/interaction-e2e.test.ts:39:44)
+      at async scenario (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/tests/interaction-e2e.test.ts:39:5)
+      at async TestContext.<anonymous> (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/tests/interaction-e2e.test.ts:355:5) {
+    log: []
+  }

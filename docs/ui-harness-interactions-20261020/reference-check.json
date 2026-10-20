@@ -1,0 +1,10 @@
+{
+  "start": "2026-10-20T14:31:44.144104+00:00",
+  "end": "2026-10-20T14:31:45.129320+00:00",
+  "action": "credential-free official public HEAD read",
+  "target": "https://github.com/deepseek-ai/deepseek-harness.git HEAD",
+  "exit_code": 0,
+  "stdout": "687f282e8625c6b8d11ff58211a90524be2e4317\tHEAD\n",
+  "stderr": "",
+  "prior_web_action": "commits/main page fetch returned restricted URL; git transport previously succeeded in this task, used once as independent read-only verification"
+}

@@ -2,18 +2,21 @@ import { useSyncExternalStore } from "react";
 
 export type WebLocale = "zh" | "en";
 export type FontRole = "text" | "code" | "terminal";
-export type ShortcutAction = "new-session" | "sidebar" | "settings" | "composer" | "files";
+export const shortcutActions = ["shortcuts", "new-session", "sidebar", "session-search", "workspace-add", "settings", "composer", "files", "details", "chat", "trajectory"] as const;
+export type ShortcutAction = typeof shortcutActions[number];
 export type ShortcutBinding = { code: string; primary: boolean; alt: boolean; shift: boolean };
 export type WebPreferences = {
-  locale: WebLocale; codeView: boolean; busyEnter: "queue" | "steer";
+  locale: WebLocale; codeView: boolean; busyEnter: "queue" | "steer"; fileLinkOpening: "panel" | "new-tab"; shortcutsRevision: number;
   fontFamilies: Record<FontRole, string>; codeFontSize: number; terminalFontSize: number;
   shortcuts: Record<ShortcutAction, ShortcutBinding | null>;
 };
 export const preferenceKey = "qi-agent.web-preferences.v1";
-export const shortcutActions: ShortcutAction[] = ["new-session", "sidebar", "settings", "composer", "files"];
-export const defaultShortcuts: WebPreferences["shortcuts"] = Object.fromEntries(
-  shortcutActions.map((id, index) => [id, { code: ["KeyN", "KeyB", "KeyS", "KeyI", "KeyF"][index], primary: false, alt: true, shift: true }]),
-) as WebPreferences["shortcuts"];
+const altShift = (code: string): ShortcutBinding => ({ code, primary: false, alt: true, shift: true });
+export const defaultShortcuts: WebPreferences["shortcuts"] = {
+  shortcuts: { code: "Slash", primary: true, alt: false, shift: false },
+  "new-session": altShift("KeyN"), sidebar: altShift("KeyB"), settings: altShift("KeyS"), composer: altShift("KeyI"), files: altShift("KeyF"),
+  "session-search": altShift("KeyK"), "workspace-add": altShift("KeyO"), details: altShift("KeyD"), chat: altShift("KeyJ"), trajectory: altShift("KeyT"),
+};
 
 export function normalizeFontFamily(value: unknown): string | null {
   if (typeof value !== "string" || value.length > 200 || /[;{}\\\x00-\x1f]|url\s*\(/i.test(value)) return null;
@@ -34,21 +37,21 @@ export function shortcutIdentity(value: ShortcutBinding): string {
 }
 export function normalizeWebPreferences(value: unknown): WebPreferences {
   const v = value && typeof value === "object" ? value as Partial<WebPreferences> : {};
-  const shortcuts = { ...defaultShortcuts };
+  const shortcuts = Object.fromEntries(shortcutActions.map(action => [action, null])) as WebPreferences["shortcuts"];
   const seen = new Set<string>();
-  for (const action of shortcutActions) {
+  // Existing explicit bindings win over defaults introduced by an upgrade.
+  const explicit = shortcutActions.filter(action => validShortcut(v.shortcuts?.[action]));
+  for (const action of [...explicit, ...shortcutActions.filter(action => !explicit.includes(action))]) {
     const candidate = v.shortcuts?.[action];
-    if (candidate === null) shortcuts[action] = null;
-    else if (validShortcut(candidate)) shortcuts[action] = { ...candidate };
-    const binding = shortcuts[action];
+    const binding = candidate === null ? null : validShortcut(candidate) ? candidate : defaultShortcuts[action];
     if (binding) {
       const key = shortcutIdentity(binding);
-      if (seen.has(key)) shortcuts[action] = null;
-      else seen.add(key);
+      if (!seen.has(key)) { shortcuts[action] = { ...binding }; seen.add(key); }
     }
   }
   return { locale: v.locale === "en" ? "en" : "zh", codeView: v.codeView !== false,
-    busyEnter: v.busyEnter === "steer" ? "steer" : "queue", shortcuts,
+    busyEnter: v.busyEnter === "steer" ? "steer" : "queue", fileLinkOpening: v.fileLinkOpening === "new-tab" ? "new-tab" : "panel", shortcuts,
+    shortcutsRevision: Number.isSafeInteger(v.shortcutsRevision) && v.shortcutsRevision! >= 0 ? v.shortcutsRevision! : 0,
     fontFamilies: { text: normalizeFontFamily(v.fontFamilies?.text ?? "") ?? "", code: normalizeFontFamily(v.fontFamilies?.code ?? "") ?? "", terminal: normalizeFontFamily(v.fontFamilies?.terminal ?? "") ?? "" },
     codeFontSize: Number.isInteger(v.codeFontSize) && v.codeFontSize! >= 10 && v.codeFontSize! <= 16 ? v.codeFontSize! : 11,
     terminalFontSize: Number.isInteger(v.terminalFontSize) && v.terminalFontSize! >= 10 && v.terminalFontSize! <= 20 ? v.terminalFontSize! : 13 };
@@ -63,12 +66,34 @@ const listeners = new Set<() => void>();
 const subscribe = (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener); };
 export const getWebPreferences = () => current;
 export function updateWebPreferences(patch: Partial<WebPreferences>): boolean {
-  current = normalizeWebPreferences({ ...current, ...patch });
+  let readFailed = false;
+  if (!patch.shortcuts) {
+    try {
+      const stored = normalizeWebPreferences(JSON.parse(localStorage.getItem(preferenceKey) || "null"));
+      current = { ...current, shortcuts: stored.shortcuts, shortcutsRevision: stored.shortcutsRevision };
+    } catch { readFailed = true; }
+  }
+  current = normalizeWebPreferences({ ...current, ...patch, shortcutsRevision: patch.shortcuts ? current.shortcutsRevision + 1 : current.shortcutsRevision });
   let saved = true;
-  try { localStorage.setItem(preferenceKey, JSON.stringify(current)); } catch { saved = false; }
+  try { if (readFailed) saved = false; else localStorage.setItem(preferenceKey, JSON.stringify(current)); } catch { saved = false; }
   persistenceFailed = !saved;
   listeners.forEach(listener => listener());
   return saved;
+}
+/** Shortcut edits keep the accepted binding on write failure and reject an already stale review. */
+export function saveShortcuts(shortcuts: WebPreferences["shortcuts"], reviewedRevision: number): "saved" | "stale" | "failed" {
+  let stored: WebPreferences;
+  try { stored = normalizeWebPreferences(JSON.parse(localStorage.getItem(preferenceKey) || "null")); }
+  catch { persistenceFailed = true; listeners.forEach(listener => listener()); return "failed"; }
+  if (current.shortcutsRevision !== reviewedRevision || stored.shortcutsRevision !== reviewedRevision) {
+    current = stored; persistenceFailed = false;
+    listeners.forEach(listener => listener()); return "stale";
+  }
+  // Reconcile unrelated preferences from storage instead of overwriting a newer tab's values.
+  const next = normalizeWebPreferences({ ...stored, shortcuts, shortcutsRevision: reviewedRevision + 1 });
+  try { localStorage.setItem(preferenceKey, JSON.stringify(next)); }
+  catch { persistenceFailed = true; listeners.forEach(listener => listener()); return "failed"; }
+  current = next; persistenceFailed = false; listeners.forEach(listener => listener()); return "saved";
 }
 export function useWebPreferences(): WebPreferences {
   return useSyncExternalStore(subscribe, getWebPreferences, getWebPreferences);

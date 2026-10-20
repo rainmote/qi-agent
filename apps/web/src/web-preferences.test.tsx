@@ -43,11 +43,11 @@ test("local preferences report failed persistence without changing backend autho
   const before = getWebPreferences(), descriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
   try {
     const saved = new Map<string, string>();
-    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: { setItem: (key: string, value: string) => saved.set(key, value) } });
+    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: { getItem: (key: string) => saved.get(key) || null, setItem: (key: string, value: string) => saved.set(key, value) } });
     assert.equal(updateWebPreferences({ locale: "en", codeView: false }), true);
     assert.equal(JSON.parse(saved.get(preferenceKey)!).locale, "en");
     assert.equal(Object.hasOwn(JSON.parse(saved.get(preferenceKey)!), "policy"), false);
-    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: { setItem: () => { throw Error("quota"); } } });
+    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: { getItem: (key: string) => saved.get(key) || null, setItem: () => { throw Error("quota"); } } });
     assert.equal(updateWebPreferences({ busyEnter: "steer" }), false);
     assert.equal(getWebPreferences().busyEnter, "steer");
   } finally {

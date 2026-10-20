@@ -1,0 +1,21 @@
+  ➜  Local:   http://127.0.0.1:4194/
+{"shortcutReference":"passed","cases":["searchable 11-action catalog and scoped fixed help","release/repeat/IME/dead/Tab/Escape","focus return","save failure retained binding/draft and explicit retry","stale review","confirmed reset and cancel","actual navigation keys","1440/768/390/320 and dark","no approval or turn mutation"]}
+{"filePreviewStart":{"url":"http://127.0.0.1:4194/#workspace=1234567890abcdef&session=A","drawer":1,"requests":["docs/guide.md"]}}
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: completed directory listing must not hide the pending preview cancel action
+
+0 !== 1
+
+    at file:///Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/tests/interaction-browser.mjs:89:64 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: 0,
+  expected: 1,
+  operator: 'strictEqual',
+  diff: 'simple'
+}
+
+Node.js v26.9.0

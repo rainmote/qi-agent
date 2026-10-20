@@ -1,7 +1,8 @@
 import { uiText as t } from "./i18n";
-import { useEffect, useRef, useState } from "react";
-import Markdown from "react-markdown";
+import { useEffect, useMemo, useRef, useState } from "react";
+import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { WorkspaceLink } from "./WorkspaceLinks";
 import type { ChangeSet, FileListing, FilePreview } from "../../web-host/workspace-files.js";
 
 export interface WorkspacePanelApi {
@@ -15,6 +16,7 @@ export interface WorkspacePanelProps {
   workspaceId: string; sessionId?: string; api: WorkspacePanelApi;
   onReference?: (text: string) => void; onClose?: () => void;
   responseDetail?: "short" | "auto" | "detailed";
+  previewRequest?: { path: string; serial: number };
   onResponseDetail?: (value: "short" | "auto" | "detailed") => Promise<void>;
 }
 
@@ -44,10 +46,15 @@ export function WorkspaceVerificationSummary({ changes }: { changes: ChangeSet }
 }
 
 /** File access is server-authorized; changing workspace aborts and discards all prior reads. */
-export function WorkspacePanel({ workspaceId, sessionId, api, onReference, onClose, responseDetail = "auto", onResponseDetail, showChanges = true }: WorkspacePanelProps & { showChanges?: boolean }) {
+export function WorkspacePanel({ workspaceId, sessionId, api, onReference, onClose, responseDetail = "auto", onResponseDetail, showChanges = true, previewRequest }: WorkspacePanelProps & { showChanges?: boolean }) {
   const [path, setPath] = useState(""), [query, setQuery] = useState(""), [listing, setListing] = useState<FileListing | null>(null);
   const [preview, setPreview] = useState<FilePreview | null>(null), [changes, setChanges] = useState<ChangeSet | null>(null);
-  const [tab, setTab] = useState<"files" | "changes">("files"), [busy, setBusy] = useState(false), [error, setError] = useState("");
+  const markdownComponents = useMemo<Components>(() => ({
+    img: ({ alt }) => <span>{t("[图片：")}{alt || t("未加载")}]</span>,
+    a: ({ children, href }) => <WorkspaceLink href={href} directory={preview?.path.split("/").slice(0, -1).join("/")}>{children}</WorkspaceLink>,
+  }), [preview?.path]);
+  const [tab, setTab] = useState<"files" | "changes">("files"), [listingBusy, setListingBusy] = useState(false), [previewBusy, setPreviewBusy] = useState(false), [error, setError] = useState("");
+  const busy = listingBusy || previewBusy;
   useEffect(() => { if (!showChanges) setTab("files"); }, [showChanges]);
   const [revision, setRevision] = useState(0), read = useRef<AbortController | null>(null), view = useRef<AbortController | null>(null);
   const [savingDetail, setSavingDetail] = useState(false), [detailError, setDetailError] = useState("");
@@ -60,15 +67,15 @@ export function WorkspacePanel({ workspaceId, sessionId, api, onReference, onClo
     catch (failure) { if (scope === detailScope.current) setDetailError(failure instanceof Error ? failure.message : t("保存失败，请重新选择。")); }
     finally { if (scope === detailScope.current) setSavingDetail(false); }
   };
-  useEffect(() => { setPath(""); setQuery(""); setPreview(null); setChanges(null); setListing(null); view.current?.abort(); }, [workspaceId]);
+  useEffect(() => { setPath(""); setQuery(""); setPreview(null); setChanges(null); setListing(null); view.current?.abort(); setPreviewBusy(false); }, [workspaceId]);
   useEffect(() => {
     const controller = new AbortController(); read.current?.abort(); read.current = controller;
-    setBusy(true); setError(""); setListing(null); setChanges(null);
+    setListingBusy(true); setError(""); setListing(null); setChanges(null);
     const timer = setTimeout(() => {
       const work = tab === "changes" ? api.changes && sessionId ? api.changes(workspaceId, sessionId, controller.signal).then(value => { if (!controller.signal.aborted) setChanges(value); }) : Promise.resolve()
         : (query.trim() ? api.search(workspaceId, query.trim(), controller.signal) : api.list(workspaceId, path, controller.signal)).then(value => { if (!controller.signal.aborted) setListing(value); });
       void work.catch(failure => { if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : t("读取失败，请重试。")); })
-        .finally(() => { if (!controller.signal.aborted) setBusy(false); });
+        .finally(() => { if (!controller.signal.aborted) setListingBusy(false); });
     }, query ? 180 : 0);
     return () => { clearTimeout(timer); controller.abort(); };
   }, [workspaceId, sessionId, path, query, tab, revision, api]);
@@ -80,11 +87,17 @@ export function WorkspacePanel({ workspaceId, sessionId, api, onReference, onClo
   }, [tab, changes]);
   const openFile = async (file: string) => {
     view.current?.abort(); const controller = new AbortController(); view.current = controller;
-    setBusy(true); setError(""); setPreview(null);
+    setPreviewBusy(true); setError(""); setPreview(null);
     try { const value = await api.preview(workspaceId, file, controller.signal); if (!controller.signal.aborted) setPreview(value); }
     catch (failure) { if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : t("预览失败，请重试。")); }
-    finally { if (!controller.signal.aborted) setBusy(false); }
+    finally { if (!controller.signal.aborted) setPreviewBusy(false); }
   };
+  useEffect(() => {
+    if (!previewRequest) return;
+    setTab("files"); setQuery(""); setPath(previewRequest.path.split("/").slice(0, -1).join("/"));
+    void openFile(previewRequest.path);
+    return () => view.current?.abort();
+  }, [workspaceId, previewRequest?.serial, previewRequest?.path]);
   return <aside className="workspace-panel" aria-label={t("工作区文件")}>
     <header><strong>{t("工作区文件")}</strong>{onClose && <button type="button" aria-label={t("关闭文件面板")} onClick={onClose}>×</button>}</header>
     <nav className="workspace-tabs" aria-label={t("文件视图")}><button type="button" aria-pressed={tab === "files"} onClick={() => setTab("files")}>{t("文件")}</button>
@@ -101,7 +114,7 @@ export function WorkspacePanel({ workspaceId, sessionId, api, onReference, onClo
     {tab === "files" && <><input className="workspace-search" type="search" value={query} aria-label={t("搜索文件路径")} placeholder={t("搜索文件路径…")}
       onChange={event => { setQuery(event.target.value); setPreview(null); }} />
       <div className="workspace-breadcrumb"><button type="button" disabled={!path && !query} onClick={() => { setPath(path.split("/").slice(0, -1).join("/")); setQuery(""); setPreview(null); }}>{t("上一级")}</button><span>{query ? t("搜索结果") : path || t("工作区根目录")}</span></div></>}
-    {busy && <div role="status" className="workspace-feedback"><span>{t("正在读取…")}</span><button type="button" onClick={() => { read.current?.abort(); view.current?.abort(); setBusy(false); }}>{t("取消")}</button></div>}
+    {busy && <div role="status" className="workspace-feedback"><span>{t("正在读取…")}</span><button type="button" onClick={() => { read.current?.abort(); view.current?.abort(); setListingBusy(false); setPreviewBusy(false); }}>{t("取消")}</button></div>}
     {error && <div role="alert" className="workspace-error">{error}<button type="button" onClick={() => setRevision(value => value + 1)}>{t("重试")}</button></div>}
     <div className="workspace-body">
       {tab === "files" && !preview && listing && <>{listing.entries.length === 0 ? <p className="workspace-muted">{t("没有可显示的文件。隐藏、敏感或构建目录不会列出。")}</p> : <ul className="workspace-file-list">{listing.entries.map(entry => <li key={entry.path}>
@@ -114,7 +127,7 @@ export function WorkspacePanel({ workspaceId, sessionId, api, onReference, onClo
         <p className="workspace-muted">{preview.path} · {Math.ceil(preview.size / 1024)} KiB</p>
         {preview.notice && <p className="workspace-muted">{preview.notice}</p>}
         {preview.kind === "text" && (preview.mime === "text/markdown" ? <><div className="workspace-markdown"><Markdown remarkPlugins={[remarkGfm]}
-          components={{ img: ({ alt }) => <span>{t("[图片：")}{alt || t("未加载")}]</span>, a: ({ children, href }) => <a href={href} target="_blank" rel="noreferrer noopener">{children}</a> }}>{preview.text || ""}</Markdown></div>
+          components={markdownComponents}>{preview.text || ""}</Markdown></div>
           <details><summary>{t("Markdown 源文")}</summary><pre tabIndex={0}>{preview.text}</pre></details></> : <pre tabIndex={0}>{preview.text}</pre>)}
         {preview.kind === "html" && <><p className="workspace-muted">{t("静态 HTML 预览：脚本、网络和表单已禁用。")}</p><iframe title={t("{0} 静态预览", preview.name)} tabIndex={0} sandbox="" referrerPolicy="no-referrer" srcDoc={sandboxedHtml(preview.text || "")} /></>}
         {preview.kind === "image" && <img src={api.contentUrl(workspaceId, preview.path)} alt={preview.name} />}

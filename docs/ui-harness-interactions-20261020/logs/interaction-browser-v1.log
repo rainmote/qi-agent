@@ -1,0 +1,17 @@
+  ➜  Local:   http://127.0.0.1:4194/
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+
+locator.waitFor: Timeout 30000ms exceeded.
+Call log:
+  - waiting for getByRole('dialog', { name: '设置', exact: true }) to be visible
+
+    at /Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/tests/interaction-browser.mjs:41:93 {
+  log: [
+    "  - waiting for getByRole('dialog', { name: '设置', exact: true }) to be visible"
+  ],
+  name: 'TimeoutError'
+}
+
+Node.js v26.9.0

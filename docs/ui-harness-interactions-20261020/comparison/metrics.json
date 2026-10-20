@@ -1,0 +1,23 @@
+{
+  "viewport": [
+    1440,
+    1000
+  ],
+  "dpr": 1,
+  "full_nonzero_pixels": 956125,
+  "full_pixels": 1440000,
+  "modal_crop": [
+    480,
+    230,
+    960,
+    830
+  ],
+  "modal_nonzero_pixels": 42621,
+  "modal_pixels": 288000,
+  "max_channel_delta": 240,
+  "exclusion_masks": [],
+  "browser": "155.0.8059.85",
+  "reference": "reference/02-shortcuts-1440.png",
+  "candidate": "candidate/interaction-shortcuts-1440.png",
+  "acceptance": "blocked; diagnostic only. Official draft vs qi fixture session background and catalog/focus/heading states differ. No matched-content whole-screen claim. The crop does not waive the rest of the screen."
+}

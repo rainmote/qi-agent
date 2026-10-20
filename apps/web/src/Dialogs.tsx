@@ -1,30 +1,33 @@
 import { uiText as t } from "./i18n";
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { api } from "./api";
 import { Icon } from "./icons";
 import { PermissionControl, SettingsLanguageControl } from "./ComposerControls";
 import { FontPreferences, SettingsPreferenceControl, WebPreferenceRows } from "./PreferenceSettings";
+import { shortcutForEvent, useWebPreferences } from "./web-preferences";
+import { version as webVersion } from "../../../package.json";
 import type { PolicyStatus } from "./types";
 import { ProviderSettingsPanel } from "./ProviderSettingsPanel";
 import type { Interaction, ProjectTrust, RuntimeStatus, Workspace } from "./types";
 import { collapseTimings, transcriptViews, type CollapseTiming, type TranscriptView } from "./transcript-display";
 
-function DialogFrame({ title, children, onClose, className = "", dangerous = false }: {
-  title: string; children: ReactNode; onClose?: () => void; className?: string; dangerous?: boolean;
+export function DialogFrame({ title, children, onClose, className = "", dangerous = false, initialFocus }: {
+  title: string; children: ReactNode; onClose?: () => void; className?: string; dangerous?: boolean; initialFocus?: string;
 }) {
   const dialog = useRef<HTMLDivElement>(null);
   const controls = () => [...dialog.current?.querySelectorAll<HTMLElement>(
     "button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], summary") || []]
     .filter(element => element.getClientRects().length > 0);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const root = document.getElementById("root");
     const wasInert = root?.inert ?? false;
     const overflow = document.body.style.overflow;
     if (root) root.inert = true;
     document.body.style.overflow = "hidden";
-    controls()[0]?.focus();
+    (initialFocus ? dialog.current?.querySelector<HTMLElement>(initialFocus) : null)?.focus();
+    if (!initialFocus || !dialog.current?.contains(document.activeElement)) controls()[0]?.focus();
     return () => {
       if (root) root.inert = wasInert;
       document.body.style.overflow = overflow;
@@ -201,7 +204,7 @@ function ContentFontControl({ expanded, onToggle, controls }: { expanded: boolea
 }
 
 export function SettingsDialog({ workspaces, runtime, theme, onThemeChange, onClose, view, onViewChange, collapseTiming, onCollapseTimingChange,
-  onAddWorkspace, onRemoveWorkspace, onProvidersChanged, policy, onPolicyChange }: {
+  onAddWorkspace, onRemoveWorkspace, onProvidersChanged, policy, onPolicyChange, onOpenShortcuts, onManagePlugins, initialFocus }: {
   workspaces: Workspace[]; runtime: RuntimeStatus | null;
   policy?: PolicyStatus | null; onPolicyChange?: (mode: PolicyStatus["mode"]) => void;
   theme: "dark" | "light" | "system"; onThemeChange: (theme: "dark" | "light" | "system") => void;
@@ -210,9 +213,16 @@ export function SettingsDialog({ workspaces, runtime, theme, onThemeChange, onCl
   onClose: () => void; onAddWorkspace: () => void;
   onRemoveWorkspace?: (workspace: Workspace) => Promise<void>;
   onProvidersChanged?: () => Promise<void> | void;
+  onOpenShortcuts?: () => void; onManagePlugins?: () => void;
+  initialFocus?: string;
 }) {
+  const preferences = useWebPreferences();
   const [tab, setTab] = useState<SettingsTab>("general");
   const [fontsOpen, setFontsOpen] = useState(false);
+  const [pluginQuery, setPluginQuery] = useState(""), [toolQuery, setToolQuery] = useState("");
+  const matches = (query: string, ...values: Array<string | undefined>) => values.join(" ").toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
+  const plugins = runtime?.plugins.filter(plugin => matches(pluginQuery, plugin.id, plugin.namespace, plugin.description)) || [];
+  const tools = runtime?.tools.filter(tool => matches(toolQuery, tool.name, tool.description)) || [];
   const tabs: Array<{ id: SettingsTab; label: string; icon: "settingsGeneral" | "settingsModels" | "settingsPlugins" | "terminal" | "folderClosed" }> = [
     { id: "general", label: t("通用设置"), icon: "settingsGeneral" },
     { id: "models", label: t("模型"), icon: "settingsModels" },
@@ -220,11 +230,24 @@ export function SettingsDialog({ workspaces, runtime, theme, onThemeChange, onCl
     { id: "tools", label: t("工具"), icon: "terminal" },
     { id: "workspaces", label: t("工作区"), icon: "folderClosed" },
   ];
-  return <DialogFrame title={t("设置")} onClose={onClose} className="settings-dialog">
-    <div className="settings-layout">
-      <nav aria-label={t("设置分区")}>
+  return <DialogFrame title={t("设置")} onClose={onClose} className="settings-dialog" initialFocus={initialFocus}>
+    <div className="settings-layout" onKeyDown={event => {
+      if (!event.defaultPrevented && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229
+        && !(event.target instanceof Element && event.target.closest('[role="menu"]'))
+        && shortcutForEvent(event.nativeEvent, preferences.shortcuts) === "shortcuts") {
+        event.preventDefault(); event.stopPropagation(); onOpenShortcuts?.();
+      }
+    }}>
+      <nav aria-label={t("设置分区")} onKeyDown={event => {
+        if (event.nativeEvent.isComposing || !["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+        const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>("button")];
+        const current = buttons.indexOf(document.activeElement as HTMLButtonElement); if (current < 0) return;
+        const index = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1
+          : (current + (event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1) + buttons.length) % buttons.length;
+        event.preventDefault(); buttons[index]?.focus();
+      }}>
         <div className="settings-brand"><strong>{t("设置")}</strong></div>
-        {tabs.map((entry) => <button type="button" key={entry.id} className={tab === entry.id ? "active" : ""}
+        {tabs.map((entry) => <button type="button" key={entry.id} className={tab === entry.id ? "active" : ""} aria-current={tab === entry.id ? "page" : undefined}
           onClick={() => setTab(entry.id)}><Icon name={entry.icon} />{entry.label}</button>)}
       </nav>
       <div className="settings-main">
@@ -257,7 +280,8 @@ export function SettingsDialog({ workspaces, runtime, theme, onThemeChange, onCl
           <section className="settings-option-row settings-preference-row"><div><h3>{t("工作步骤收起时机")}</h3><p>{t("选择何时自动收起工作步骤")}</p></div>
             <SettingsPreferenceControl label={t("工作步骤收起时机")} value={collapseTiming} options={collapseTimings} onChange={onCollapseTimingChange} />
           </section>
-          <WebPreferenceRows />
+          <WebPreferenceRows onOpenShortcuts={onOpenShortcuts} />
+          <section className="settings-option-row"><div><h3>{t("版本")}</h3><p>qi-agent Web</p></div><span>{webVersion}</span></section>
         </>}
         {tab === "workspaces" && <>
           <section><div className="section-title-row"><div><h3>{t("工作区")}</h3><p>{t("管理 Web UI 可以访问的本机目录。")}</p></div>
@@ -270,15 +294,22 @@ export function SettingsDialog({ workspaces, runtime, theme, onThemeChange, onCl
           </section>
         </>}
         {tab === "models" && <ProviderSettingsPanel onChanged={onProvidersChanged} />}
-        {tab === "plugins" && <section><h3>{t("插件")}</h3><p>{runtime ? t("{0} 个已加载插件", runtime.plugins.length) : t("打开会话后显示")}</p>
-          <div className="settings-cards">{runtime?.plugins.map((plugin) => <div className="settings-card" key={plugin.id}>
+        {tab === "plugins" && <section><div className="section-title-row"><div><h3>{t("插件")}</h3><p>{runtime ? t("{0} 个已加载插件", runtime.plugins.length) : t("打开会话后显示")}</p></div>
+          <button type="button" className="settings-preference-trigger" disabled={!onManagePlugins} onClick={onManagePlugins}>{t("管理插件")}</button></div>
+          <input className="settings-catalog-search" type="search" aria-label={t("搜索插件")} placeholder={t("搜索插件")} value={pluginQuery} onChange={event => setPluginQuery(event.target.value)} disabled={!runtime} />
+          {runtime && <p className="settings-catalog-count" role="status">{t("显示 {0} / {1} 项", plugins.length, runtime.plugins.length)}</p>}
+          <div className="settings-cards">{plugins.map((plugin) => <div className="settings-card" key={plugin.id}>
             <Icon name="command" /><div><strong>{plugin.id}</strong><span>{plugin.description || plugin.namespace}</span></div>
           </div>)}</div>
+          {runtime && !plugins.length && <p>{t(pluginQuery.trim() ? "没有匹配的插件" : "当前会话未加载插件")}</p>}
         </section>}
         {tab === "tools" && <section><h3>{t("工具")}</h3><p>{runtime ? t("{0} 个模型工具", runtime.tools.length) : t("打开会话后显示")}</p>
-          <div className="settings-cards">{runtime?.tools.map((tool) => <div className="settings-card" key={tool.name}>
+          <input className="settings-catalog-search" type="search" aria-label={t("搜索工具")} placeholder={t("搜索工具")} value={toolQuery} onChange={event => setToolQuery(event.target.value)} disabled={!runtime} />
+          {runtime && <p className="settings-catalog-count" role="status">{t("显示 {0} / {1} 项", tools.length, runtime.tools.length)}</p>}
+          <div className="settings-cards">{tools.map((tool) => <div className="settings-card" key={tool.name}>
             <Icon name="terminal" /><div><strong>{tool.name}</strong><span>{tool.description}</span></div>
           </div>)}</div>
+          {runtime && !tools.length && <p>{t(toolQuery.trim() ? "没有匹配的工具" : "当前会话未加载工具")}</p>}
         </section>}
       </div>
       </div>

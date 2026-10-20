@@ -10,6 +10,9 @@ import { ApprovalPanel, FullAccessDialog, SettingsDialog, WorkspaceDialog } from
 import { Icon } from "./icons";
 import { MenuSurface } from "./MenuSurface";
 import { busySubmission, shortcutForEvent, useWebPreferences } from "./web-preferences";
+import { shortcutAvailable } from "./shortcut-catalog";
+import { ShortcutReference } from "./ShortcutReference";
+import { WorkspaceLinkProvider } from "./WorkspaceLinks";
 import { applyHostEvent, fromSnapshot, type Projection } from "./projection";
 import { Timeline } from "./Timeline";
 import { RunOverview } from "./RunOverview";
@@ -292,6 +295,21 @@ export function App() {
   }, [workbench, workspaceId]);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsInitialFocus, setSettingsInitialFocus] = useState<string>();
+  useEffect(() => { if (!settingsOpen) setSettingsInitialFocus(undefined); }, [settingsOpen]);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false), shortcutsReturnToSettings = useRef(false);
+  const [fileRequest, setFileRequest] = useState<{ path: string; serial: number; scope: string } | null>(null);
+  const fileSerial = useRef(0);
+  const openShortcuts = (fromSettings = false) => {
+    shortcutsReturnToSettings.current = fromSettings; setSettingsOpen(false); setShortcutsOpen(true);
+  };
+  const closeShortcuts = () => {
+    setShortcutsOpen(false);
+    if (shortcutsReturnToSettings.current) {
+      shortcutsReturnToSettings.current = false; setSettingsInitialFocus("[data-shortcuts-trigger]"); setSettingsOpen(true);
+    }
+  };
+  useEffect(() => { if (workbench !== "files") setFileRequest(null); }, [workbench]);
   const [returnToSettings, setReturnToSettings] = useState(false);
   const [stepsView, setStepsView] = useState<TranscriptView>(() => transcriptView(localStorage.getItem("qi-agent.transcript-view")));
   const [stepsCollapseTiming, setStepsCollapseTiming] = useState<CollapseTiming>(() => collapseTiming(localStorage.getItem("qi-agent.collapse-timing")));
@@ -969,8 +987,9 @@ export function App() {
       if (event.defaultPrevented || event.keyCode === 229 || document.getElementById("root")?.inert
         || (document.activeElement instanceof Element && document.activeElement.closest('[role="dialog"], [role="menu"]'))) return;
       const action = shortcutForEvent(event, preferences.shortcuts);
-      if (!action) return;
+      if (!action || !shortcutAvailable(action, { workspace: !!workspaceId, session: !!activeSession, busy, codeView: preferences.codeView })) return;
       event.preventDefault();
+      if (action === "shortcuts") openShortcuts();
       if (action === "new-session" && workspaceId && !busy) startNewSession();
       if (action === "sidebar") {
         if (window.matchMedia("(max-width:1023px)").matches) setMobileSidebar(value => !value);
@@ -979,6 +998,16 @@ export function App() {
       if (action === "settings") setSettingsOpen(true);
       if (action === "composer") composerInput.current?.focus();
       if (action === "files" && workspaceId) setWorkbench(value => value === "files" ? null : "files");
+      if (action === "session-search") {
+        setSearchOpen(true);
+        if (window.matchMedia("(max-width:1023px)").matches) setMobileSidebar(true);
+        else { setSidebarCollapsed(false); localStorage.setItem("qi-agent.sidebar", "expanded"); }
+        requestAnimationFrame(() => sidebarElement.current?.querySelector<HTMLInputElement>(".session-search")?.focus());
+      }
+      if (action === "workspace-add") setWorkspaceDialogOpen(true);
+      if (action === "details") setDetailsOpen(value => !value);
+      if (action === "chat") setConversationView("chat");
+      if (action === "trajectory") setConversationView("trajectory");
     };
     document.addEventListener("keydown", keydown);
     return () => document.removeEventListener("keydown", keydown);
@@ -1076,7 +1105,9 @@ export function App() {
     {stopError && !projection?.interactions.length && <p className="composer-error" role="alert">{stopError} <button type="button" onClick={() => void stopRun()}>{t("重试停止")}</button></p>}
   </div>;
 
-  return <div className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${detailsOpen ? "details-open" : ""}`}>
+  return <WorkspaceLinkProvider value={workspaceId ? { workspaceId, contentUrl: api.workspaceFiles.contentUrl, open: path => {
+    setFileRequest({ path, serial: ++fileSerial.current, scope: `${workspaceId}:${activeSession?.id || "draft"}` }); setWorkbench("files");
+  } } : null}><div className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${detailsOpen ? "details-open" : ""}`}>
     <aside ref={sidebarElement} className={`sidebar ${mobileSidebar ? "is-open" : ""}`}
       role={mobileSidebar ? "dialog" : undefined} aria-modal={mobileSidebar || undefined} aria-label={mobileSidebar ? t("导航") : undefined}
       onKeyDown={event => {
@@ -1235,6 +1266,7 @@ export function App() {
       <span tabIndex={workbenchModal ? 0 : -1} data-focus-boundary="start" className="workbench-focus-boundary"
         onFocus={() => { if (workbenchElement.current) workbenchControls(workbenchElement.current).at(-1)?.focus(); }} />
       <div className="workbench-content">{workbench === "files" ? <WorkspacePanel key={activeSession?.id || workspaceId} workspaceId={workspaceId} sessionId={activeSession?.id} api={api.workspaceFiles} showChanges={preferences.codeView}
+        previewRequest={fileRequest?.scope === `${workspaceId}:${activeSession?.id || "draft"}` ? fileRequest : undefined}
         responseDetail={([...projection?.events || []].reverse().find(event => event.type === "session/preferences")?.data.response_detail as "short" | "auto" | "detailed") || "auto"}
         onResponseDetail={async value => {
           const id = activeSession?.id; if (!id) throw new Error(t("请先开始一个会话"));
@@ -1267,6 +1299,8 @@ export function App() {
         void selectPolicy("allow");
       }} />}
     {settingsOpen && <SettingsDialog workspaces={bootstrap?.workspaces || []} runtime={runtime}
+      initialFocus={settingsInitialFocus}
+      onOpenShortcuts={() => openShortcuts(true)} onManagePlugins={activeSession ? () => { setSettingsOpen(false); setWorkbench("plugins"); } : undefined}
       view={stepsView} onViewChange={value => { setStepsView(value); localStorage.setItem("qi-agent.transcript-view", value); }}
       collapseTiming={stepsCollapseTiming} onCollapseTimingChange={value => { setStepsCollapseTiming(value); localStorage.setItem("qi-agent.collapse-timing", value); }}
       theme={theme} onThemeChange={setTheme} onClose={() => setSettingsOpen(false)}
@@ -1288,7 +1322,8 @@ export function App() {
         }
       }}
       onAddWorkspace={() => { setSettingsOpen(false); setWorkspaceDialogOpen(true); }} onRemoveWorkspace={removeWorkspace} />}
+    {shortcutsOpen && <ShortcutReference onClose={closeShortcuts} context={{ workspace: !!workspaceId, session: !!activeSession, busy, codeView: preferences.codeView }} />}
     {workspaceDialogOpen && <WorkspaceDialog initialPath={activeWorkspace?.path} onClose={() => setWorkspaceDialogOpen(false)} onSelect={addWorkspace} />}
     {notice && <div className="toast" role="status">{notice}</div>}
-  </div>;
+  </div></WorkspaceLinkProvider>;
 }

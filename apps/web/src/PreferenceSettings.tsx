@@ -1,10 +1,10 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Icon } from "./icons";
 import { MenuSurface } from "./MenuSurface";
 import { useComposerPopover } from "./ComposerControls";
 import { uiText as t } from "./i18n";
-import { defaultShortcuts, normalizeFontFamily, shortcutActions, shortcutIdentity, updateWebPreferences, usePreferencePersistenceFailed, useWebPreferences, validShortcut,
-  type FontRole, type ShortcutAction, type ShortcutBinding, type WebPreferences } from "./web-preferences";
+import { normalizeFontFamily, updateWebPreferences, usePreferencePersistenceFailed, useWebPreferences,
+  type FontRole, type WebPreferences } from "./web-preferences";
 
 export function SettingsPreferenceControl<T extends string>({ label, value, options, onChange }: {
   label: string; value: T; options: Array<{ id: T; label: string }>; onChange: (value: T) => void;
@@ -65,57 +65,21 @@ export function FontPreferences() {
     <RoleFontSize role="terminal" label={t("终端输出字号")} />
   </>;
 }
-const actionLabels: Record<ShortcutAction, string> = { "new-session": "新会话", sidebar: "切换侧边栏", settings: "打开设置", composer: "聚焦输入框", files: "文件与变更" };
-function describe(binding: ShortcutBinding | null) {
-  if (!binding) return t("未绑定");
-  return `${binding.primary ? "Ctrl/Cmd + " : ""}${binding.alt ? "Alt/Option + " : ""}${binding.shift ? "Shift + " : ""}${binding.code.replace(/^Key|^Digit/, "")}`;
-}
-function ShortcutEditor({ onClose }: { onClose: () => void }) {
-  const prefs = useWebPreferences();
-  const [recording, setRecording] = useState<ShortcutAction | null>(null);
-  const [error, setError] = useState("");
-  const heading = useRef<HTMLHeadingElement>(null);
-  useEffect(() => { heading.current?.focus(); }, []);
-  return <section className="shortcut-editor" aria-label={t("编辑快捷键")}><div className="section-title-row">
-    <h3 ref={heading} tabIndex={-1}>{t("编辑快捷键")}</h3><button type="button" className="settings-preference-trigger" onClick={onClose}>{t("返回")}</button></div>
-    <p>{t("选择一项后按下组合键。需要 Ctrl/Cmd 或 Alt/Option，Esc 取消录制。浏览器保留组合不可用。")}</p>
-    {error && <p role="alert">{t(error)}</p>}
-    {shortcutActions.map(action => <div key={action} className="shortcut-editor-row"><span>{t(actionLabels[action])}</span>
-      <button type="button" className="settings-preference-trigger" aria-label={t("录制快捷键：{0}", t(actionLabels[action]))} aria-pressed={recording === action}
-        onClick={() => { setError(""); setRecording(action); }} onBlur={() => setRecording(null)} onKeyDown={event => {
-          if (recording !== action || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
-          event.preventDefault(); event.stopPropagation();
-          if (event.key === "Escape") { setRecording(null); return; }
-          if (["Control", "Meta", "Alt", "Shift"].includes(event.key)) return;
-          const binding = { code: event.code, primary: event.ctrlKey || event.metaKey, alt: event.altKey, shift: event.shiftKey };
-          if ((event.ctrlKey && event.metaKey) || !validShortcut(binding)) { setError("此组合不可用，请选择带修饰键的其他组合"); return; }
-          if (shortcutActions.some(other => other !== action && prefs.shortcuts[other] && shortcutIdentity(prefs.shortcuts[other]!) === shortcutIdentity(binding))) {
-            setError("此组合已绑定其他操作，请先清除原绑定"); return;
-          }
-          setError(updateWebPreferences({ shortcuts: { ...prefs.shortcuts, [action]: binding } }) ? "" : "当前浏览器未能保存偏好；刷新后可能恢复原值"); setRecording(null);
-        }}>{recording === action ? t("请按组合键…") : describe(prefs.shortcuts[action])}</button>
-      <button type="button" className="button ghost compact-button" aria-label={t("清除快捷键：{0}", t(actionLabels[action]))}
-        onClick={() => updateWebPreferences({ shortcuts: { ...prefs.shortcuts, [action]: null } })}>{t("清除")}</button></div>)}
-    <p>{t("固定输入操作：Enter 发送；Shift+Enter 换行；运行时 Ctrl/Cmd+Enter 使用另一发送方式。输入法组合过程不触发。")}</p>
-    <button type="button" className="settings-preference-trigger" onClick={() => { updateWebPreferences({ shortcuts: defaultShortcuts }); setError(""); }}>{t("恢复默认快捷键")}</button>
-  </section>;
-}
-export function WebPreferenceRows() {
+export function WebPreferenceRows({ onOpenShortcuts }: { onOpenShortcuts?: () => void }) {
   const prefs = useWebPreferences();
   const { failed, save } = usePreferenceWriter();
-  const [editing, setEditing] = useState(false);
-  const editorId = useId(), trigger = useRef<HTMLButtonElement>(null);
   return <>
     <section className="settings-option-row"><div><h3>{t("显示代码工作视图")}</h3><p>{t("开启后，显示轨迹与本轮文件差异")}</p></div>
       <button type="button" role="switch" className="settings-switch" aria-label={t("显示代码工作视图")} aria-checked={prefs.codeView}
         onClick={() => save({ codeView: !prefs.codeView })}><span /></button></section>
     <section className="settings-option-row settings-preference-row"><div><h3>{t("快捷键")}</h3><p>{t("查看和编辑当前可用的快捷键和输入操作")}</p></div>
-      <button ref={trigger} type="button" className="settings-preference-trigger" aria-expanded={editing} aria-controls={editing ? editorId : undefined}
-        onClick={() => setEditing(value => !value)}>{t("编辑快捷键")}</button></section>
-    {editing && <div id={editorId}><ShortcutEditor onClose={() => { setEditing(false); trigger.current?.focus(); }} /></div>}
+      <button type="button" data-shortcuts-trigger className="settings-preference-trigger" onClick={onOpenShortcuts}>{t("编辑快捷键")}</button></section>
     <section className="settings-option-row settings-preference-row"><div><h3>{t("繁忙时的发送行为")}</h3><p>{t("智能体运行时 Enter 键和发送按钮的行为；Cmd/Ctrl+Enter 使用另一行为")}</p></div>
       <SettingsPreferenceControl label={t("繁忙时的发送行为")} value={prefs.busyEnter} options={[{ id: "queue", label: t("排队发送") }, { id: "steer", label: t("插话发送") }]}
         onChange={value => save({ busyEnter: value })} /></section>
+    <section className="settings-option-row settings-preference-row"><div><h3>{t("文件链接打开方式")}</h3><p>{t("工作区内的相对文件链接；新标签页由浏览器决定预览或下载，外部网页另开标签")}</p></div>
+      <SettingsPreferenceControl label={t("文件链接打开方式")} value={prefs.fileLinkOpening} options={[{ id: "panel", label: t("文件侧栏") }, { id: "new-tab", label: t("新标签页") }]}
+        onChange={value => save({ fileLinkOpening: value })} /></section>
     {failed && <p role="alert">{t("当前浏览器未能保存偏好；刷新后可能恢复原值")}</p>}
   </>;
 }

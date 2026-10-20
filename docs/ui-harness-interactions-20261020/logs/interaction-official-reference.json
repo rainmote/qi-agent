@@ -1,0 +1,18 @@
+{
+  "command": [
+    "node",
+    "node_modules/vitest/vitest.mjs",
+    "run",
+    "--config",
+    "vitest.web.config.ts",
+    "apps/web/tests/qi-interaction-reference.e2e.ts"
+  ],
+  "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2/reference-harness",
+  "start": "2026-10-20T14:33:07.285384+00:00",
+  "end": "2026-10-20T14:33:09.612914+00:00",
+  "exit_code": 1,
+  "status": "completed",
+  "runner_pid": 26060,
+  "isolation": "tools/isolation.sb; whitelisted environment",
+  "platform": "Darwin 27.0.0 arm64"
+}

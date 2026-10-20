@@ -1,0 +1,18 @@
+  ➜  Local:   http://127.0.0.1:4194/
+file:///Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/tests/browser-fixture.mjs:63
+  }else throw new Error(`Unmocked ${path}`);
+              ^
+
+Error: Unmocked /api/directories
+    at file:///Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/tests/browser-fixture.mjs:63:15
+    at RouteHandler._handleInternal (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/node_modules/playwright-core/lib/coreBundle.js:61682:11)
+    at RouteHandler._handleImpl (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/node_modules/playwright-core/lib/coreBundle.js:61649:29)
+    at /Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/node_modules/playwright-core/lib/coreBundle.js:61643:59
+    at AsyncLocalStorage.run (node:internal/async_local_storage/async_context_frame:66:14)
+    at _Zone.run (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/node_modules/playwright-core/lib/coreBundle.js:11049:40)
+    at RouteHandler.handle (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/node_modules/playwright-core/lib/coreBundle.js:61643:38)
+    at _Page._onRoute (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/node_modules/playwright-core/lib/coreBundle.js:62963:46)
+    at Proxy.<anonymous> (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/node_modules/playwright-core/lib/coreBundle.js:62909:63)
+    at Proxy._callHandler (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/node_modules/playwright-core/lib/coreBundle.js:11647:33)
+
+Node.js v26.9.0

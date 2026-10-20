@@ -1,0 +1,8 @@
+  ➜  Local:   http://127.0.0.1:4194/
+{"shortcutReference":"passed","cases":["searchable 11-action catalog and scoped fixed help","release/repeat/IME/dead/Tab/Escape","focus return","save failure retained binding/draft and explicit retry","stale review","confirmed reset and cancel","actual navigation keys","1440/768/390/320 and dark","no approval or turn mutation"]}
+Warning: Detected unsettled top-level await at file:///Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/tests/interaction-browser.mjs:85
+  const pendingPreview=gate('file');controls.holdPreview=pendingPreview;await link.click();await pendingPreview.seen.promise;
+                                                                                           ^
+
+
+
