@@ -1,0 +1,31 @@
+{
+  "capturedAt": "2026-10-20T15:03:50.997Z",
+  "browser": "155.0.8059.85",
+  "viewport": {
+    "width": 390,
+    "height": 844
+  },
+  "state": {
+    "dpr": 1,
+    "locale": "zh-CN",
+    "theme": "light",
+    "bodyFont": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Helvetica, Arial, sans-serif, -apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
+    "dialogs": [
+      {
+        "label": "快捷键",
+        "rect": {
+          "x": 24,
+          "y": 82,
+          "width": 366,
+          "height": 680,
+          "top": 82,
+          "right": 390,
+          "bottom": 762,
+          "left": 24
+        }
+      }
+    ],
+    "active": "搜索快捷键",
+    "exclusionMasks": []
+  }
+}

@@ -1,0 +1,46 @@
+
+> @rainmote/qi-agent-web@0.1.0 test:web-browser:ci
+> node apps/web/tests/production-browser.mjs
+
+  ➜  Local:   http://127.0.0.1:4179/
+{"draftFilesEntry":"passed","cases":["1440/390/320","real workspace listing","repeated open/close","double click","keyboard immediate Escape and return","mobile Tab boundary and inert cleanup","text source and static HTML preview keyboard access","reference preserves draft and returns composer focus","1440x300 settings navigation scroll","no session creation or submission"]}
+{"bootstrapHistoryRace":"passed","cases":["popstate before first route subscription","allowed session restoration","no submission"]}
+{"bootstrapLateOpen":"passed","target":"B","cases":["A open held","navigation before initial subscription","release A","URL and visible allowed session preserved","semantic hash order","zero pushes or submissions"]}
+{"bootstrapLateOpen":"passed","target":"A","cases":["A open held","navigation before initial subscription","release A","URL and visible allowed session preserved","semantic hash order","zero pushes or submissions"]}
+{"bootstrapInvalidRoute":"passed","cases":["same parsed route with missing id","canonical URL restored","unlisted id never requested"]}
+{"headerSessionActions":"passed","cases":["existing callbacks exposed","Escape restores focus","rename cancellation","no navigation or submission"]}
+{"settingsRiskAndMenu":"passed","cases":["nested Escape","link keyboard navigation","cancel button","cancel Escape","one modal","risk acknowledgment","policy rejection and confirmed retry","double click once","root restored"]}
+{"harnessGeometry":"passed","reference":"687f282","viewports":[1440,390,320],"toleranceCssPixels":0.1}
+{"nativeOutcomesAndCompactionProgress":"passed","cases":["four outcomes","live and durable deduplication","reload","375px","steer receipt","progress closes"]}
+{"submissionRecovery":"passed","cases":["response lost","page reload","completed without resend","not found retry with original identity","snapshot cursor handoff"]}
+{"sessionRaces":"passed","cases":["late snapshot","leave and return","reversed opens","late permissions","same-session SSE reconnect","draft choices survive late defaults"]}
+{"computerScreenshotPreview":"passed","cases":["streamed output","embedded raster only","bounded thumbnail","original size scroll preview","320px viewport","tool message deduplication"]}
+{"trajectoryEvents":2000,"mountedRows":33,"overviewButtons":236,"tabSwitchMs":54,"searchJumpCollapseAndNarrowWidths":"passed"}
+{"trajectoryEvents":8000,"mountedRows":33,"overviewButtons":240,"tabSwitchMs":55,"searchJumpCollapseAndNarrowWidths":"passed"}
+{"providerPartialFailureAndRetry":"passed","configurationWrites":1}
+{"workspaceTools":"passed","cases":["sandbox HTML","text diff","1440/768/414/375/320px","attachment IDs only","actual selected reference payload","definitive failure restores draft","unknown then failed restores after reload"]}
+{"compactNavigation":"passed","cases":["desktop collapse persists","phone drawer restores sessions","vertical session list","session switch","new session","quick start draft"]}
+{"presetMenu":"passed","width":1440,"cases":["real descriptions","Escape cancellation","arrow and Enter selection","focus return","Tab dismisses without mutation","double click does not create or submit","no horizontal overflow"]}
+{"presetMenu":"passed","width":320,"cases":["real descriptions","Escape cancellation","arrow and Enter selection","focus return","Tab dismisses without mutation","double click does not create or submit","no horizontal overflow"]}
+{"composerSelection":"passed","cases":["search and empty state","IME guard","keyboard selection and focus return","1440/768/414/375/320 bounds","outside focus closes"]}
+{"singleModelMenu":"passed","viewports":[1440,390,320],"cases":["visible initial focus","keyboard drill","pointer drill","bounds","Escape backs then closes","selection close"]}
+{"compactToolGroups":"passed","cases":["collapsed summary","failure stays visible","stopped call is unconfirmed","independent details","expansion retained","320px viewport"]}
+{"harnessPresentation":"passed","cases":["settled process and reasoning","verbose tools","no mutation","persisted mode","subtask result","768/390/320 session access","modal focus return","settings labels fit"]}
+{"detailedSettlementFocus":"passed"}
+{"composerResize":"passed"}
+{"browserHistory":"passed","width":1440,"cases":["session Back/Forward","new-session Back/Forward","reload selected session and new view","leave page and return selected session","no submission replay"]}
+{"browserHistory":"passed","width":390,"cases":["session Back/Forward","new-session Back/Forward","reload selected session and new view","leave page and return selected session","no submission replay"]}
+{"browserHistoryPendingCatalog":"passed","width":1440,"forkRequests":1}
+{"browserHistoryPendingCatalog":"passed","width":390,"forkRequests":1}
+{"browserHistoryStaleCatalog":"passed","width":1440,"forkRequests":1}
+{"pageErrors":[]}
+{"orchestration":"passed","cases":["revisioned plan approval with pending RPC","execute and pause","resume requires approval","DAG dependencies","cancel run","dependent task claim and completion","private mailbox acknowledgement and send"],"noHorizontalOverflow":[320,375,414,768,1440],"realProviderCalls":0}
+{"webPreferences":"passed","cases":["code view controls actual trajectory/diffs","fonts validated and applied","shortcuts duplicate/reserved/IME/Escape/remap/clear/reset","English actual interface","raw message/file unchanged","reload persistence","320px controls","no backend mutations"]}
+{"preferencePersistenceFailure":"passed","cases":["memory updates with visible failure","error switches language","successful save clears warning and persists all current values"]}
+{"busyPreference":"passed","preferred":"queue","cases":["Enter preference","Ctrl+Enter complementary","idle Cmd+Enter submits","visible send button double click once","IME/Shift+Enter","approval/stopping/unknown-result guards","reconcile without resend","command_id","1440/320 no page overflow"]}
+{"busyPreference":"passed","preferred":"steer","cases":["Enter preference","Ctrl+Enter complementary","idle Cmd+Enter submits","visible send button double click once","IME/Shift+Enter","approval/stopping/unknown-result guards","reconcile without resend","command_id","1440/320 no page overflow"]}
+{"preferencePageErrors":[]}
+{"shortcutReference":"passed","cases":["searchable 11-action catalog and scoped fixed help","release/repeat/IME/dead/Tab/Escape","focus return","save failure retained binding/draft and explicit retry","stale review","confirmed reset and cancel","actual navigation keys","1440/768/390/320 and dark","no approval or turn mutation"]}
+{"filePreviewStart":{"url":"http://127.0.0.1:4179/#workspace=1234567890abcdef&session=A","drawer":1,"requests":["docs/guide.md"]}}
+{"workspaceLinksAndSettings":"passed","cases":["workspace-scoped content URL","relative preview navigation","root escape blocked","external URLs unchanged","native new-tab preference and reload","plugin/tool search and empty states","settings nav keys","real manager entry without mutations"]}
+{"interactionPageErrors":[]}

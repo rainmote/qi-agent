@@ -1,5 +1,5 @@
 {
-  "created_at": "2026-10-20T15:07:27.122425+00:00",
+  "created_at": "2026-10-20T15:17:50.471603+00:00",
   "branch": "codex/web-deepseek-harness-20261019",
   "base_sha": "2682ba4022b6bfe7e6542ad37e2bea81ef7196f6",
   "reference_sha": "687f282e8625c6b8d11ff58211a90524be2e4317",
@@ -70,7 +70,7 @@
     "apps/web/src/run-outcome.test.tsx": "020308d2cb6a5abc5e74e7e790a834064ed72ff648c25e1724aca405fbb85635",
     "apps/web/src/run-outcome.ts": "fc7d0cac71c8a7f89fe144325b2d1e532ee2917e8f0bd18b54bf0bbd221413f7",
     "apps/web/src/shortcut-catalog.ts": "b19858d001a6f23e1b6b6aa2e0e83b5f0535f7c2b55ccd2a60b2bc46076e3d62",
-    "apps/web/src/styles.css": "a7b95260a9d807cce6638cdb01a7db3bbf42e5c1d78df75c6a7d04d549938322",
+    "apps/web/src/styles.css": "0d1fd0d65adb957a02067f3d7b2d227fe2fc5e42ece6b6b92140a5e973254d0c",
     "apps/web/src/timeline-benchmark.ts": "fb574f0fe42d9c8ffbfd8164974f4891a3fb4502f74996e796f3cdac2286646c",
     "apps/web/src/timeline-fixture-data.ts": "c7f2e826775f344062dc7c54ae8a018c2b748e885bdb3a3891ebb611aa13e8b7",
     "apps/web/src/timeline-model.ts": "89202006661f36f003c2126622e984cf11024026f043cfc8f167af42564276c8",
@@ -90,7 +90,7 @@
     "apps/web/src/workspace-panel.css": "e956ab667efbd3990623ad1e0003cb74b34d07110610c24759b259b7b1ad3816",
     "apps/web/tests/browser-fixture.mjs": "78973ec8331dde7e80712e8ac0bbe4276a12851c236ac1ed61b78ddddc80c95d",
     "apps/web/tests/browser-regressions.mjs": "6e14f10249186d13f1ab6c60c0406ffce4de09d07e5afdeec6b8ffb4c0256322",
-    "apps/web/tests/interaction-browser.mjs": "7bd0b4b5298cce80798085168d69e75c099046b7923e4f28f8e9c5dd3bafa3ff",
+    "apps/web/tests/interaction-browser.mjs": "d7168d41e934f7888afb6ee51895716dc38fcc1bdc5a110c8846a64efc2a052c",
     "apps/web/tests/interaction-e2e.test.ts": "011b410992e5cc894422d798108e7d86a1196007ee54a2ae833c58141aa1e17f",
     "apps/web/tests/orchestration-browser.mjs": "06eba7d6b60fa4e7c894b327a316031297a946349e4d1bd6ac3ff89444b1121b",
     "apps/web/tests/preferences-browser.mjs": "2f88f0c1c0723e84934cad7d0b1975c715458f3a20a6c40b6a507b96c62ad619",
@@ -103,13 +103,13 @@
     "vite.config.ts": "ed21708ae7790c1c42833b24d5774804418ff1377a75b0648d0e5805b253adc1"
   },
   "built_artifacts": {
-    "apps/web/dist/assets/index-D4TaAZSP.css": "060e5409ffb7e463ee4586a1fe55093c5283e6afa99897b500bb726f27d9190c",
-    "apps/web/dist/assets/index-POPEScFG.js": "b8f4e0693e3efa899e1da66f6a0fd8fad418adde3cf789f3a0df8939c0e8acc0",
-    "apps/web/dist/assets/index-POPEScFG.js.map": "bb53868c10f2ef4015eeca7d72f61a04cc39248de31270ee2acad403d7070bfb",
+    "apps/web/dist/assets/index-1PPYoccU.js": "fc3809fcd1cf207ee844c406ac14fa288e9ec3f5d3b1655da66d041d2937cd7e",
+    "apps/web/dist/assets/index-1PPYoccU.js.map": "f688230049b0ba26038f9699799a623c3133d3b60cc2b6fdbf295f891dd2988f",
+    "apps/web/dist/assets/index-Bgjjkzf2.css": "1d3f8961a75d2957d7d061985051e0932a58240313ab5f1fd6c3897a18a00ae9",
     "apps/web/dist/assets/montserrat-light-Cvd2VjE_.woff2": "da25f1327eb1dcc70c193897b5d7e00d31821d9518c0a49e073ff50d97a3f10a",
     "apps/web/dist/assets/montserrat-medium-B4OyO9CN.woff2": "8a81ca6f05cb6831d5487e4b287ce5a625a718c39226b736f155900adc394166",
     "apps/web/dist/assets/montserrat-regular-DYep38cA.woff2": "0f4a15e29a9535af580a64db967929a8d6b202fad9a467be390619a591d2c4c5",
-    "apps/web/dist/index.html": "93048de04a005ea19cacd725d90f1249b8978d16509ba3e960c0db40e25a4b65",
+    "apps/web/dist/index.html": "3bba2c8a7942a050b280c6cd7063d91965ecf7aecdb608fb683c9859a311c81a",
     "apps/web/dist/licenses/Montserrat-OFL.txt": "861d64229728cd65a98d119612c12769582574d1a092f0b63c8b0fd474e7065f",
     "apps/web/dist/licenses/THIRD_PARTY_NOTICES.md": "37a22ff71268bcb4b4d1d1c8ced904dd95cb7d5f76bb229fb375313e6e0c9ab0",
     "apps/web/dist/licenses/deepseek-harness-MIT.txt": "ebb4f09972aee8608be255debaf78451a68e95c290f55c240dec2ecfa16ea6be"

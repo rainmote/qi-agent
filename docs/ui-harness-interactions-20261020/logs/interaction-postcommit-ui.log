@@ -1,0 +1,130 @@
+
+> @rainmote/qi-agent-web@0.1.0 test:web-ui
+> tsx --test apps/web/src/*.test.tsx
+
+(node:43285) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ new-session preset selector filters broken modes and exposes the selected mode (3.770458ms)
+✔ compact preset selector preserves mode descriptions and selected value (0.296166ms)
+✔ creator draft entry is hidden when the creator preset is unavailable (0.044542ms)
+✔ workspace selector exposes the selected workspace and an accessible menu (0.331333ms)
+✔ slash suggestions open while typing and close after command selection (0.100125ms)
+✔ large command results are summarized for the toast (0.124333ms)
+✔ composer permission control uses a distinct icon for every access mode (0.334ms)
+✔ model control shows reasoning effort without a leading model icon (0.410709ms)
+✔ context meter exposes usage and compact token formatting (7.168417ms)
+✔ model search uses reference subsequence ranking and retains configured identifier lookup (0.499959ms)
+✔ inline approval retains explicit choices and exposes failures without a modal barrier (0.327083ms)
+✔ full access confirmation requires explicit risk acknowledgement (0.421375ms)
+(node:43286) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ automation forms preserve explicit timezone and convert minutes to daemon milliseconds (16.2805ms)
+✔ read-only automation panel exposes controls but disables every mutation (7.463583ms)
+(node:43287) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ renders assistant Markdown and GFM content (36.283334ms)
+✔ does not execute raw HTML and protects links (1.087708ms)
+✔ repairs a legacy compact heading attached to a GFM table (8.205667ms)
+✔ does not normalize compact Markdown inside code fences (0.098875ms)
+(node:43288) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ plugin markdown never executes HTML or silently loads remote images (7.82825ms)
+✔ tool result slots are scoped to their named tool and validate runtime data (0.419667ms)
+✔ declarative renderers reject unsupported or unbounded data (0.204125ms)
+✔ read-only package management disables all install controls (0.603125ms)
+(node:43289) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ provider auth copy distinguishes API keys from ChatGPT subscription login (0.400375ms)
+✔ provider reload notice distinguishes saved configuration from effective sessions (2.773083ms)
+(node:43290) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ groups all tool calls from the same runtime step (0.738792ms)
+✔ describes and truncates tool operation targets (0.119083ms)
+✔ long histories mount a bounded window rather than every Markdown message (53.235333ms)
+✔ completed tool groups are summarized while failures and unconfirmed results remain visible (7.551917ms)
+✔ a stopped call with no result is unconfirmed, and only an active group may be running (0.104291ms)
+✔ reasoning-only assistant messages remain readable instead of disappearing (0.461875ms)
+(node:43291) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ typed user attachments show controlled previews and downloads (3.49675ms)
+✔ attachment names are escaped and malformed references never become URLs (0.309916ms)
+✔ tool result slots restore their canonical data from persisted JSON (0.33975ms)
+(node:43292) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ tool screenshots render as bounded accessible previews, never as text (4.402833ms)
+✔ tool previews reject remote, active, malformed and oversized image sources (0.310084ms)
+✔ one tool result cannot mount an unbounded screenshot gallery (0.41475ms)
+(node:43293) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ projects durable events into a turn-aware semantic ledger (0.852375ms)
+✔ renders the DeepSeek-style trajectory controls and three-lane overview (4.317083ms)
+✔ long trajectories mount a bounded window and bounded overview (40.767583ms)
+✔ trajectory detail serialization is deferred and cached until requested (0.1705ms)
+✔ screenshot payloads stay out of trajectory text and searchable JSON details (0.164375ms)
+(node:43294) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ workspace panel exposes accessible navigation and attachment controls inherit disabled state (4.012541ms)
+✔ HTML preview starts with a restrictive policy even when uploaded HTML supplies its own policy (0.071166ms)
+✔ verification summary distinguishes independent PASS from absent and unconfirmed evidence (0.715375ms)
+✔ verification states keep execution separate and expose only authenticated check links (0.70225ms)
+(node:43295) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ lost response keeps the original operation through reload and blocks blind replay (30.282834ms)
+✔ manual retry after not_found reuses identity and payload; pending outcomes never resend (0.514791ms)
+✔ structured uncertain responses survive the API boundary and definitive errors allow a new action (1.576333ms)
+✔ planning approvals can resolve while the original blocking command remains journaled (4.517292ms)
+(node:43297) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ input budget accounts for the answer reserve before the whole window fills (6.064042ms)
+✔ missing legacy budget fields and invalid tokens remain unknown (0.223166ms)
+(node:43298) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ workspace links resolve within the selected workspace and never interpret absolute URLs as file paths (3.261333ms)
+✔ catalog contains only implemented navigation operations and availability follows the current view (0.407625ms)
+✔ shortcut saves preserve accepted bindings on failure and require review after stale storage, including reset (0.313666ms)
+(node:43299) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ snapshot IDs are unique and ordered; event indexes remain immutable across branches (0.94425ms)
+✔ ordered append and late insert keep stable sequence order without sorting existing history (0.295791ms)
+✔ incremental timeline matches a snapshot for tool results, multiple steps and clearing (0.399208ms)
+✔ partial updates reuse event, timeline and summary projections (0.076334ms)
+✔ screenshot outputs survive both snapshot reload and streamed tool results (0.545ms)
+✔ snapshot revision watermarks reject late state and interaction notifications (0.219708ms)
+✔ a delayed response cannot replace the view after leaving and returning to the same session (0.272333ms)
+✔ rapid session opens honor the latest selection despite reversed response order (0.059667ms)
+(node:43301) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ completed is visible once after snapshot, live notification, durable replay and refresh (5.391583ms)
+✔ failed is visible once after snapshot, live notification, durable replay and refresh (0.477042ms)
+✔ cancelled is visible once after snapshot, live notification, durable replay and refresh (0.431709ms)
+✔ uncertain is visible once after snapshot, live notification, durable replay and refresh (0.340875ms)
+✔ last-outcome is retained in a coherent snapshot without a duplicate durable row (0.130917ms)
+✔ a completed execution with failed verification cannot look accepted (0.178958ms)
+✔ late conflicting outcomes cannot downgrade a known uncertain result (6.351ms)
+✔ refreshing a cleared conversation cannot resurrect the old outcome (0.123333ms)
+(node:43302) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ settled turns fold process while retaining final answer, decisions and unverified outcome (0.83ms)
+✔ interleaved user input and active turns keep every step in original order (0.105958ms)
+✔ next-input folding retains the latest process, respects manual choices and folds on a later user message (0.094292ms)
+✔ failed, cancelled and uncertain turns retain their process without a whole-turn fold (0.059042ms)
+✔ display preferences fail back to standard and subtask results remain disclosure content (4.754958ms)
+✔ ten thousand rows keep a bounded viewport window at the start, middle and end (2.930375ms)
+✔ history scroll anchors survive late insertion and height changes above the viewport (2.2155ms)
+✔ new output does not move a history anchor; resized narrow rows invalidate stale measurements (1.96275ms)
+✔ empty layouts and removed anchors recover without invalid offsets (0.058875ms)
+(node:43304) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ font preferences reject CSS injection and invalid ranges while allowing installed family lists (2.965125ms)
+✔ shortcut bindings reject browser reserved keys, duplicate actions and composition or held-key events (0.149959ms)
+✔ busy send preference and complementary modifier resolve only the existing running-turn modes (0.042542ms)
+✔ local preferences report failed persistence without changing backend authority or losing in-memory state (0.1495ms)
+✔ English preserves interpolation placeholders and keeps user and model payloads verbatim (5.693125ms)
+ℹ tests 84
+ℹ suites 0
+ℹ pass 84
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 486.84425

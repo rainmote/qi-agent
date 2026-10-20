@@ -1,5 +1,5 @@
 {
-  "capturedAt": "2026-10-20T15:03:50.997Z",
+  "capturedAt": "2026-10-20T15:17:19.773Z",
   "browser": "155.0.8059.85",
   "viewport": {
     "width": 390,
@@ -14,14 +14,14 @@
       {
         "label": "快捷键",
         "rect": {
-          "x": 24,
+          "x": 12,
           "y": 82,
           "width": 366,
           "height": 680,
           "top": 82,
-          "right": 390,
+          "right": 378,
           "bottom": 762,
-          "left": 24
+          "left": 12
         }
       }
     ],

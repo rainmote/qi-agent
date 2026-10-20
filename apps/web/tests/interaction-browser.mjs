@@ -68,6 +68,8 @@ try {
   await page.keyboard.press('Alt+Shift+KeyN');await page.locator('.new-session-view').waitFor();await page.keyboard.press('Meta+Slash');
   assert.equal(await page.getByRole('button',{name:'修改会话信息快捷键',exact:true}).locator('..').getByText('当前页面暂不可用',{exact:true}).count(),1);
   for(const width of [768,390,320]){await page.setViewportSize({width,height:844});await shot(page,`shortcuts-${width}`);assert.ok(await page.locator('.shortcut-reference-list').evaluate(el=>el.scrollWidth<=el.clientWidth));assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+   const frame=await ref(page).boundingBox();assert.ok(frame.x>=12&&frame.x+frame.width<=width-12,`${width}px shortcut dialog must retain reachable, symmetric viewport margins`);
+   if(width<=600){assert.equal(frame.x,12);assert.equal(frame.x+frame.width,width-12);}
    if(width<=600){const button=page.getByRole('button',{name:'修改文件与变更快捷键',exact:true});await button.scrollIntoViewIfNeeded();assert.ok((await button.boundingBox()).height>=44);}}
   await page.keyboard.press('Escape');await page.setViewportSize({width:1440,height:1000});await settings(page);await page.getByRole('button',{name:'深色',exact:true}).click();await page.getByRole('button',{name:'编辑快捷键',exact:true}).click();await shot(page,'shortcuts-dark-1440');await page.keyboard.press('Escape');
   assert.equal(controls.submissions.length+controls.followUps.length+controls.steers.length+controls.policySelections.length,0);

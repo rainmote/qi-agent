@@ -14,6 +14,12 @@
 - 设置增加真实Web版本、文件链接偏好、插件与工具搜索/计数/空态、分区方向键导航和当前分区标识。“管理插件”进入原插件工作台，沿用当前会话权限及人工审批。
 - 后端、api.ts、command_id、Host/daemon/worker、权限/审批、控制器、依赖与测试隔离策略未改。MIT/OFL及随构建分发许可证继续保留。
 
+## 提交后窄屏外框修复
+
+b54bab1曾完成整套提交后回归，但随后逐图检查发现快捷键窗口被harness公共backdrop padding24挤至右边缘：390px时x24、width366、right390。新增外框断言在b54产物真实失败（mobile-frame-red）；仅对≤600px快捷键backdrop设置12px padding，修复后390为x12/right378、320为x12/right308，并补两边精确12px断言。没有用旧绿灯覆盖新红灯。
+
+[390修复前](red/mobile-frame-before-interaction-shortcuts-390.png) · [390修复后](candidate/interaction-shortcuts-390.png)；b54原提交后收据与20张图完整保存在任务根`interaction-20261020/postcommit-b54/`。本轮最终收据仍在`interaction-20261020/postcommit/receipt.json`，对应后续修复提交并重新完整验收。
+
 ## 真实验证与失败对照
 
 冻结清单覆盖97份源码/依赖/文档、10份构建资源、13份运行/合同指纹。成功：类型、构建、UI84/84、生产四组完整Chrome回归、真实Host→Rust daemon→离线Babashka worker E2E9/9；无取消/跳过，外部模型调用0。最终本地提交后会以相同完整命令复跑，精确SHA、起止时间及结果保存在任务根 `interaction-20261020/postcommit/receipt.json`，避免为了记录收据改变已测试提交。构建662.58kB JS的大包提示仍在。旧广义Host套件82通过/3项ps EPERM失败未在本轮重跑或改判。
