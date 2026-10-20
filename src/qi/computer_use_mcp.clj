@@ -102,7 +102,7 @@
      :image-count (count (:images parsed))}))
 
 (defn provider-plugin
-  [{:keys [id provider-name description default-command connect! tool-guidance]
+  [{:keys [id provider-name description default-command connect! tool-guidance capabilities uncertain-on-error]
     :or {connect! (fn [_ _ options] (mcp/connect! options)) tool-guidance guidance}}]
   {:id id
    :description description
@@ -110,20 +110,23 @@
                :llm/registry :tool/policy :approval/request}
    :provides #{:computer-use/runtime}
    :start
-   (fn [ctx {:keys [enabled command request-timeout-ms startup-timeout-ms
+   (fn [ctx {:keys [enabled connect-on-start command request-timeout-ms startup-timeout-ms
                     max-tools max-images max-image-bytes]
-             :or {enabled false
+             :or {enabled false connect-on-start true
                   request-timeout-ms 60000 startup-timeout-ms 15000
                   max-tools 128 max-images 4 max-image-bytes 8388608}
              :as config}]
      (when-not (boolean? enabled)
        (throw (ex-info "Computer use :enabled must be boolean" {})))
+     (when-not (boolean? connect-on-start)
+       (throw (ex-info "Computer use :connect-on-start must be boolean" {})))
      (doseq [[label value] {:request-timeout-ms request-timeout-ms
                             :startup-timeout-ms startup-timeout-ms :max-tools max-tools
                             :max-images max-images :max-image-bytes max-image-bytes}]
        (when-not (pos-int? value)
          (throw (ex-info "Computer-use limits must be positive integers" {:option label}))))
-     (let [world (kernel/require-service ctx :execution/world)
+     (let [capabilities (when capabilities (capabilities config))
+           world (kernel/require-service ctx :execution/world)
            trust (kernel/require-service ctx :project/trust)
            models (kernel/require-service ctx :llm/registry)
            last-model (atom nil)
@@ -135,14 +138,27 @@
            catalog (atom [])
            tool-disposers (atom [])
            uncertain (atom nil)
+           connection-error (atom nil)
            operation-lock (Object.)
            lifecycle-lock (Object.)
            limits {:max-images max-images :max-image-bytes max-image-bytes}
-           status (fn [] (let [connection @client]
+           status (fn [] (let [connection @client
+                              connected (boolean (and @ready? connection ((:alive? connection))))
+                              unresolved (or @uncertain (when-let [failure (:failure connection)] (failure)))
+                              trusted (boolean ((:trusted? trust)))
+                              local-desktop (and (= :local (:provider world)) (= :none (:sandbox world)))]
                          {:enabled enabled :provider ((:provider-name registry))
-                          :connected (boolean (and @ready? connection ((:alive? connection))))
+                          :configured-provider provider-name
+                          :connected connected :trusted trusted :local-desktop local-desktop
+                          :state (cond (not enabled) :disabled
+                                       (not trusted) :untrusted
+                                       (not local-desktop) :unsupported-world
+                                       unresolved :uncertain
+                                       connected :connected
+                                       :else :disconnected)
+                          :error (or @connection-error (:message unresolved)) :capabilities capabilities
                           :tools (mapv #(str tool-prefix (:name %)) @catalog)
-                          :uncertain @uncertain
+                          :uncertain unresolved
                           :input-scope :host-desktop
                           :image-model (boolean (some #{:image "image"}
                                                      (:input-modalities ((:current models)))))}))
@@ -150,6 +166,8 @@
                           (reset! ready? false)
                           (reset! generation nil)
                           (when-let [connection @client]
+                            (when-let [failure (:failure connection)]
+                              (when-let [unresolved (failure)] (reset! uncertain unresolved)))
                             ((:close! connection)))
                           ;; Closing transport unblocks a running call. Await
                           ;; its normalization before releasing tools/resources.
@@ -183,7 +201,14 @@
                    (let [result ((:request! connection) "tools/call"
                                  {:name name :arguments arguments} execution)]
                      (try
-                       (normalize-result result limits)
+                       (let [normalized (normalize-result result limits)]
+                         ;; A JS program can deliver input before throwing. A
+                         ;; tool-level error is not proof of no external action.
+                         (when (and uncertain-on-error (:is-error normalized))
+                           (reset! uncertain {:uncertain true :reason :driver-error
+                                              :message "LCU reported an error; inspect the desktop before /computer reconnect. Input may already have happened."})
+                           ((:close! connection)))
+                         (cond-> normalized (and uncertain-on-error (:is-error normalized)) (assoc :uncertain true)))
                        (catch Throwable error
                          (throw (ex-info (ex-message error)
                                          (assoc (ex-data error) :uncertain true) error)))))
@@ -226,15 +251,21 @@
                                   :result-images (fn [_ result] (:images result))
                                   :result-error? (fn [_ result] (:is-error result))
                                   :result-details (fn [_ result]
-                                                    (select-keys result [:is-error :image-count]))})))
+                                                    (select-keys result [:is-error :image-count :uncertain]))})))
                    (reset! catalog tools)
                    (reset! uncertain nil)
+                   (reset! connection-error nil)
                    (reset! generation epoch)
                    (reset! ready? true)
                    (status)))
                (catch Throwable error
                  (stop-client!)
-                 (throw error))))]
+                 (reset! connection-error (ex-message error))
+                 (throw error))))
+           idle! (fn []
+                   (when-let [session (kernel/service ctx :agent/session)]
+                     (when-not (= :idle (:phase ((:state session))))
+                       (throw (ex-info "Wait for an idle session, or cancel its current turn before changing the desktop connection" {})))))]
        (when enabled
          (kernel/track-effect! ctx ((:register! registry) provider-name)))
        ;; This effect is installed before connecting so partial startup also
@@ -264,13 +295,19 @@
               (reset! last-model routed)
               response))))
        (kernel/register-command!
-        ctx {:name "computer" :description "Desktop provider status or explicit reconnect after checking an uncertain outcome."
+        ctx {:name "computer" :description "Desktop provider status, connect, disconnect, or explicit reconnect after checking an uncertain outcome."
              :execute (fn [argument _]
                         (case (str/lower-case (str/trim argument))
                           ("" "status") (status)
-                          "reconnect" (locking lifecycle-lock (connect!))
-                          {:error "Usage: /computer [status|reconnect]"}))})
-       (when enabled (locking lifecycle-lock (connect!)))
+                          "connect" (locking lifecycle-lock
+                                      (idle!)
+                                      (when (:uncertain (status))
+                                        (throw (ex-info "Inspect the desktop after the uncertain action, then use /computer reconnect" {:uncertain true})))
+                                      (if (:connected (status)) (status) (connect!)))
+                          "reconnect" (locking lifecycle-lock (idle!) (connect!))
+                          "disconnect" (locking lifecycle-lock (idle!) (stop-client!) (status))
+                          {:error "Usage: /computer [status|connect|disconnect|reconnect]"}))})
+       (when (and enabled connect-on-start) (locking lifecycle-lock (connect!)))
        ;; Runs first on disposal: stop admission and drain owned work before
        ;; tool effects, transport cleanup, and finally reservation release.
        (fn []

@@ -41,6 +41,9 @@
       (let [n (swap! step inc)
             last-tool (last (filter #(= "tool" (:role %)) (:messages request)))
             text (:content last-tool)
+            _ (when (:is-error last-tool)
+                (throw (ex-info "LCU native E2E stopped on the first tool error; no input was replayed"
+                                {:tool-error text :step n})))
             code (case n
                    0 (str "var app = await cua.getApp(" (json/generate-string app-id) ")")
                    1 "await app.getAXStateAndScreenshot({disableDiffing:true})"

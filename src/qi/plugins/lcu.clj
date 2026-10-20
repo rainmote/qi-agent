@@ -19,6 +19,13 @@
   (str (fs/normalize (fs/path (fs/parent (io/file (io/resource "qi/plugins/lcu.clj")))
                               "../../../scripts/lcu/bridge.mjs"))))
 
+(defn- surfaces [{:keys [lcu-args] :or {lcu-args []}}]
+  ;; Do not inherit a browser/audio opt-in from an unrelated host process.
+  ;; This adapter has no interactive browser-origin or microphone consent.
+  (when-not (contains? #{[] ["--chrome"]} lcu-args)
+    (throw (ex-info "LCU :lcu-args supports only [] or [\"--chrome\"]; audio and setup commands are unsupported" {})))
+  (if (seq lcu-args) ["browser" "computer"] ["computer"]))
+
 (defn- approval! [ctx {:keys [method params]} {:keys [cancel-token]}]
   (if (not= "qi/approval" method)
     {:choice "cancel"}
@@ -51,10 +58,11 @@
                          (fs/exists? (fs/path home "bin/lcu")))
             (throw (ex-info "Install an LCU release first; configure :lcu-home or LCU_HOME (see docs/lcu.md)"
                             {:lcu-home home})))
-        _ (when-not (and (vector? lcu-args) (every? string? lcu-args))
-            (throw (ex-info "LCU :lcu-args must be an argv vector" {})))
+        enabled-surfaces (str/join "," (surfaces {:lcu-args lcu-args}))
         connection (mcp/connect! (assoc options
                                   :command (into [node (bridge-path) home] lcu-args)
+                                  :env (assoc (:env options {}) "CUA_REPL_ENABLED_SURFACES" enabled-surfaces
+                                              "SKY_ENABLE_AUDIO" "0" "NODE_REPL_ENABLE_AUDIO" "0")
                                   :startup-timeout-ms (max 120000 (:startup-timeout-ms options))
                                   :shutdown-timeout-ms 10000
                                   :client-capabilities {:elicitation {}}
@@ -83,6 +91,8 @@
       ((:close! connection))
       (throw (ex-info "LCU did not supply its required initialization instructions" {})))
     (assoc connection
+           :failure (fn [] (when-let [error @cleanup-error]
+                             {:uncertain true :reason :cleanup-failed :message (ex-message error)}))
            :instructions (str (:instructions connection)
                               "\nIn qì, invoke the original js/js_reset tools as computer_js/computer_js_reset.")
            :close! (fn [] (dispose-listener) ((:close! connection)))
@@ -115,6 +125,11 @@
    (computer/provider-plugin
     {:id :computer-use/lcu :provider-name "lcu"
      :description "Opt-in LCU desktop provider with native app consent and turn cleanup."
+     :capabilities (fn [config] {:surfaces (surfaces config)
+                                :browser-origin-consent :unsupported
+                                :native-app-consent :interactive
+                                :system-permissions :unverified})
      :tool-guidance ""
+     :uncertain-on-error true
      :connect! connect!})
    :requires conj :session/store))

@@ -212,6 +212,7 @@ export function App() {
   const [connected, setConnected] = useState(false);
   const [viewRevision, setViewRevision] = useState(0);
   const viewScope = useRef(new RequestScope());
+  const runtimeRequest = useRef(0);
   const navigationScope = useRef(new RequestScope());
   const catalogScopes = useRef(new Map<string, RequestScope>());
   const catalogScope = useCallback((id: string) => {
@@ -387,6 +388,10 @@ export function App() {
   }, [theme]);
 
   const loadRuntime = useCallback(async (id: string) => {
+    // A delayed command continuation for another session must not invalidate
+    // the active session's newer read by advancing its request generation.
+    if (activeSessionId.current !== id) return;
+    const request = ++runtimeRequest.current;
     const current = viewScope.current.capture();
     const policyCurrent = policyScope.current.capture();
     const fallbackPolicy: PolicyStatus = {
@@ -404,7 +409,7 @@ export function App() {
       api.rpc<SubagentStatus>(id, "subagent.status"),
       api.rpc<PolicyStatus>(id, "policy.status").catch(() => fallbackPolicy),
     ]);
-    if (!current() || activeSessionId.current !== id) return;
+    if (!current() || activeSessionId.current !== id || request !== runtimeRequest.current) return;
     setRuntime(runtimeStatus);
     setSubagents(subagentStatus);
     if (policyCurrent()) setPolicy(policyStatus);
@@ -514,6 +519,9 @@ export function App() {
         void api.rpc<SubagentStatus>(activeSession.id, "subagent.status")
           .then((status) => { if (currentSession()) setSubagents(status); }).catch(() => undefined);
       }
+      if (event.event === "agent/state" && event.data?.phase === "idle") {
+        void loadRuntime(activeSession.id).catch(() => undefined);
+      }
       if (event.durable && ["message", "context/snapshot", "session/compaction", "session/clear"]
         .includes(event.event || "")) {
         void api.rpc<ContextStatus>(activeSession.id, "context.status")
@@ -523,7 +531,7 @@ export function App() {
       if (currentSession() && snapshot.session_id === activeSession.id) acceptSnapshot(snapshot);
     }, (message) => { if (currentSession()) flashNotice(message, 12_000); }, openingCursor.current);
     return () => { disposed = true; close(); };
-  }, [activeSession?.id, viewRevision, acceptSnapshot, flashNotice]);
+  }, [activeSession?.id, viewRevision, acceptSnapshot, flashNotice, loadRuntime]);
 
   useEffect(() => {
     if (conversationView === "trajectory") timeline.current?.scrollTo({ top: 0 });
@@ -684,6 +692,7 @@ export function App() {
           flashNotice(commandOutputNotice(result.output));
         }
         await refreshSnapshot(session.id);
+        if (message.startsWith("/computer")) await loadRuntime(session.id);
         const trustStatus = await api.rpc<import("./types").ProjectTrust>(session.id, "trust.status");
         if (current()) trust.setStatus(trustStatus);
       } else if (delivery === "steer") {
@@ -1321,6 +1330,17 @@ export function App() {
         void selectPolicy("allow");
       }} />}
     {settingsOpen && <SettingsDialog workspaces={bootstrap?.workspaces || []} runtime={runtime}
+      onRefreshRuntime={activeSession ? () => loadRuntime(activeSession.id) : undefined}
+      onComputerCommand={activeSession && !busy && projection?.state.phase === "idle" && !pendingOperation ? async command => {
+        const source = activeSession, current = captureOperation();
+        setBusy(true);
+        try {
+          const result = await api.rpc<{ error?: string }>(source.id, "command.execute", { command: `/computer ${command}` });
+          if (result.error) throw new Error(result.error);
+          if (current()) await loadRuntime(source.id);
+        } catch (error) { if (current()) showError(error); throw error; }
+        finally { if (current()) { setBusy(false); setPendingOperation(api.pendingOperation(source.id)); } }
+      } : undefined}
       initialFocus={settingsInitialFocus}
       trust={trust.status} onManageTrust={(activeSession || draftSession) && !busy ? () => void manageTrust(true) : undefined}
       onOpenShortcuts={() => openShortcuts(true)} onManagePlugins={activeSession ? () => { setSettingsOpen(false); setWorkbench("plugins"); } : undefined}

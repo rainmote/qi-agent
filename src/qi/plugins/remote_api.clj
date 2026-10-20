@@ -361,6 +361,8 @@
                                                    :parameters])
                                   (kernel/tools ctx))
                      :commands (command/commands ctx)
+                     :computer-use (when-let [computer (kernel/service ctx :computer-use/runtime)]
+                                     ((:status computer)))
                      :resources
                      (when resources
                        (let [snapshot ((:snapshot resources))]

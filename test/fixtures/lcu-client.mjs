@@ -7,7 +7,8 @@ export const nativeAppApprovalResponse = (_params, choice) => ({ choice });
 export function createCuaClient({ onElicitation }) {
   let failCleanup = false;
   return {
-    async connect() { record({ event: 'connect', pid: process.pid }); },
+    async connect() { record({ event: 'connect', pid: process.pid, surfaces: process.env.CUA_REPL_ENABLED_SURFACES,
+      audio: process.env.SKY_ENABLE_AUDIO, replAudio: process.env.NODE_REPL_ENABLE_AUDIO }); },
     instructions: 'ORIGINAL LCU INSTRUCTIONS: observe before input.',
     publicTools: () => ['js', 'js_reset'].map(name => ({ name, description: `Original ${name}`,
       inputSchema: { type: 'object', properties: { code: { type: 'string' } } } })),

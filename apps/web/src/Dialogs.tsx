@@ -9,6 +9,7 @@ import { shortcutForEvent, useWebPreferences } from "./web-preferences";
 import { version as webVersion } from "../../../package.json";
 import type { PolicyStatus } from "./types";
 import { ProviderSettingsPanel } from "./ProviderSettingsPanel";
+import { ComputerUsePanel, type ComputerCommand } from "./ComputerUsePanel";
 import type { Interaction, ProjectTrust, RuntimeStatus, Workspace } from "./types";
 import { collapseTimings, transcriptViews, type CollapseTiming, type TranscriptView } from "./transcript-display";
 import type { TrustIntent } from "./ProjectTrust";
@@ -246,7 +247,7 @@ function ContentFontControl({ expanded, onToggle, controls }: { expanded: boolea
 }
 
 export function SettingsDialog({ workspaces, runtime, theme, onThemeChange, onClose, view, onViewChange, collapseTiming, onCollapseTimingChange,
-  onAddWorkspace, onRemoveWorkspace, onProvidersChanged, policy, onPolicyChange, onOpenShortcuts, onManagePlugins, trust, onManageTrust, initialFocus }: {
+  onAddWorkspace, onRemoveWorkspace, onProvidersChanged, policy, onPolicyChange, onOpenShortcuts, onManagePlugins, trust, onManageTrust, initialFocus, onComputerCommand, onRefreshRuntime }: {
   workspaces: Workspace[]; runtime: RuntimeStatus | null;
   policy?: PolicyStatus | null; onPolicyChange?: (mode: PolicyStatus["mode"]) => void;
   theme: "dark" | "light" | "system"; onThemeChange: (theme: "dark" | "light" | "system") => void;
@@ -258,6 +259,8 @@ export function SettingsDialog({ workspaces, runtime, theme, onThemeChange, onCl
   onOpenShortcuts?: () => void; onManagePlugins?: () => void;
   trust?: ProjectTrust | null; onManageTrust?: () => void;
   initialFocus?: string;
+  onComputerCommand?: (command: ComputerCommand) => Promise<void>;
+  onRefreshRuntime?: () => Promise<void>;
 }) {
   const preferences = useWebPreferences();
   const [tab, setTab] = useState<SettingsTab>("general");
@@ -351,6 +354,7 @@ export function SettingsDialog({ workspaces, runtime, theme, onThemeChange, onCl
           {runtime && !plugins.length && <p>{t(pluginQuery.trim() ? "没有匹配的插件" : "当前会话未加载插件")}</p>}
         </section>}
         {tab === "tools" && <section><h3>{t("工具")}</h3><p>{runtime ? t("{0} 个模型工具", runtime.tools.length) : t("打开会话后显示")}</p>
+          <ComputerUsePanel status={runtime?.["computer-use"]} onCommand={onComputerCommand} onRefresh={onRefreshRuntime} />
           <input className="settings-catalog-search" type="search" aria-label={t("搜索工具")} placeholder={t("搜索工具")} value={toolQuery} onChange={event => setToolQuery(event.target.value)} disabled={!runtime} />
           {runtime && <p className="settings-catalog-count" role="status">{t("显示 {0} / {1} 项", tools.length, runtime.tools.length)}</p>}
           <div className="settings-cards">{tools.map((tool) => <div className="settings-card" key={tool.name}>

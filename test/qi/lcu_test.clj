@@ -13,13 +13,14 @@
         owner (kernel/plugin-context ctx :test/lcu)
         requests (atom [])
         responses (atom [])
-        prompts (atom [])]
+        prompts (atom [])
+        trusted (or (:trusted opts) (atom true))]
     (fs/create-dirs (fs/path root "adapters"))
     (fs/create-dirs (fs/path root "bin"))
     (fs/copy "test/fixtures/lcu-client.mjs" (fs/path root "adapters/client.mjs"))
     (spit (str (fs/path root "bin/lcu")) "fixture")
-    (kernel/register-service! owner :execution/world {:provider :local :sandbox :none :root (str root)})
-    (kernel/register-service! owner :project/trust {:trusted? (constantly true)})
+    (kernel/register-service! owner :execution/world (merge {:provider :local :sandbox :none :root (str root)} (:world opts)))
+    (kernel/register-service! owner :project/trust {:trusted? #(deref trusted)})
     (kernel/register-service! owner :approval/request (constantly :allow))
     (kernel/register-service! owner :llm/registry {:current (constantly {:id :test :input-modalities #{:text :image}})})
     (kernel/register-service! owner :llm/generate
@@ -40,7 +41,7 @@
                            {:ns 'qi.plugins.computer-use}
                            {:ns 'qi.plugins.lcu :config (merge {:enabled true :lcu-home (str root)} (:config opts))}
                            {:ns 'qi.plugins.runtime :config {:retry-delay-ms 1}}])
-    {:ctx ctx :root root :requests requests :responses responses :prompts prompts}))
+    {:ctx ctx :root root :requests requests :responses responses :prompts prompts :trusted trusted}))
 
 (defn events [{:keys [root]}]
   (let [path (str (fs/path root "events.jsonl"))]
@@ -58,6 +59,115 @@
 (defn dispose! [{:keys [ctx root]}]
   (kernel/dispose-all! ctx)
   (fs/delete-tree root))
+
+(deftest deferred-lcu-connect-keeps-untrusted-sessions-usable-without-launching
+  (let [trusted (atom false)
+        {:keys [ctx] :as f} (fixture {:trusted trusted :config {:connect-on-start false}})
+        status #((:status (kernel/service ctx :computer-use/runtime)))
+        command #((:execute (kernel/command ctx "computer")) % {})]
+    (try
+      (is (= :untrusted (:state (status))))
+      (is (empty? (events f)))
+      (is (empty? (kernel/tools ctx)))
+      (is (thrown-with-msg? Exception #"trusted project" (command "connect")))
+      (is (empty? (events f)))
+      (reset! trusted true)
+      (is (:connected (command "connect")))
+      (is (:connected (command "connect")))
+      (is (= 1 (count (filter #(= "connect" (:event %)) (events f)))))
+      (let [prepared (kernel/tool ctx "computer_js")]
+        (is (= :disconnected (:state (command "disconnect"))))
+        (is (empty? (kernel/tools ctx)))
+        (is (thrown-with-msg? Exception #"catalog changed" ((:execute prepared) {:code "stale"} {}))))
+      (command "disconnect")
+      (is (:connected (command "connect")))
+      (is (= 2 (count (filter #(= "connect" (:event %)) (events f)))))
+      (finally (dispose! f)))))
+
+(deftest lcu-surfaces-are-explicit-and-do-not-inherit-browser-access
+  (doseq [[args expected] [[[] ["computer"]] [["--chrome"] ["browser" "computer"]]]]
+    (let [{:keys [ctx] :as f} (fixture {:config {:lcu-args args}})]
+      (try
+        (let [status ((:status (kernel/service ctx :computer-use/runtime)))]
+          (is (= expected (get-in status [:capabilities :surfaces])))
+          (is (= :unsupported (get-in status [:capabilities :browser-origin-consent])))
+          (is (= "0" (:audio (first (events f)))))
+          (is (= "0" (:replAudio (first (events f)))))
+          (is (= (str/join "," expected) (:surfaces (first (events f))))))
+        (finally (dispose! f))))))
+
+(deftest lcu-rejects-unsupported-launch-modes-before-starting
+  (doseq [args [["--audio"] ["browser" "install"] ["--help"]]]
+    (is (thrown-with-msg? Exception #"only.*--chrome"
+                          (let [f (fixture {:config {:lcu-args args}})] (dispose! f))))))
+
+(deftest desktop-timeout-remains-uncertain-until-an-explicit-reconnect
+  (let [{:keys [ctx] :as f} (fixture {:config {:request-timeout-ms 100}})
+        command #((:execute (kernel/command ctx "computer")) % {})]
+    (try
+      (is (thrown? Exception (run! f ["hang"])))
+      (is (= :uncertain (:state (command "status"))))
+      (command "disconnect")
+      (is (thrown-with-msg? Exception #"Inspect the desktop" (command "connect")))
+      (is (:connected (command "reconnect")))
+      (is (nil? (:uncertain (command "status"))))
+      (finally (dispose! f)))))
+
+(deftest lcu-tool-errors-cannot-prove-that-input-was-not-delivered
+  (let [{:keys [ctx] :as f} (fixture)]
+    (try
+      (is (thrown? Exception (run! f ["error"])))
+      (let [status ((:status (kernel/service ctx :computer-use/runtime)))
+            result (last (filter #(= "tool/result" (:type %)) ((:events (kernel/service ctx :session/store)))))]
+        (is (= :uncertain (:state status)))
+        (is (false? (:connected status)))
+        (is (get-in result [:data :details :uncertain]))
+        (is (seq (get-in result [:data :images])))
+        (is (thrown-with-msg? Exception #"Inspect the desktop"
+                              ((:execute (kernel/command ctx "computer")) "connect" {}))))
+      (finally (dispose! f)))))
+
+(deftest active-turn-cannot-be-disrupted-by-connection-commands
+  (let [{:keys [ctx] :as f} (fixture)
+        token (cancellation/create-token)
+        running (future (try (run! f ["hang"] {:cancel-token token}) (catch Exception _ :cancelled)))]
+    (try
+      (loop [left 500]
+        (when (and (pos? left) (not (some #(= "call" (:event %)) (events f))))
+          (Thread/sleep 10) (recur (dec left))))
+      (is (some #(= "call" (:event %)) (events f)))
+      (doseq [command ["connect" "disconnect" "reconnect"]]
+        (is (thrown-with-msg? Exception #"idle session"
+                              ((:execute (kernel/command ctx "computer")) command {}))))
+      (is (:connected ((:status (kernel/service ctx :computer-use/runtime)))))
+      (finally
+        (cancellation/cancel! token)
+        (is (not= :timeout (deref running 15000 :timeout)))
+        (dispose! f)))))
+
+(deftest independent-sessions-have-distinct-bridges-and-lifecycle-identities
+  (let [a (fixture) b (fixture)]
+    (try
+      (run! a ["one"])
+      (run! b ["two"])
+      (is (not= (:pid (first (events a))) (:pid (first (events b)))))
+      (is (not= (:sessionId (first (filter #(= "call" (:event %)) (events a))))
+                (:sessionId (first (filter #(= "call" (:event %)) (events b))))))
+      (is (= ["Stop"] (mapv :hook (filter #(= "turn-end" (:event %)) (events a)))))
+      (is (= ["Stop"] (mapv :hook (filter #(= "turn-end" (:event %)) (events b)))))
+      (finally (dispose! a) (dispose! b)))))
+
+(deftest web-runtime-status-exposes-the-same-gated-lcu-state
+  (let [{:keys [ctx] :as f} (fixture {:config {:connect-on-start false}})]
+    (try
+      (plugin/load-all! ctx [{:ns 'qi.plugins.remote-registry} {:ns 'qi.plugins.remote-api}])
+      (let [invoke! (:invoke! (kernel/service ctx :remote/registry))]
+        (is (= :disconnected (get-in (invoke! "runtime.status" {}) [:computer-use :state])))
+        (is (get-in (invoke! "command.execute" {:command "/computer connect"}) [:output :connected]))
+        (is (= ["computer_js" "computer_js_reset"] (get-in (invoke! "runtime.status" {}) [:computer-use :tools])))
+        (invoke! "command.execute" {:command "/computer disconnect"})
+        (is (empty? (:tools (invoke! "runtime.status" {})))))
+      (finally (dispose! f)))))
 
 (deftest bridge-runs-agent-loop-with-original-instructions-images-identities-and-cleanup
   (let [{:keys [ctx requests] :as f} (fixture)]
@@ -83,7 +193,9 @@
   (doseq [headless [false true]]
     (let [{:keys [prompts] :as f} (fixture {:headless headless})]
       (try
-        (run! f ["approve"])
+        (if headless
+          (is (thrown? Exception (run! f ["approve"])))
+          (run! f ["approve"]))
         (let [answer (:result (first (filter #(= "approval" (:event %)) (events f))))]
           (is (= (if headless "cancel" "session") (:choice answer))))
         (when-not headless

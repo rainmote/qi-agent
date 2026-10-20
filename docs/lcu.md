@@ -34,7 +34,7 @@ session, model registry, execution world, trust, approval and policy:
 
 ```clojure
 {:ns qi.plugins.computer-use}
-{:ns qi.plugins.lcu :config {:enabled true}}
+{:ns qi.plugins.lcu :config {:enabled true :connect-on-start false}}
 ```
 
 The execution world must explicitly use `:sandbox :none` and the project must be
@@ -68,13 +68,43 @@ implemented or covered by this integration's E2E.
 | Field | Default | Purpose |
 | --- | --- | --- |
 | `:enabled` | `false` | Explicit opt-in; disabled starts no process |
+| `:connect-on-start` | `true` | Use `false` to open a session without launching LCU, review trust, then explicitly `/computer connect` |
 | `:lcu-home` | `LCU_HOME`, otherwise platform installation path | Installed release; macOS `~/.local/share/lcu/current`, Linux `/opt/lcu/current` |
 | `:node-command` | `node-path`, otherwise `node` on PATH | Node executable used for the bridge |
-| `:lcu-args` | `[]` | Additional argv for the installed LCU launcher |
+| `:lcu-args` | `[]` | Native `computer` surface only; `["--chrome"]` explicitly selects `browser,computer`. No audio or setup commands |
 | `:request-timeout-ms` | `60000` | Tool deadline; the example uses `150000` |
 | `:startup-timeout-ms` | at least `120000` for LCU | Connection/discovery deadline |
 | `:max-images` | `4` | Per-result screenshot count |
 | `:max-image-bytes` | `8388608` | Total decoded screenshot bytes per result |
+
+The adapter pins `CUA_REPL_ENABLED_SURFACES` to these configured surfaces. An
+unrelated shell's inherited browser/audio setting cannot expand desktop access.
+Chrome mode still requires the separately installed official extension and its
+authorized origin flow. This adapter cancels unsupported origin requests; it
+does not register origins, install extensions, or create persistent site grants.
+
+`/computer status` reports connection state, configured provider, surfaces,
+project trust, execution-world and image-model prerequisites. `connect` is
+idempotent while healthy. `disconnect` closes the bridge and removes its model
+tools. Connection changes require an idle session; cancel the turn first.
+An uncertain action survives disconnect and cannot be cleared by `connect`:
+inspect the desktop before explicitly using `reconnect`. No command replays
+input. Separate sessions own separate bridges and identities, but share the
+same physical desktop; this is not desktop isolation across users/sessions.
+LCU JavaScript tool errors are also uncertain: code can send input and then fail,
+including before a later application-consent request is declined. qì preserves
+the original error and images, closes the bridge, and stops the turn. Cleanup
+failures are visible in status and retain the same explicit-reconnect boundary.
+
+Web Settings → Tools displays this same status and explicit connection controls
+through the existing journaled `command.execute` path. Connecting verifies
+tool discovery only, not OS permission or successful screenshot/input. The
+default configuration remains disabled, and existing Standard/Creator session
+presets do not acquire desktop access. Start a new session using an explicitly
+configured, reviewed runtime profile (for CLI: `bb qi-agent --config examples/lcu.edn`);
+a Web user preset must include the documented services in dependency order.
+Neither the panel nor this repository change trusts an actual project or
+changes OS accessibility, recording, credentials, extension or site permissions.
 
 Tool deadlines pause while native approval is pending. The frontend may have its
 own prompt deadline (the Web/RPC bridge defaults to five minutes). Cancellation

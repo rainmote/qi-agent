@@ -833,3 +833,11 @@ svg { flex: 0 0 auto; }
   .trust-actions { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); }
   .trust-actions .primary { grid-column: 1 / -1; }
 }
+.computer-use-panel { margin: 16px 0; padding: 16px; border: 1px solid var(--border-2); border-radius: 12px; }
+.computer-use-panel h4 { margin: 0 0 8px; font-size: 14px; }
+.computer-use-panel p { overflow-wrap: anywhere; }
+.computer-use-inspect { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; line-height: 1.5; }
+.computer-use-inspect input { flex: 0 0 auto; margin-top: 4px; }
+.computer-use-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.computer-use-actions button { padding: 7px 12px; border: 1px solid var(--border-2); border-radius: 8px; background: var(--layer-1); color: inherit; }
+.computer-use-actions button:disabled { opacity: .5; cursor: default; }

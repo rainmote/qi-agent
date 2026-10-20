@@ -1,5 +1,5 @@
 ;; Explicit opt-in desktop profile. Read docs/lcu.md before starting.
-;; The project must already be trusted in the user-owned trust store.
+;; Connect explicitly after reviewing project trust: /computer connect.
 ;; Set OPENAI_API_KEY locally; never put an API key in this file.
 {:plugins
  [{:ns qi.plugins.session}
@@ -33,6 +33,8 @@
 
   {:ns qi.plugins.lcu
    :config {:enabled true
+            :connect-on-start false
+            :lcu-args []
             ;; Defaults to LCU_HOME or ~/.local/share/lcu/current.
             ;; :lcu-home "/absolute/path/to/lcu/current"
             :request-timeout-ms 150000

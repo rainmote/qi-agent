@@ -185,10 +185,27 @@ export interface HostEvent {
   error?: { message: string };
 }
 
+export interface ComputerUseStatus {
+  enabled: boolean;
+  provider: string | null;
+  "configured-provider": string;
+  connected: boolean;
+  state: "disabled" | "untrusted" | "unsupported-world" | "uncertain" | "connected" | "disconnected";
+  trusted: boolean;
+  "local-desktop": boolean;
+  "image-model": boolean;
+  "input-scope": "host-desktop";
+  tools: string[];
+  uncertain: unknown;
+  error?: string | null;
+  capabilities?: { surfaces?: string[]; "browser-origin-consent"?: string; "system-permissions"?: string } | null;
+}
+
 export interface RuntimeStatus {
   plugins: Array<{ id: string; namespace: string; description: string }>;
   tools: Array<{ name: string; description: string; parameters?: unknown }>;
   commands: Array<{ name: string; description: string }>;
+  "computer-use"?: ComputerUseStatus | null;
   resources?: { skills?: unknown[]; contexts?: unknown[]; prompts?: unknown[] };
 }
 
