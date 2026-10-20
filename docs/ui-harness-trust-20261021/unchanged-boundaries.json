@@ -1,0 +1,37 @@
+[
+  {
+    "path": "apps/web-host/coding-candidates.test.ts",
+    "unchanged_from_baseline": true,
+    "sha256": "faf111589fc10086d12217d66c4f913ab36a9249ab0d3fc8f43c1aa7c7ae8069"
+  },
+  {
+    "path": "apps/web-host/coding-candidates.ts",
+    "unchanged_from_baseline": true,
+    "sha256": "5800ba01ebdc59761bad81b88838f9b7745b735646b9f61a5e2dbe33a2477291"
+  },
+  {
+    "path": "apps/shared/methods.ts",
+    "unchanged_from_baseline": true,
+    "sha256": "ec9763c33926ae078d294c050e4643701eb88309244e6bb6b589dd7f083909fe"
+  },
+  {
+    "path": "src/qi/plugins/trust.clj",
+    "unchanged_from_baseline": true,
+    "sha256": "954b2a1d0f96d6da3baa0ce3860359c79cb744a709e2f911bb7d15be71a47678"
+  },
+  {
+    "path": "src/qi/plugins/policy.clj",
+    "unchanged_from_baseline": true,
+    "sha256": "ffd9afaa3af2f71c78a1234344ac627ed993c44a098e3df3a7add014e33fa0fb"
+  },
+  {
+    "path": "src/qi/command.clj",
+    "unchanged_from_baseline": true,
+    "sha256": "9c0ce11907ba35e774a0a59cfe1c94fee9d4323c02817fca568dcf045800912f"
+  },
+  {
+    "path": "test/fixtures/web-interaction-mock.edn",
+    "unchanged_from_baseline": true,
+    "sha256": "0eb0e5516faa87af628938c4e13dbdf103171bdd43b08302de9e73c55471b01f"
+  }
+]

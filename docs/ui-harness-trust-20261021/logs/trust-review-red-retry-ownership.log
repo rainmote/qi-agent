@@ -1,0 +1,54 @@
+(node:82228) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ lost response keeps the original operation through reload and blocks blind replay (6.385334ms)
+✔ manual retry after not_found reuses identity and payload; pending outcomes never resend (0.429334ms)
+✔ structured uncertain responses survive the API boundary and definitive errors allow a new action (0.195041ms)
+✔ planning approvals can resolve while the original blocking command remains journaled (0.171416ms)
+✔ a late old HTTP response cannot erase a newer operation's recovery identity (0.245958ms)
+✔ a late operation-status response cannot erase a newer recovery journal (0.194041ms)
+✖ late not_found cannot replay an operation after its journal was already reconciled (0.48675ms)
+✖ late not_found cannot replay an operation after its journal belongs to a newer write (0.176375ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 6
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 111.558833
+
+✖ failing tests:
+
+test at apps/web/src/api.test.tsx:138:42
+✖ late not_found cannot replay an operation after its journal was already reconciled (0.48675ms)
+  AssertionError [ERR_ASSERTION]: stale not_found must never send the original command again
+  
+  2 !== 1
+  
+      at TestContext.<anonymous> (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/src/api.test.tsx:159:12)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 2,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at apps/web/src/api.test.tsx:138:42
+✖ late not_found cannot replay an operation after its journal belongs to a newer write (0.176375ms)
+  AssertionError [ERR_ASSERTION]: stale not_found must never send the original command again
+  
+  3 !== 2
+  
+      at TestContext.<anonymous> (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/src/api.test.tsx:159:12)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 3,
+    expected: 2,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

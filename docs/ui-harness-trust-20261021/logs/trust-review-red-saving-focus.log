@@ -1,0 +1,21 @@
+  ➜  Local:   http://127.0.0.1:4194/
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: saving must keep keyboard focus inside the modal
+
+false !== true
+
+    at file:///Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/tests/trust-browser.mjs:156:42
+    at runNextTicks (node:internal/process/task_queues:65:5)
+    at process.processImmediate (node:internal/timers:541:9) {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: false,
+  expected: true,
+  operator: 'strictEqual',
+  diff: 'simple'
+}
+
+Node.js v26.9.0

@@ -1,0 +1,15 @@
+{
+  "command": [
+    "node",
+    "../tools/run-interaction-preview.mjs",
+    "apps/web/tests/trust-browser.mjs"
+  ],
+  "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent",
+  "start": "2026-10-20T16:30:08.787315+00:00",
+  "end": "2026-10-20T16:30:13.077166+00:00",
+  "exit_code": 1,
+  "status": "completed",
+  "runner_pid": 73025,
+  "isolation": "tools/isolation.sb; whitelisted environment",
+  "platform": "Darwin 27.0.0 arm64"
+}

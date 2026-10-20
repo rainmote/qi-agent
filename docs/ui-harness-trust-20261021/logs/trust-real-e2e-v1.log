@@ -1,0 +1,51 @@
+▶ production Web trust, cancellation, recovery and composer E2E
+  ✔ adding a project asks before any turn, cancel preserves the draft and failure never submits (1094.824583ms)
+  ✔ stop works inside approval, handles failure, suppresses repeat clicks and survives refresh (642.407041ms)
+  ✖ composer menu, IME, multiline draft, focus and responsive geometry remain usable (55.059625ms)
+✖ production Web trust, cancellation, recovery and composer E2E (2568.416875ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 2
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2853.127959
+
+✖ failing tests:
+
+test at apps/web/tests/interaction-e2e.test.ts:39:13
+✖ composer menu, IME, multiline draft, focus and responsive geometry remain usable (55.059625ms)
+  AssertionError [ERR_ASSERTION]: {"x":469.296875,"y":690,"width":774.390625,"height":180}
+      at <anonymous> (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/tests/interaction-e2e.test.ts:234:72)
+      at async TestContext.<anonymous> (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/tests/interaction-e2e.test.ts:39:44)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async scenario (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/tests/interaction-e2e.test.ts:39:5)
+      at async TestContext.<anonymous> (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/tests/interaction-e2e.test.ts:220:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at apps/web/tests/interaction-e2e.test.ts:24:1
+✖ production Web trust, cancellation, recovery and composer E2E (2568.416875ms)
+  AssertionError [ERR_ASSERTION]: {"x":469.296875,"y":690,"width":774.390625,"height":180}
+      at <anonymous> (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/tests/interaction-e2e.test.ts:234:72)
+      at async TestContext.<anonymous> (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/tests/interaction-e2e.test.ts:39:44)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async scenario (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/tests/interaction-e2e.test.ts:39:5)
+      at async TestContext.<anonymous> (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/tests/interaction-e2e.test.ts:220:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }

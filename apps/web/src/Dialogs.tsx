@@ -11,11 +11,13 @@ import type { PolicyStatus } from "./types";
 import { ProviderSettingsPanel } from "./ProviderSettingsPanel";
 import type { Interaction, ProjectTrust, RuntimeStatus, Workspace } from "./types";
 import { collapseTimings, transcriptViews, type CollapseTiming, type TranscriptView } from "./transcript-display";
+import type { TrustIntent } from "./ProjectTrust";
 
 export function DialogFrame({ title, children, onClose, className = "", dangerous = false, initialFocus }: {
   title: string; children: ReactNode; onClose?: () => void; className?: string; dangerous?: boolean; initialFocus?: string;
 }) {
   const dialog = useRef<HTMLDivElement>(null);
+  const lastControl = useRef<HTMLElement | null>(null);
   const controls = () => [...dialog.current?.querySelectorAll<HTMLElement>(
     "button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], summary") || []]
     .filter(element => element.getClientRects().length > 0);
@@ -27,7 +29,7 @@ export function DialogFrame({ title, children, onClose, className = "", dangerou
     if (root) root.inert = true;
     document.body.style.overflow = "hidden";
     (initialFocus ? dialog.current?.querySelector<HTMLElement>(initialFocus) : null)?.focus();
-    if (!initialFocus || !dialog.current?.contains(document.activeElement)) controls()[0]?.focus();
+    if (!initialFocus || !dialog.current?.contains(document.activeElement)) (controls()[0] || dialog.current)?.focus();
     return () => {
       if (root) root.inert = wasInert;
       document.body.style.overflow = overflow;
@@ -36,19 +38,34 @@ export function DialogFrame({ title, children, onClose, className = "", dangerou
       else root?.querySelector<HTMLElement>(".sidebar-settings")?.focus();
     };
   }, []);
+  useLayoutEffect(() => {
+    const box = dialog.current, focused = document.activeElement;
+    if (!box) return;
+    const previous = lastControl.current;
+    if (focused === box && previous?.isConnected && !previous.matches(":disabled") && box.contains(previous)) {
+      previous.focus();
+    } else if (focused instanceof HTMLElement && focused.matches(":disabled") && box.contains(focused)) {
+      (controls()[0] || box).focus();
+    } else if (focused === document.body && previous && !previous.isConnected) {
+      (controls()[0] || box).focus();
+    } else if (!controls().length && !box.contains(focused)) {
+      box.focus();
+    }
+  });
   const trap = (event: KeyboardEvent) => {
     if (event.key === "Escape" && onClose) { event.preventDefault(); event.stopPropagation(); onClose(); }
     if (event.key !== "Tab" || !dialog.current) return;
     const focusable = controls();
-    if (!focusable.length) return;
+    if (!focusable.length) { event.preventDefault(); dialog.current.focus(); return; }
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
-    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
-    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog.current)) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && (document.activeElement === last || document.activeElement === dialog.current)) { event.preventDefault(); first.focus(); }
   };
   const content = <div className="dialog-backdrop" role="presentation">
     <div className={`dialog ${dangerous ? "dialog-danger" : ""} ${className}`} role="dialog" aria-modal="true"
-      aria-label={title} ref={dialog} onKeyDown={trap}>
+      aria-label={title} ref={dialog} tabIndex={-1} onKeyDown={trap}
+      onFocusCapture={event => { if (event.target !== dialog.current && event.target instanceof HTMLElement) lastControl.current = event.target; }}>
       <header><h2>{title}</h2>{onClose &&
         <button type="button" className="icon-button" onClick={onClose} aria-label={t("关闭")}><Icon name="x" /></button>}</header>
       {children}
@@ -79,21 +96,46 @@ export function ApprovalPanel({ interaction, resolving, onResolve, onStop, stopp
   </section>;
 }
 
-export function ProjectTrustDialog({ trust, busy, error, onChoose }: {
-  trust: ProjectTrust; busy: boolean; error: string | null;
+export function ProjectTrustDialog({ trust, intent, loading, busy, error, onChoose, onRetry }: {
+  trust: ProjectTrust | null; intent: TrustIntent; loading: boolean; busy: boolean; error: string | null;
   onChoose: (decision: "allow" | "deny" | null) => void;
+  onRetry: () => void;
 }) {
-  return <DialogFrame title={t("是否信任这个项目？")} onClose={busy ? undefined : () => onChoose(null)}>
-    <p className="dialog-copy">{t("开始前，请确认你了解这个目录中的文件和指令来源。")}</p>
-    <pre className="approval-detail trust-path">{trust.root}</pre>
-    <p className="dialog-copy">{t("信任后可加载项目资源并执行需要信任的命令；操作仍遵循当前访问权限。选择保持受限将继续禁用这些能力。")}</p>
-    {trust.mutable === false && <p className="dialog-copy">{t("当前配置固定了信任状态，无法在这里修改。")}</p>}
-    {error && <p className="dialog-copy form-error" role="alert">{error}</p>}
+  const manage = intent === "manage", configured = trust?.configured, editable = configured && trust.mutable !== false;
+  const inherited = configured && trust["matched-root"] && trust["matched-root"] !== trust.root;
+  const state = trust?.decision === "allow" ? t("已信任") : trust?.["explicit?"] ? t("受限") : t("尚未选择");
+  return <DialogFrame title={t(manage ? "项目信任" : "是否信任这个项目？")} className="project-trust-dialog"
+    onClose={busy ? undefined : () => onChoose(null)} initialFocus="[data-trust-cancel]">
+    <div className="trust-body" aria-busy={loading || busy}>
+      {loading ? <p className="trust-reading" role="status">{t("正在核对项目信任状态…")}</p> : configured ? <>
+        <p className="trust-intro">{t(manage ? "查看当前目录的信任范围。修改信任不会发送输入框中的内容。"
+          : intent === "enter" ? "项目已打开，尚未运行任务。请先确认这个目录的文件和指令来源。"
+            : "发送前，请确认这个目录的文件和指令来源。取消会保留草稿。")}</p>
+        <section className="trust-project" aria-label={t("当前项目")}>
+          <div className="trust-project-heading"><span><Icon name="folderOpen" />{t("当前项目")}</span>
+            <span className="trust-state"><Icon name={trust.decision === "allow" ? "shield" : "eye"} />{state}</span></div>
+          <code className="trust-path">{trust.root}</code>
+          {inherited && <div className="trust-inherited"><span>{t("继承自父目录")}</span><code className="trust-path">{trust["matched-root"]}</code></div>}
+        </section>
+        <div className="trust-effects">
+          <p>{t("信任后可加载项目资源，并允许需要信任的命令通过信任检查。保持受限将禁用这些能力。")}</p>
+          <p><Icon name="shield" />{t("工具仍受当前会话权限和人工审批约束。")}</p>
+          <p>{t("选择保存在本机，适用于此目录及未单独设置的子目录。")}</p>
+          {manage && trust.decision === "allow" && <p>{t("撤销会将此目录设为受限，不会删除父目录设置，也不会撤回已执行的操作。")}</p>}
+        </div>
+        {!editable && <p className="trust-fixed" role="status">{t("当前配置固定了信任状态，无法在这里修改。")}</p>}
+      </> : trust && <p className="trust-intro">{t("当前运行配置未提供项目信任管理。请以实际会话权限和审批要求为准。")}</p>}
+      {error && <p className="form-error trust-error" role="alert">{error}</p>}
+    </div>
     <div className="dialog-actions trust-actions">
-      <button type="button" className="button ghost" disabled={busy} onClick={() => onChoose(null)}>{t("取消")}</button>
-      <button type="button" className="button secondary" disabled={busy} onClick={() => onChoose("deny")}>{t("保持受限")}</button>
-      <button type="button" className="button primary" disabled={busy || trust.mutable === false} onClick={() => onChoose("allow")}>
-        {busy ? t("正在确认…") : t("信任并继续")}</button>
+      <button type="button" className="button ghost" data-trust-cancel disabled={busy} onClick={() => onChoose(null)}>{t(manage ? "返回" : "取消")}</button>
+      {!loading && !trust && error && <button type="button" className="button secondary" onClick={onRetry}>{t("重新读取")}</button>}
+      {!loading && configured && (!manage || editable && trust.decision === "allow") &&
+        <button type="button" className={`button secondary ${manage ? "trust-revoke" : ""}`} disabled={busy || !editable && trust.decision !== "deny"}
+          onClick={() => onChoose("deny")}>{busy ? t("正在确认…") : t(manage ? "撤销信任" : "保持受限")}</button>}
+      {!loading && configured && (!manage || editable && trust.decision !== "allow") &&
+        <button type="button" className="button primary" disabled={busy || !editable} onClick={() => onChoose("allow")}>
+          {busy ? t("正在确认…") : t(manage ? "信任项目" : "信任并继续")}</button>}
     </div>
   </DialogFrame>;
 }
@@ -204,7 +246,7 @@ function ContentFontControl({ expanded, onToggle, controls }: { expanded: boolea
 }
 
 export function SettingsDialog({ workspaces, runtime, theme, onThemeChange, onClose, view, onViewChange, collapseTiming, onCollapseTimingChange,
-  onAddWorkspace, onRemoveWorkspace, onProvidersChanged, policy, onPolicyChange, onOpenShortcuts, onManagePlugins, initialFocus }: {
+  onAddWorkspace, onRemoveWorkspace, onProvidersChanged, policy, onPolicyChange, onOpenShortcuts, onManagePlugins, trust, onManageTrust, initialFocus }: {
   workspaces: Workspace[]; runtime: RuntimeStatus | null;
   policy?: PolicyStatus | null; onPolicyChange?: (mode: PolicyStatus["mode"]) => void;
   theme: "dark" | "light" | "system"; onThemeChange: (theme: "dark" | "light" | "system") => void;
@@ -214,6 +256,7 @@ export function SettingsDialog({ workspaces, runtime, theme, onThemeChange, onCl
   onRemoveWorkspace?: (workspace: Workspace) => Promise<void>;
   onProvidersChanged?: () => Promise<void> | void;
   onOpenShortcuts?: () => void; onManagePlugins?: () => void;
+  trust?: ProjectTrust | null; onManageTrust?: () => void;
   initialFocus?: string;
 }) {
   const preferences = useWebPreferences();
@@ -260,6 +303,10 @@ export function SettingsDialog({ workspaces, runtime, theme, onThemeChange, onCl
         {tab === "general" && <>
           <section className="settings-option-row"><div><h3>{t("权限")}</h3><p>{t("选择此会话的访问权限模式")}</p></div>
             {policy && onPolicyChange ? <PermissionControl policy={policy} onChange={onPolicyChange} /> : <span>{t("打开会话后可用")}</span>}
+          </section>
+          <section className="settings-option-row settings-trust-row"><div><h3>{t("项目信任")}</h3>
+            <p>{trust?.configured ? t(trust.decision === "allow" ? "已信任 · 工具仍需遵循权限和审批" : "受限 · 需要信任的能力已禁用") : t("查看当前项目的信任范围和限制")}</p></div>
+            <button type="button" className="settings-preference-trigger" data-trust-trigger disabled={!onManageTrust} onClick={onManageTrust}>{t("管理项目信任")}</button>
           </section>
           <section className="settings-option-row"><div><h3>{t("语言")}</h3></div>
             <SettingsLanguageControl />

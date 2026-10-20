@@ -613,6 +613,7 @@ export function App() {
     if (!current() || activeSessionId.current !== id) return;
     setProjection(fromSnapshot(snapshot));
     setContextStatus(snapshot.context || null);
+    trust.setStatus(snapshot.trust || null);
   };
 
   const send = async (mode: "auto" | "queue" | "steer" = "auto") => {
@@ -701,7 +702,7 @@ export function App() {
       }
       showError(error);
     } }
-    finally { if (current()) setBusy(false); }
+    finally { if (current()) { setBusy(false); if (session) setPendingOperation(api.pendingOperation(session.id)); } }
   };
 
   const reconcileOperation = async (retry = false) => {
@@ -902,7 +903,8 @@ export function App() {
       if (!current()) return;
       setDraftSession(created.session);
       setModels(created.snapshot.models); setPolicy(created.snapshot.policy || null);
-      await trust.check(created.session.id, current);
+      await trust.check(created.session.id, current, "enter");
+      if (current()) setPendingOperation(api.pendingOperation(created.session.id));
     } catch (error) { if (current()) showError(error); }
     finally { if (current()) setBusy(false); }
   };
@@ -917,6 +919,28 @@ export function App() {
 
   const activeWorkspace = bootstrap?.workspaces.find((entry) => entry.id === workspaceId);
   const phase = projection?.state.phase || "idle";
+  useEffect(() => {
+    // Ask once on entering an undecided project. Cancel does not persist a choice;
+    // a later send still checks the effective worker state before dispatch.
+    if (activeSession && trust.status?.configured && trust.status.decision === "deny" && !trust.status["explicit?"]) {
+      const current = captureOperation();
+      void trust.check(activeSession.id, current, "enter").catch(error => { if (current()) showError(error); });
+    }
+  }, [activeSession?.id, viewRevision]);
+  const manageTrust = async (fromSettings = false) => {
+    const session = activeSession || draftSession;
+    if (!session || busy) return;
+    const current = captureOperation();
+    if (fromSettings) setSettingsOpen(false);
+    try { await trust.check(session.id, current, "manage"); }
+    catch (error) { if (current()) showError(error); }
+    finally {
+      if (current()) {
+        setPendingOperation(api.pendingOperation(session.id)); setOperationMissing(false);
+        if (fromSettings) { setSettingsInitialFocus("[data-trust-trigger]"); setSettingsOpen(true); }
+      }
+    }
+  };
   useEffect(() => {
     if (!stopRequestPending && phase === "idle" && !projection?.interactions.length) {
       stopInFlight.current = false; setStopping(false); setStopError(null);
@@ -1033,14 +1057,12 @@ export function App() {
         onMouseEnter={() => setCommandIndex(index)} onClick={() => chooseCommand(index)}>
         <code>{command.name}</code><span>{command.description}</span></button>)}
     </div>}
-    <div className={`composer ${phase !== "idle" ? "is-active" : ""} ${composer.trim() ? "has-content" : ""} ${projection?.interactions.length ? "has-approval" : ""}`} aria-busy={busy}>
-      {trust.status?.configured && trust.status.decision === "deny" && <div className="composer-trust" role="status">
-        <Icon name="shield" /><span>{t("项目受限 · 需要信任的命令已禁用")}</span>
-        {trust.status.mutable !== false && <button type="button" disabled={busy} onClick={() => {
-          const session = activeSession || draftSession;
-          if (session) void trust.check(session.id, captureOperation(), true).catch(showError);
-        }}>{t("信任项目")}</button>}
+      {trust.status?.configured && <div className="composer-trust" role="status">
+        <Icon name={trust.status.decision === "allow" ? "shield" : "eye"} />
+        <span>{t(trust.status.decision === "allow" ? "项目已信任 · 仍受权限和审批约束" : "项目受限 · 需要信任的命令已禁用")}</span>
+        <button type="button" disabled={busy} onClick={() => void manageTrust()}>{t("管理项目信任")}</button>
       </div>}
+    <div className={`composer ${phase !== "idle" ? "is-active" : ""} ${composer.trim() ? "has-content" : ""} ${projection?.interactions.length ? "has-approval" : ""}`} aria-busy={busy}>
       {!workbench && approvalNode}
       <ComposerAttachments key={`${workspaceId}:${activeSession?.id || "draft"}`} workspaceId={workspaceId || ""}
         inputRef={attachmentInput} items={attachments} onChange={setAttachments} upload={api.uploadAttachment}
@@ -1300,6 +1322,7 @@ export function App() {
       }} />}
     {settingsOpen && <SettingsDialog workspaces={bootstrap?.workspaces || []} runtime={runtime}
       initialFocus={settingsInitialFocus}
+      trust={trust.status} onManageTrust={(activeSession || draftSession) && !busy ? () => void manageTrust(true) : undefined}
       onOpenShortcuts={() => openShortcuts(true)} onManagePlugins={activeSession ? () => { setSettingsOpen(false); setWorkbench("plugins"); } : undefined}
       view={stepsView} onViewChange={value => { setStepsView(value); localStorage.setItem("qi-agent.transcript-view", value); }}
       collapseTiming={stepsCollapseTiming} onCollapseTimingChange={value => { setStepsCollapseTiming(value); localStorage.setItem("qi-agent.collapse-timing", value); }}

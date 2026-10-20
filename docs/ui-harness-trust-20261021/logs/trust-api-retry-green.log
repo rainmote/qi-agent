@@ -1,0 +1,18 @@
+(node:82338) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ lost response keeps the original operation through reload and blocks blind replay (6.314375ms)
+✔ manual retry after not_found reuses identity and payload; pending outcomes never resend (0.446125ms)
+✔ structured uncertain responses survive the API boundary and definitive errors allow a new action (0.192ms)
+✔ planning approvals can resolve while the original blocking command remains journaled (0.159916ms)
+✔ a late old HTTP response cannot erase a newer operation's recovery identity (0.239583ms)
+✔ a late operation-status response cannot erase a newer recovery journal (0.193666ms)
+✔ late not_found cannot replay an operation after its journal was already reconciled (0.148792ms)
+✔ late not_found cannot replay an operation after its journal belongs to a newer write (0.122459ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 8
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 106.226916

@@ -1,0 +1,17 @@
+  ➜  Local:   http://127.0.0.1:4194/
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+
+locator.click: Timeout 6000ms exceeded.
+Call log:
+  - waiting for getByRole('button', { name: '核对结果', exact: true })
+
+    at /Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/tests/trust-browser.mjs:167:59 {
+  log: [
+    "  - waiting for getByRole('button', { name: '核对结果', exact: true })"
+  ],
+  name: 'TimeoutError'
+}
+
+Node.js v26.9.0

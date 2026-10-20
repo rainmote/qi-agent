@@ -779,12 +779,52 @@ svg { flex: 0 0 auto; }
 .composer-trust > svg { width: 16px; height: 16px; }
 .composer-trust > span { min-width: 0; flex: 1; }
 .composer-trust button, .composer-error button { min-height: 44px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--accent); cursor: pointer; white-space: nowrap; }
+.composer-trust button:disabled { opacity: .45; cursor: not-allowed; }
 .composer-hint { min-height: 24px; align-items: center; gap: 8px; color: var(--text-3); }
 .session-view .composer-hint.has-run { display: flex; }
 .composer-hint .steer-button { min-height: 44px; margin-left: auto; white-space: nowrap; }
 .composer-error { margin: 0 10px; color: var(--danger); font-size: 12px; overflow-wrap: anywhere; }
 .trust-path { white-space: pre-wrap; overflow-wrap: anywhere; }
 .trust-actions { flex-wrap: wrap; }
+/* @component Project trust · inherits Harness surfaces, typography and controls.
+ * States: default / hover / focus-visible / active / disabled / loading / error / saved.
+ * Trust is independent of session permissions. No project is implicitly approved. */
+.project-trust-dialog { width: min(560px, 100%); }
+.project-trust-dialog > header .icon-button { width: 44px; height: 44px; min-width: 44px; min-height: 44px; }
+.trust-body { min-height: 96px; padding: 20px 24px 4px; color: var(--text-2); font-size: 13px; line-height: 1.6; }
+.trust-intro { margin: 0 0 16px; }
+.trust-project { min-width: 0; padding: 14px 16px; border: 1px solid var(--border-1); border-radius: 12px; background: var(--layer-1); }
+.trust-project-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.trust-project-heading > span { display: inline-flex; align-items: center; gap: 6px; }
+.trust-project-heading svg, .trust-effects svg { width: 16px; height: 16px; flex-shrink: 0; }
+.trust-state { color: var(--text); font-size: 12px; }
+.trust-project code { display: block; color: var(--text); font: 12px/1.6 ui-monospace, monospace; }
+.trust-inherited { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border-1); color: var(--text-3); font-size: 12px; }
+.trust-inherited code { margin-top: 3px; color: var(--text-2); }
+.trust-effects { margin-top: 16px; }
+.trust-effects p { margin: 0 0 10px; }
+.trust-effects p:has(svg) { display: flex; align-items: start; gap: 7px; color: var(--text); }
+.trust-effects svg { margin-top: 2px; }
+.trust-fixed { padding: 10px 12px; border-radius: 8px; background: var(--layer-1); }
+.trust-reading { margin: 12px 0 20px; }
+.trust-error { overflow-wrap: anywhere; }
+.project-trust-dialog .trust-actions { padding: 16px 24px 22px; }
+.trust-actions .button { min-height: 44px; }
+.trust-actions .trust-revoke { color: var(--danger); }
+.trust-actions .button:disabled { opacity: .45; cursor: not-allowed; }
+.trust-actions .button:focus-visible, .composer-trust button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.settings-trust-row .settings-preference-trigger:disabled { opacity: .45; cursor: not-allowed; }
+@media (hover: hover) { .composer-trust button:hover:not(:disabled) { background: var(--hover); } }
+.trust-actions .button:active:not(:disabled) { transform: translateY(1px); }
+@media (max-width: 520px) {
+  .trust-body { padding: 16px 16px 2px; }
+  .trust-project { padding: 12px; }
+  .project-trust-dialog .trust-actions { padding: 14px 16px 20px; }
+  .composer-trust { gap: 6px; margin-inline: 8px; line-height: 1.5; }
+  .composer-trust > svg { flex-shrink: 0; }
+  .composer-trust button { padding-inline: 6px; }
+  .settings-trust-row { flex-wrap: wrap; gap: 12px; }
+}
 @media (max-width: 520px) {
   .composer .composer-footer { gap: 2px; }
   .composer .composer-control-trigger { font-size: 11px; }

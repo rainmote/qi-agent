@@ -52,17 +52,24 @@ function unknownOutcome(operation: PendingOperation): Error {
     data: { status: "uncertain", command_id: operation.commandId },
   });
 }
+function clearOperation(operation: PendingOperation) {
+  // A late response/query owns only its captured identity. A newer operation
+  // may already be journaled after the old receipt was reconciled elsewhere.
+  if (pendingOperation(operation.sessionId)?.commandId === operation.commandId) {
+    sessionStorage.removeItem(storageKey(operation.sessionId));
+  }
+}
 async function submitOperation<T>(operation: PendingOperation): Promise<T> {
   sessionStorage.setItem(storageKey(operation.sessionId), JSON.stringify(operation));
   try {
     const result = await request<T>(`/api/sessions/${encodeURIComponent(operation.sessionId)}/rpc`, {
       method: "POST", body: JSON.stringify(operation),
     });
-    sessionStorage.removeItem(storageKey(operation.sessionId));
+    clearOperation(operation);
     return result;
   } catch (error) {
     if ((error as { definitive?: boolean }).definitive && !uncertainOperation(error)) {
-      sessionStorage.removeItem(storageKey(operation.sessionId));
+      clearOperation(operation);
       throw error;
     }
     throw unknownOutcome(operation);
@@ -73,7 +80,7 @@ async function operationStatus(id: string): Promise<OperationStatus> {
   if (!operation) throw new Error(t("没有需要核对的操作"));
   const result = await request<OperationStatus>(
     `/api/sessions/${encodeURIComponent(id)}/operations/${encodeURIComponent(operation.commandId)}`);
-  if (result.status === "completed" || result.status === "failed") sessionStorage.removeItem(storageKey(id));
+  if (result.status === "completed" || result.status === "failed") clearOperation(operation);
   return result;
 }
 
@@ -135,7 +142,11 @@ export const api = {
     const operation = pendingOperation(id);
     if (!operation) throw new Error(t("没有需要核对的操作"));
     const status = await operationStatus(id);
-    if (status.status === "not_found") return submitOperation(operation);
+    if (status.status === "not_found") {
+      const current = pendingOperation(id);
+      if (current?.commandId !== operation.commandId) throw unknownOutcome(current || operation);
+      return submitOperation(operation);
+    }
     if (status.status === "completed") return status.result;
     if (status.status === "failed") throw new Error(status.error?.message || t("原操作失败"));
     throw unknownOutcome(operation);

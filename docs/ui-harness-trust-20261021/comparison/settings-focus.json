@@ -1,0 +1,16 @@
+{
+  "crop": [
+    520,
+    160,
+    580,
+    250
+  ],
+  "size": [
+    1160,
+    284
+  ],
+  "resampling": false,
+  "qualitativeOnly": true,
+  "fullImageComparison": "settings-source-vs-qi.png",
+  "note": "Focused view is supplementary; no cropped regions are excluded from whole-image evidence."
+}

@@ -16,13 +16,14 @@ async function fixture(initialCount=2, pageOptions={}){
  page.on('pageerror',e=>errors.push(e.message));
  await page.addInitScript(()=>{window.sources=[];window.EventSource=class extends EventTarget{constructor(url){super();this.url=url;window.sources.push(this);queueMicrotask(()=>this.dispatchEvent(new Event('ready')));}close(){this.closed=true;}}});
  const controls={policySelections:[],rejectPolicy:false,holdSnapshot:null,holdOpen:null,holdPolicy:null,holdModels:null,holdCatalog:null,catalogGates:[],additionalSessions:[],forks:0,snapshotOverride:null,dropFollowUp:false,dropSteer:false,steers:[],followUps:[],rpcRequests:[],modelCatalog:models,providerSaves:0,providerRetries:0,dropSubmit:false,rejectSubmit:false,uploads:[],submissions:[],operationStatus:"completed",preferenceEvents:{A:[],B:[]},rejectPreference:false,verification:undefined};
- const sessionSnapshot=(id,n=2)=>{const value=snapshot(id,n);value.events.push(...controls.preferenceEvents[id]);return value;};
+ const sessionSnapshot=(id,n=2)=>{const value=snapshot(id,n);value.events.push(...controls.preferenceEvents[id]);if(controls.trustStates)value.trust=controls.trustStates[id];return value;};
+ const sessionList=()=>controls.sessions||[...sessions,...controls.additionalSessions];
  const provider={id:"mock-provider",name:"Mock Provider",protocol:"openai-completions",baseUrl:"https://example.invalid/v1",apiKeyConfigured:true,authType:"api-key",authStatus:"configured",models:[{id:"mock-model",name:"Mock Model"}]};
  await page.route('**/api/**', async route=>{
   const path=new URL(route.request().url()).pathname; let result; let held;
-  if(path==='/api/bootstrap') result={workspaces:[{id:workspaceId,name:'隔离复现',path:'/mock',addedAt:'2026-10-02'}],catalogs:[{workspaceId,sessions:[...sessions,...controls.additionalSessions]}],activeWorkspaceId:workspaceId};
+  if(path==='/api/bootstrap') {const workspaces=controls.workspaces||[{id:workspaceId,name:'隔离复现',path:'/mock',addedAt:'2026-10-02'}];result={workspaces,catalogs:workspaces.map(workspace=>({workspaceId:workspace.id,sessions:sessionList().filter(session=>session.workspaceId===workspace.id)})),activeWorkspaceId:workspaceId};}
   else if(path==='/api/directories') result={path:'/mock',parent:null,directories:[]};
-  else if(path==='/api/sessions'&&route.request().method()==='GET'){result=[...sessions,...controls.additionalSessions];held=controls.catalogGates.shift()||controls.holdCatalog;}
+  else if(path==='/api/sessions'&&route.request().method()==='GET'){const workspace=new URL(route.request().url()).searchParams.get('workspace');result=sessionList().filter(session=>!controls.sessions||session.workspaceId===workspace);held=controls.catalogGates.shift()||controls.holdCatalog;}
   else if(path.endsWith('/fork')){
    controls.forks++;const session={...sessions[0],id:'C',name:'会话C',path:'/mock/C.jsonl'};
    controls.additionalSessions.push(session);controls.preferenceEvents.C=[];result={session,snapshot:sessionSnapshot('C'),eventCursor:'fixture:0'};
@@ -40,10 +41,10 @@ async function fixture(initialCount=2, pageOptions={}){
   }
   else if(path==='/api/providers/reload'){controls.providerRetries++;assert.deepEqual(route.request().postDataJSON(),{sessionIds:['A']});result={scope:'open-web-sessions',applied:['A'],failures:[]};}
   else if(path.includes('/operations/')) result={status:controls.operationStatus,result:{accepted:true}};
-  else if(path.endsWith('/open')) {const id=path.split('/')[3]; result={session:[...sessions,...controls.additionalSessions].find(s=>s.id===id),snapshot:controls.snapshotOverride||sessionSnapshot(id,initialCount),eventCursor:"fixture:0"};if(id===controls.holdOpen?.id)held=controls.holdOpen;}
+  else if(path.endsWith('/open')) {const id=path.split('/')[3]; result={session:sessionList().find(s=>s.id===id),snapshot:controls.snapshotOverride||sessionSnapshot(id,initialCount),eventCursor:"fixture:0"};if(id===controls.holdOpen?.id)held=controls.holdOpen;}
   else if(path.endsWith('/rpc')){
    const {method}=route.request().postDataJSON(); controls.rpcRequests.push(route.request().postDataJSON()); const id=path.split('/')[3];
-   if(method==='trust.status') result={configured:false};
+   if(method==='trust.status') result=controls.trustStates?.[id]||{configured:false};
    else if(method==='runtime.status') result=controls.runtimeStatus||{plugins:[],tools:[],commands:[]};
    else if(method==='plugins.ui-slots') result={slots:[]};
    else if(method==='plugins.list') result={plugins:[]};

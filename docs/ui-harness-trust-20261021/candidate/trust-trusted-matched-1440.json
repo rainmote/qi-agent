@@ -1,0 +1,30 @@
+{
+  "capturedAt": "2026-10-20T16:54:07.157Z",
+  "clock": "2026-10-20T16:22:00.739Z",
+  "browser": "155.0.8059.85",
+  "viewport": {
+    "width": 1440,
+    "height": 1000
+  },
+  "state": {
+    "dpr": 1,
+    "locale": "zh-CN",
+    "theme": "light",
+    "timezone": "Asia/Singapore",
+    "timezoneOffset": -480,
+    "bodyFont": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Helvetica, Arial, sans-serif, -apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
+    "composer": {
+      "x": 469.296875,
+      "y": 872,
+      "width": 774.390625,
+      "height": 98,
+      "top": 872,
+      "right": 1243.6875,
+      "bottom": 970,
+      "left": 469.296875
+    }
+  },
+  "baselineTimezone": "Original capture did not record IANA zone; displayed 09:00 for 01:00Z. Candidate uses Asia/Singapore to match that visible +08 content.",
+  "errors": [],
+  "masks": []
+}

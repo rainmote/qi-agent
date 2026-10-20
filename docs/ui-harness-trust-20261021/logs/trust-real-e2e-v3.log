@@ -1,0 +1,20 @@
+▶ production Web trust, cancellation, recovery and composer E2E
+  ✔ adding a project asks before any turn, cancel preserves the draft and failure never submits (4208.798667ms)
+  ✔ stop works inside approval, handles failure, suppresses repeat clicks and survives refresh (497.423042ms)
+  ✔ composer menu, IME, multiline draft, focus and responsive geometry remain usable (195.936958ms)
+  ✔ stop cancels a blocking direct-command approval even when no model turn is running (205.440042ms)
+  ✔ trust inheritance is respected and an approved real write succeeds only after approval (814.474875ms)
+  ✔ trust management revokes an inherited directory without changing parent trust or submitting a draft (503.384958ms)
+  ✔ declining trust persists, stays visible and does not trust a sibling project (961.306125ms)
+  ✔ a finishing run cannot unlock a new submission while its stop request is still in flight (851.381959ms)
+{"realWebE2E":"passed","externalModelCalls":0,"assertions":"browser + runtime snapshot + persisted trust + actual filesystem"}
+  ✔ workspace Markdown links use authorized preview and actual sandboxed new-tab content (410.128292ms)
+✔ production Web trust, cancellation, recovery and composer E2E (9565.578333ms)
+ℹ tests 10
+ℹ suites 0
+ℹ pass 10
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 9863.159959

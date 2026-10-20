@@ -302,6 +302,41 @@ test("production Web trust, cancellation, recovery and composer E2E", { timeout:
       assert.equal(await input.inputValue(), "确认操作后继续编辑的草稿");
     });
 
+    await scenario("trust management revokes an inherited directory without changing parent trust or submitting a draft", async () => {
+      const child = join(project, "child"), session = await latestSession(child);
+      const before = submitCount(), writes = calls.filter(call => call.body.params?.command === "/trust deny").length;
+      const manage = p.getByRole("dialog", { name: "项目信任", exact: true });
+      const entry = p.locator(".composer-trust").getByRole("button", { name: "管理项目信任", exact: true });
+      await input.fill("管理信任时保留的草稿"); await entry.click();
+      await manage.getByText("继承自父目录", { exact: true }).waitFor();
+      assert.equal(await manage.getByText(project, { exact: true }).count(), 1);
+      if (artifacts) await p.screenshot({ path: join(artifacts, "trust-real-inherited-1440.png") });
+      await manage.getByRole("button", { name: "返回", exact: true }).click();
+      assert.equal(submitCount(), before); assert.equal(await input.inputValue(), "管理信任时保留的草稿");
+      await entry.click(); await manage.getByText(child, { exact: true }).waitFor();
+      await p.setViewportSize({ width: 390, height: 844 });
+      if (artifacts) await p.screenshot({ path: join(artifacts, "trust-real-inherited-390.png") });
+      assert.ok(await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      await manage.getByRole("button", { name: "撤销信任", exact: true }).evaluate(button => {
+        if (!(button instanceof HTMLButtonElement)) throw new Error("Expected a native trust action button");
+        button.click(); button.click();
+      });
+      await manage.waitFor({ state: "hidden" });
+      const restricted = await rpc<SessionSnapshot>(session.id, "session.snapshot");
+      assert.equal(restricted.trust?.decision, "deny"); assert.equal(restricted.trust?.["matched-root"], child);
+      const parent = await latestSession(project);
+      assert.equal((await rpc<SessionSnapshot>(parent.id, "session.snapshot")).trust?.decision, "allow");
+      assert.equal(calls.filter(call => call.body.params?.command === "/trust deny").length, writes + 1);
+      assert.equal(submitCount(), before); assert.equal(await readFile(join(child, "approval.txt"), "utf8"), "approved by browser", "revoking trust cannot undo an already approved write");
+      assert.equal(await input.inputValue(), "管理信任时保留的草稿"); await p.setViewportSize({ width: 1440, height: 1000 });
+      await reopen(child); assert.match(await p.locator(".composer-trust").innerText(), /项目受限/);
+      const persisted = await readFile(join(env.QI_AGENT_HOME, "trust.edn"), "utf8");
+      assert.ok(persisted.includes(child) && persisted.includes(":deny"));
+      if (artifacts) await p.screenshot({ path: join(artifacts, "trust-real-revoked-reload.png") });
+      await entry.click(); await manage.getByRole("button", { name: "信任项目", exact: true }).click(); await manage.waitFor({ state: "hidden" });
+      assert.equal((await rpc<SessionSnapshot>(session.id, "session.snapshot")).trust?.decision, "allow"); assert.equal(submitCount(), before);
+    });
+
     await scenario("declining trust persists, stays visible and does not trust a sibling project", async () => {
       const restricted = join(root, "restricted"); await mkdir(restricted);
       await p.locator(".new-session").click(); await add(restricted); await trustDialog.waitFor();

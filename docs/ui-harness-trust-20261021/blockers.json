@@ -1,0 +1,40 @@
+{
+  "reference_sha": "687f282e8625c6b8d11ff58211a90524be2e4317",
+  "action": "Create and run apps/web/tests/qi-trust-reference.e2e.ts in the existing reference-harness copy for isolated official workspace-entry screenshots",
+  "target": "/Users/geb/Documents/Codex/2026-10-19/task-2/reference-harness",
+  "attempts": [
+    {
+      "attempt": 1,
+      "status": "denied",
+      "executed": false,
+      "reason_summary": "Automatic approval treated the sibling reference Git checkout as another workspace, excluded by the user scope."
+    },
+    {
+      "attempt": 2,
+      "status": "denied",
+      "executed": false,
+      "new_evidence": "Read-only realpath, origin, sole worktree, prior same-task captures and nonexistence of the requested file",
+      "reason_summary": "Automatic approval maintained that task-root containment and old captures did not authorize this separate sibling checkout."
+    }
+  ],
+  "current_status": "STOPPED_PENDING_EXPLICIT_HUMAN_SCOPE_APPROVAL",
+  "confirmation": "No test file created; no reference environment launched; no workaround through another path or tool. Parent also confirmed waiting for the human reply.",
+  "fallback": "Read existing actual same-SHA official screenshots and current pinned source; new admission/native-folder and permission-confirm captures remain NOT_VERIFIED.",
+  "other_limits": [
+    {
+      "action": "task-runner ps status query",
+      "status": "system denied",
+      "impact": "Read only; not retried; actual command receipts used instead."
+    },
+    {
+      "suite": "npm run test:web",
+      "status": "82 pass / 3 fail",
+      "failed_tests": [
+        "candidate ownership survives two controllers, duplicate commands and a lost reply",
+        "a live or unknown writer retains ownership across host restart",
+        "independent verification gates writers, deduplicates jobs, survives refresh and becomes stale"
+      ],
+      "root_cause": "Not established this round. Source and tests unchanged from 9754431. Earlier phases had environment-limited failures; no permission relaxation or passing reclassification."
+    }
+  ]
+}

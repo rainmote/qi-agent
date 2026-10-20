@@ -1,0 +1,16 @@
+{
+  "command": [
+    "node",
+    "node_modules/tsx/dist/cli.mjs",
+    "--test",
+    "apps/web/src/api.test.tsx"
+  ],
+  "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent",
+  "start": "2026-10-20T16:43:53.455431+00:00",
+  "end": "2026-10-20T16:43:53.739552+00:00",
+  "exit_code": 0,
+  "status": "completed",
+  "runner_pid": 78863,
+  "isolation": "tools/isolation.sb; whitelisted environment",
+  "platform": "Darwin 27.0.0 arm64"
+}

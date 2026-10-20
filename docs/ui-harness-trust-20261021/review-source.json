@@ -1,0 +1,14 @@
+{
+  "apps/web/src/App.tsx": "c3aba437449e79c149d11cad48486718840d5fdf1c2b1de89e0b867a1a460402",
+  "apps/web/src/Dialogs.tsx": "7691e897bf83f34f55ba89d022b001dbdaad9c279a3b73b9764ad22f15b57070",
+  "apps/web/src/ProjectTrust.tsx": "91545a837274f4dbbf53b28b8a82d7f8916c2ca63312a12a9d7272c9a19f2690",
+  "apps/web/src/api.ts": "6b7956f386bc72a4c6c158ccfba59b08150110c5d1098176e54c1b4ee1572a6b",
+  "apps/web/src/api.test.tsx": "3cb2323d35ce8e08c54a7d9963209fd519b2c56233def123fa7170a25f1a3bc7",
+  "apps/web/src/styles.css": "d6a6d31921cd26f99a2e7ca0574b0d905e7f2db37e3762e96d488b2dfb0e2cc5",
+  "apps/web/src/web-english.ts": "dfb9040351f01deb6423921dcc7bd6ddca2e81a72fc67d6dcc3817500e3b6648",
+  "apps/web/tests/browser-fixture.mjs": "56d953221f282924fbdeb5f7340c3d9f7b933b8e4ccd0530bd2b5e7e78a6cda8",
+  "apps/web/tests/trust-browser.mjs": "2a286ed83623a94fc18398b8135c521ea2f8baaa1ea8032aaac8c9cfd99417ba",
+  "apps/web/tests/interaction-e2e.test.ts": "ff05383f252ca2d8fa30239f9394a085423a32bad883138340cc3aa9e72614b5",
+  "apps/web/tests/production-browser.mjs": "84ddd0f949379bab57d7b0e28cc08325f160921711ab6b3fc36a56e7a018b81e",
+  "docs/webui.md": "4cbe71e814ec7a1bfff9dfddb800e0b914e5c4d10f2b6a67f430b5036beb036c"
+}

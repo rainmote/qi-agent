@@ -1,0 +1,15 @@
+{
+  "command": [
+    "node",
+    "../tools/run-trust-review-case.mjs",
+    "saving-focus"
+  ],
+  "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent",
+  "start": "2026-10-20T16:41:54.358459+00:00",
+  "end": "2026-10-20T16:41:55.294618+00:00",
+  "exit_code": 1,
+  "status": "completed",
+  "runner_pid": 77988,
+  "isolation": "tools/isolation.sb; whitelisted environment",
+  "platform": "Darwin 27.0.0 arm64"
+}

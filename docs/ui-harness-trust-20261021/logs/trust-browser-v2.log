@@ -1,0 +1,20 @@
+  ➜  Local:   http://127.0.0.1:4194/
+{"trustManagement":"passed","cases":["trusted entry","scope and safe initial focus","settings return focus","draft preserved","one command_id for double click","saving cannot dismiss","revoke via existing deny","refresh persistence","re-trust without dispatch"]}
+{"trustFirstEntry":"passed","cases":["first entry before dispatch","cancel does not save","send cancel preserves draft","deny persists","only requested send continues"]}
+{"trustRecovery":"passed","cases":["read error with retry","definitive save failure","changed state requires re-review","unknown does not retry","completed receipt reconciles without new ID","malformed trust cannot mutate"]}
+{"trustNavigationRaces":"passed","cases":["cancel read","late A read while B loads","browser back during write","return same session with new review","unknown old write blocks new choice","old completion cannot dismiss new review","new writer retains its lock"]}
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: trust actions retain 44px touch targets
+    at file:///Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/tests/trust-browser.mjs:126:77 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: false,
+  expected: true,
+  operator: '==',
+  diff: 'simple'
+}
+
+Node.js v26.9.0

@@ -1,0 +1,130 @@
+
+> @rainmote/qi-agent-web@0.1.0 test:web
+> cargo build --manifest-path apps/tui-rs/Cargo.toml && QI_AGENT_BIN="$PWD/apps/tui-rs/target/debug/qi-agent" tsx --test apps/web-host/*.test.ts
+
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.27s
+✔ twenty verifier evidence faults cannot promote a candidate to PASS (1.71325ms)
+✔ verification state stays distinct from execution completion (0.097583ms)
+✖ candidate ownership survives two controllers, duplicate commands and a lost reply (512.00675ms)
+✖ a live or unknown writer retains ownership across host restart (169.993417ms)
+✔ changed contracts, base SHA, controller and browser overrides cannot reuse admission (193.954042ms)
+✔ candidate state cannot be placed inside an original checkout (127.562666ms)
+✖ independent verification gates writers, deduplicates jobs, survives refresh and becomes stale (155.257083ms)
+✔ real daemon reconciles a timed-out side effect after Web Host reconnection without repeating it (5137.416292ms)
+✔ quota pressure releases unviewed Web attachments and resumes their histories later (1062.893791ms)
+✔ browser detach preserves approvals and capacity pressure cannot evict a waiting task (1065.316167ms)
+✔ real daemon completion is bound to its admission request and releases the turn snapshot pin (524.501583ms)
+✔ provider registry persists secrets privately and returns redacted settings (115.252417ms)
+✔ provider registry discovers the local Codex ChatGPT login without exposing tokens (10.454041ms)
+✔ provider registry discovers OpenAI-compatible model catalogs (22.270833ms)
+✔ web transport rejects malformed Host without terminating the server (156.45075ms)
+✔ web transport rejects archive destination overrides before opening a worker (121.702208ms)
+✔ web transport installs one snapshot with only uncovered events during continuous updates (128.282917ms)
+✔ web transport replays a continuous cursor and resnapshots buffer gaps and generations (113.167042ms)
+✔ web transport cleans subscriptions when a worker exits during snapshot capture (114.405166ms)
+✔ web transport cleans subscriptions on browser abort and snapshot failure (123.974708ms)
+✔ web transport exposes a warning for legacy snapshot state without revisions (111.07675ms)
+✔ workspace registry persists canonical allowlisted roots (44.996083ms)
+✔ workspace registry rejects a symbolic-link state directory (0.706042ms)
+✔ web host authenticates, catalogs, creates a real worker, and invokes RPC (3461.329958ms)
+✔ web host rejects network exposure unless it is explicitly acknowledged (0.157791ms)
+✔ network-exposed web host accepts an HTTPS proxy origin and secures its cookie (111.719542ms)
+✔ web host increments the port until one is available (112.287208ms)
+✔ provider save exposes reload failures and retry does not resave credentials (115.034542ms)
+✔ RPC errors retain uncertain outcomes and the caller's command identity (133.667791ms)
+✔ an opening snapshot cursor avoids SSE snapshots and Last-Event-ID takes precedence (114.146959ms)
+✔ catalog incrementally completes partial UTF-8 lines and counts an unterminated event once (43.6065ms)
+✔ catalog invalidates truncated, rewritten, replaced, renamed and deleted logs (39.603042ms)
+✔ catalog refreshes same-size edits, skips invalid lines, and excludes linked logs (14.511375ms)
+✔ catalog handles a message spanning many read chunks and a partial following record (14.56525ms)
+✔ catalog discovers legacy sessions and never resolves IDs outside current allowed workspaces (6.161375ms)
+✔ catalog excludes linked session directories and invalidates a cached path if its parent becomes linked (21.4885ms)
+✔ catalog coalesces concurrent scans, bounds I/O, and measures warm-list and append work (47.107625ms)
+ℹ {"sample":"24 files, 4824 events","coldReadBytes":1617062,"warmReadBytes":0,"appendReadBytes":2133,"appendParsedLines":1,"peakConcurrentIO":4}
+✔ SessionManager archives through the real isolated daemon and retains lifecycle across restart (3639.443917ms)
+✔ catalog keeps legacy .bb-agent sessions visible (43.163083ms)
+✔ create closes an uncommitted worker and rolls back its profile (33.041292ms)
+✔ open closes a worker when initialization fails (14.729542ms)
+✔ open returns session metadata appended by startup plugins (19.317792ms)
+✔ fork closes the destination worker and rolls back its inherited profile (22.836375ms)
+✔ archive delegates unopened legacy history to daemon without starting a worker and preserves its profile (35.063583ms)
+✔ failed archive keeps history and the attached worker available for a retry (20.3365ms)
+✔ archive retries after a lost acknowledgement and host restart, and prevents concurrent reopening (17.015917ms)
+✔ persisted archive retries cannot bypass workspace boundaries or target a replaced session (12.458709ms)
+✔ archive rejects linked or invalid source replacements without touching the external history (8.856458ms)
+✔ corrected profile and archive state can be loaded again without restarting the host (23.112834ms)
+✔ opening a previously listed session uses its indexed path without rescanning workspaces (16.474667ms)
+✔ shutdown after archiving the last session uses a daemon control connection without hydrating it (18.033541ms)
+✔ provider reload reports partial failures and retries only selected sessions (23.522833ms)
+✔ workspace revocation invalidates a delayed open even when the same path is added again (30.316ms)
+✔ workspace revocation invalidates a delayed create even when the same path is added again (21.173167ms)
+✔ workspace revocation invalidates a delayed fork even when the same path is added again (13.365166ms)
+✔ cached workers cannot bypass revocation even if connection close fails (21.751ms)
+✔ failed workspace persistence restores access through fresh connections only (14.81675ms)
+{"snapshotHandoff":[{"kind":"cold","fullSnapshots":1,"snapshotBytes":589925,"elapsedMs":14},{"kind":"warm","fullSnapshots":1,"snapshotBytes":589925,"elapsedMs":4}]}
+✔ cold and warm snapshot handoff each transfer history once and preserve intervening events (162.874292ms)
+✔ identical command IDs in different sessions have independent snapshots and admission (4.054ms)
+✔ turn snapshots preserve actual execution outcomes without asserting acceptance (0.800625ms)
+✔ only the independent receipt for the complete unchanged workspace can display PASS (251.204791ms)
+✔ full source proof includes hidden and binary files and refuses symbolic links (78.862375ms)
+✔ worker replay detects initial, malformed, stale, future, and foreign cursors (6.73225ms)
+✔ worker generation changes reset the host epoch and retained events (3.882333ms)
+✔ worker uses the attached snapshot generation before any live event arrives (7.496625ms)
+✔ worker reports both socket loss and explicit detach to stream subscribers (7.864208ms)
+✔ daemon socket resets reject pending calls without an uncaught readline error (5.944125ms)
+✔ worker exit notifications terminate streams even while the daemon socket remains open (1.120125ms)
+✔ worker exit rejects agent calls but preserves the session.archive response (6.5885ms)
+✔ worker exit rejects agent calls but preserves the agent.stop response (5.043333ms)
+✔ worker exit rejects agent calls but preserves the daemon.update response (5.301042ms)
+✔ daemon socket EOF still rejects pending daemon control outcomes after worker exit (2.0505ms)
+✔ unknown outcomes retain command identity across socket reconnects and completed replay (25.428083ms)
+✔ snapshot reuse carries an earlier cursor so events during and after snapshot remain replayable (3.383875ms)
+✔ idle detach respects multiple browser references and in-flight calls without stopping the agent (168.208625ms)
+✔ file tree and reads stay inside an allowlisted workspace and hide sensitive directories (53.74ms)
+✔ uploads use private ID storage, reject invalid images and preserve workspace ownership (33.778375ms)
+✔ an allowlisted workspace root cannot be replaced by a symbolic link to another directory (19.577791ms)
+✔ upload references cannot follow symlinks or relaxed permissions (23.310125ms)
+✔ HTML responses cannot execute same-origin script or submit forms; Office support is explicit (34.136708ms)
+✔ turn snapshots report added, modified and deleted text without exposing secrets; finish retries are idempotent (65.150375ms)
+✔ startup recovery marks unfinished snapshots partial without pretending the agent stopped (45.181333ms)
+✔ authenticated HTTP uploads have a dedicated 12 MiB bound and safe download headers (190.1195ms)
+✔ file references quote actual bounded content and session references enforce workspace eligibility (117.247916ms)
+✔ real RPC route brackets accepted turns with snapshots and resolves latest changes after restart (142.382916ms)
+ℹ tests 85
+ℹ suites 0
+ℹ pass 82
+ℹ fail 3
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 7972.655208
+
+✖ failing tests:
+
+test at apps/web-host/coding-candidates.test.ts:45:1
+✖ candidate ownership survives two controllers, duplicate commands and a lost reply (512.00675ms)
+  Error: Unknown task
+      at Module.loadTask (file:///private/tmp/qi-coding-test-xOC1zg/controller/maintenance/lib/controller.mjs:168:21)
+      at async <anonymous> (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web-host/coding-candidates.ts:220:25)
+      at async CodingCandidates.locked (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web-host/coding-candidates.ts:127:14)
+      at async TestContext.<anonymous> (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web-host/coding-candidates.test.ts:57:19)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
+
+test at apps/web-host/coding-candidates.test.ts:62:1
+✖ a live or unknown writer retains ownership across host restart (169.993417ms)
+  AssertionError [ERR_ASSERTION]: Missing expected rejection.
+      at async TestContext.<anonymous> (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web-host/coding-candidates.test.ts:67:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: /another writer/,
+    operator: 'rejects',
+    diff: 'simple'
+  }
+
+test at apps/web-host/coding-candidates.test.ts:107:1
+✖ independent verification gates writers, deduplicates jobs, survives refresh and becomes stale (155.257083ms)
+  [Error: ENOENT: no such file or directory, open '/private/tmp/qi-coding-test-pWwPdI/candidates/coding-c467a3528e5c03884be0f6ec920a2fdb/workspaces/coding-c467a3528e5c03884be0f6ec920a2fdb/src/value.mjs'] { errno: -2, code: 'ENOENT', syscall: 'open', path: '/private/tmp/qi-coding-test-pWwPdI/candidates/coding-c467a3528e5c03884be0f6ec920a2fdb/workspaces/coding-c467a3528e5c03884be0f6ec920a2fdb/src/value.mjs' }

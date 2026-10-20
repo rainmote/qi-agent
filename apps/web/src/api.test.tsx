@@ -85,3 +85,80 @@ test("planning approvals can resolve while the original blocking command remains
     assert.deepEqual(seen, ["planning.submit", "interaction.resolve", "planning.cancel"]);
   } finally { restore(); }
 });
+
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>(yes => { resolve = yes; });
+  return { promise, resolve };
+}
+
+test("a late old HTTP response cannot erase a newer operation's recovery identity", async () => {
+  const old = deferred(), newer = deferred(); let writes = 0;
+  const restore = fixture(async (path) => {
+    if (path.includes("/operations/")) return { status: "completed" };
+    if (++writes === 1) { await old.promise; return { saved: true }; }
+    await newer.promise; throw new TypeError("newer response lost");
+  });
+  let first: Promise<unknown> | undefined, second: Promise<unknown> | undefined;
+  try {
+    first = api.rpc("session", "command.execute", { command: "/trust deny" });
+    const firstId = api.pendingOperation("session")!.commandId;
+    await api.operationStatus("session");
+    second = api.rpc("session", "command.execute", { command: "/trust allow" });
+    const secondId = api.pendingOperation("session")!.commandId;
+    assert.notEqual(firstId, secondId);
+    old.resolve(); await first;
+    assert.equal(api.pendingOperation("session")?.commandId, secondId, "late old response must retain the new recovery journal");
+    newer.resolve(); await assert.rejects(second, uncertainOperation);
+    assert.equal(api.pendingOperation("session")?.commandId, secondId);
+  } finally { old.resolve(); newer.resolve(); await Promise.allSettled([first, second]); restore(); }
+});
+
+test("a late operation-status response cannot erase a newer recovery journal", async () => {
+  const late = deferred(), newer = deferred(); let queries = 0, writes = 0;
+  const restore = fixture(async (path) => {
+    if (path.includes("/operations/")) { if (++queries === 1) await late.promise; return { status: "completed" }; }
+    if (++writes === 1) throw new TypeError("old response lost");
+    await newer.promise; return { saved: true };
+  });
+  let query: Promise<unknown> | undefined, second: Promise<unknown> | undefined;
+  try {
+    await assert.rejects(api.rpc("session", "command.execute", { command: "/trust deny" }), uncertainOperation);
+    query = api.operationStatus("session");
+    await api.operationStatus("session");
+    second = api.rpc("session", "command.execute", { command: "/trust allow" });
+    const secondId = api.pendingOperation("session")!.commandId;
+    late.resolve(); await query;
+    assert.equal(api.pendingOperation("session")?.commandId, secondId, "a status query owns only its captured command_id");
+    newer.resolve(); await second;
+    assert.equal(api.pendingOperation("session"), null);
+  } finally { late.resolve(); newer.resolve(); await Promise.allSettled([query, second]); restore(); }
+});
+
+for (const replacement of [false, true]) test(`late not_found cannot replay an operation after its journal ${replacement ? "belongs to a newer write" : "was already reconciled"}`, async () => {
+  const late = deferred(), newer = deferred(); let queries = 0;
+  const commands: any[] = [];
+  const restore = fixture(async (path, input) => {
+    if (path.includes("/operations/")) {
+      if (++queries === 1) { await late.promise; return { status: "not_found" }; }
+      return { status: "completed" };
+    }
+    commands.push(input);
+    if (commands.length === 1) throw new TypeError("original response lost");
+    if (input.params.command === "/trust allow") await newer.promise;
+    return { saved: true };
+  });
+  let retry: Promise<{ ok: boolean; error?: unknown }> | undefined, second: Promise<unknown> | undefined;
+  try {
+    await assert.rejects(api.rpc("session", "command.execute", { command: "/trust deny" }), uncertainOperation);
+    retry = api.retryOperation("session").then(() => ({ ok: true }), error => ({ ok: false, error }));
+    await api.operationStatus("session");
+    if (replacement) second = api.rpc("session", "command.execute", { command: "/trust allow" });
+    const pending = api.pendingOperation("session");
+    late.resolve(); const result = await retry;
+    assert.equal(commands.length, replacement ? 2 : 1, "stale not_found must never send the original command again");
+    assert.deepEqual(api.pendingOperation("session"), pending, "retry must preserve the current journal, including a cleared one");
+    assert.equal(result.ok, false); assert.ok(uncertainOperation(result.error));
+    newer.resolve(); await second;
+  } finally { late.resolve(); newer.resolve(); await Promise.allSettled([retry, second]); restore(); }
+});

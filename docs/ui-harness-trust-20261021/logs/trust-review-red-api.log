@@ -1,0 +1,56 @@
+(node:77913) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ lost response keeps the original operation through reload and blocks blind replay (6.472583ms)
+✔ manual retry after not_found reuses identity and payload; pending outcomes never resend (0.423042ms)
+✔ structured uncertain responses survive the API boundary and definitive errors allow a new action (0.196ms)
+✔ planning approvals can resolve while the original blocking command remains journaled (0.166542ms)
+✖ a late old HTTP response cannot erase a newer operation's recovery identity (0.58325ms)
+✖ a late operation-status response cannot erase a newer recovery journal (0.225916ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 4
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 106.643375
+
+✖ failing tests:
+
+test at apps/web/src/api.test.tsx:95:1
+✖ a late old HTTP response cannot erase a newer operation's recovery identity (0.58325ms)
+  AssertionError [ERR_ASSERTION]: late old response must retain the new recovery journal
+  + actual - expected
+  
+  + undefined
+  - 'web-cab58d78-2bad-4b5d-8a92-14fb785c588d'
+  
+      at TestContext.<anonymous> (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/src/api.test.tsx:111:12)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'web-cab58d78-2bad-4b5d-8a92-14fb785c588d',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at apps/web/src/api.test.tsx:117:1
+✖ a late operation-status response cannot erase a newer recovery journal (0.225916ms)
+  AssertionError [ERR_ASSERTION]: a status query owns only its captured command_id
+  + actual - expected
+  
+  + undefined
+  - 'web-268f7cec-f10a-4819-b2c0-ca119e1f0f4a'
+  
+      at TestContext.<anonymous> (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/src/api.test.tsx:132:12)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'web-268f7cec-f10a-4819-b2c0-ca119e1f0f4a',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

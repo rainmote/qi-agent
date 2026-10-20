@@ -1,0 +1,20 @@
+{
+  "comparison": "qi baseline vs qi candidate; NOT official fidelity",
+  "changedPixels": 3748,
+  "bbox": [
+    468,
+    833,
+    1245,
+    989
+  ],
+  "maxChannelDifference": 189,
+  "size": [
+    1440,
+    1000
+  ],
+  "resampling": false,
+  "masks": [],
+  "excludedRegions": [],
+  "threshold": null,
+  "interpretation": "Visible addition of trust status; no zero-pixel or percent-based acceptance claim."
+}
