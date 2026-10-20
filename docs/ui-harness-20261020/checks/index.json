@@ -1,0 +1,170 @@
+[
+  {
+    "name": "pixel-typecheck",
+    "command": [
+      "npm",
+      "run",
+      "typecheck"
+    ],
+    "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent",
+    "start": "2026-10-20T12:21:12.619220+00:00",
+    "end": "2026-10-20T12:21:13.162295+00:00",
+    "exit_code": 0,
+    "isolation": "tools/isolation.sb; whitelisted environment",
+    "platform": "Darwin 27.0.0 arm64"
+  },
+  {
+    "name": "pixel-build",
+    "command": [
+      "npm",
+      "run",
+      "web:build"
+    ],
+    "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent",
+    "start": "2026-10-20T12:20:44.509163+00:00",
+    "end": "2026-10-20T12:20:44.863008+00:00",
+    "exit_code": 0,
+    "isolation": "tools/isolation.sb; whitelisted environment",
+    "platform": "Darwin 27.0.0 arm64"
+  },
+  {
+    "name": "pixel-ui-tests",
+    "command": [
+      "npm",
+      "run",
+      "test:web-ui"
+    ],
+    "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent",
+    "start": "2026-10-20T12:21:12.638578+00:00",
+    "end": "2026-10-20T12:21:13.767524+00:00",
+    "exit_code": 0,
+    "isolation": "tools/isolation.sb; whitelisted environment",
+    "platform": "Darwin 27.0.0 arm64"
+  },
+  {
+    "name": "pixel-browser-regressions",
+    "command": [
+      "npm",
+      "run",
+      "test:web-browser:ci"
+    ],
+    "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent",
+    "start": "2026-10-20T12:25:14.338570+00:00",
+    "end": "2026-10-20T12:25:47.115030+00:00",
+    "exit_code": 0,
+    "status": "completed",
+    "runner_pid": 69875,
+    "isolation": "tools/isolation.sb; whitelisted environment",
+    "platform": "Darwin 27.0.0 arm64"
+  },
+  {
+    "name": "pixel-real-e2e",
+    "command": [
+      "node",
+      "node_modules/tsx/dist/cli.mjs",
+      "--test",
+      "apps/web/tests/interaction-e2e.test.ts"
+    ],
+    "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent",
+    "start": "2026-10-20T12:25:14.681200+00:00",
+    "end": "2026-10-20T12:25:22.619322+00:00",
+    "exit_code": 0,
+    "status": "completed",
+    "runner_pid": 69906,
+    "isolation": "tools/isolation.sb; whitelisted environment",
+    "platform": "Darwin 27.0.0 arm64"
+  },
+  {
+    "name": "pixel-reference-capture",
+    "command": [
+      "node",
+      "node_modules/vitest/vitest.mjs",
+      "run",
+      "--config",
+      "vitest.web.config.ts",
+      "apps/web/tests/qi-pixel-reference.e2e.ts"
+    ],
+    "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2/reference-harness",
+    "start": "2026-10-20T12:19:10.810784+00:00",
+    "end": "2026-10-20T12:19:26.617907+00:00",
+    "exit_code": 0,
+    "isolation": "tools/isolation.sb; whitelisted environment",
+    "platform": "Darwin 27.0.0 arm64"
+  },
+  {
+    "name": "pixel-reference-extra",
+    "command": [
+      "node",
+      "node_modules/vitest/vitest.mjs",
+      "run",
+      "--config",
+      "vitest.web.config.ts",
+      "apps/web/tests/qi-pixel-subagent.e2e.ts"
+    ],
+    "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2/reference-harness",
+    "start": "2026-10-20T10:19:26.041902+00:00",
+    "end": "2026-10-20T10:19:34.183813+00:00",
+    "exit_code": 0,
+    "isolation": "tools/isolation.sb; whitelisted environment",
+    "platform": "Darwin 27.0.0 arm64"
+  },
+  {
+    "name": "pixel-candidate-capture",
+    "command": [
+      "node",
+      "tools/capture-pixels.mjs",
+      "candidate"
+    ],
+    "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2",
+    "start": "2026-10-20T12:25:14.660290+00:00",
+    "end": "2026-10-20T12:25:33.419866+00:00",
+    "exit_code": 0,
+    "status": "completed",
+    "runner_pid": 69898,
+    "isolation": "tools/isolation.sb; whitelisted environment",
+    "platform": "Darwin 27.0.0 arm64"
+  },
+  {
+    "name": "pixel-baseline-capture",
+    "command": [
+      "node",
+      "tools/capture-pixels.mjs",
+      "baseline"
+    ],
+    "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2",
+    "start": "2026-10-20T10:59:50.907857+00:00",
+    "end": "2026-10-20T10:59:58.069600+00:00",
+    "exit_code": 0,
+    "isolation": "tools/isolation.sb; whitelisted environment",
+    "platform": "Darwin 27.0.0 arm64"
+  },
+  {
+    "name": "pixel-baseline-build",
+    "command": [
+      "npm",
+      "run",
+      "web:build"
+    ],
+    "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2/pixel-20261020/baseline-source",
+    "start": "2026-10-20T09:33:56.757118+00:00",
+    "end": "2026-10-20T09:33:57.183678+00:00",
+    "exit_code": 0,
+    "isolation": "tools/isolation.sb; whitelisted environment",
+    "platform": "Darwin 27.0.0 arm64"
+  },
+  {
+    "name": "pixel-gallery",
+    "command": [
+      "node",
+      "tools/verify-pixel-gallery.mjs"
+    ],
+    "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2",
+    "start": "2026-10-20T12:27:16.105373+00:00",
+    "end": "2026-10-20T12:27:23.677801+00:00",
+    "exit_code": 0,
+    "status": "completed",
+    "runner_pid": 70983,
+    "isolation": "tools/isolation.sb; whitelisted environment",
+    "platform": "Darwin 27.0.0 arm64"
+  }
+]

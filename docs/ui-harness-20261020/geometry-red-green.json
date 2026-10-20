@@ -1,0 +1,16 @@
+[
+  {
+    "mode": "baseline",
+    "exit_code": 1,
+    "expected_exit_code": 1,
+    "report": "geometry-baseline.json",
+    "checked_at": "2026-10-20T12:26:23.324246+00:00"
+  },
+  {
+    "mode": "candidate",
+    "exit_code": 0,
+    "expected_exit_code": 0,
+    "report": "geometry-candidate.json",
+    "checked_at": "2026-10-20T12:26:23.347084+00:00"
+  }
+]

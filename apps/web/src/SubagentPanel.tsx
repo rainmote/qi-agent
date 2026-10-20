@@ -1,3 +1,5 @@
+import { useState } from "react";
+import { useComposerPopover } from "./ComposerControls";
 import { MarkdownContent } from "./MarkdownContent";
 import type { SubagentStatus } from "./types";
 import { Icon } from "./icons";
@@ -15,4 +17,15 @@ export function SubagentPanel({ jobs }: { jobs: SubagentStatus["jobs"] }) {
       </div>
     </details>)}
   </section>;
+}
+
+/** One header menu retains full job results while leaving the composer in place. */
+export function SubagentMenu({ jobs }: { jobs: SubagentStatus["jobs"] }) {
+  const [open, setOpen] = useState(false);
+  const popover = useComposerPopover(open, () => setOpen(false), false, "below");
+  return <div className="session-subagents" ref={popover.root} onKeyDown={popover.onKeyDown}>
+    <button ref={popover.trigger} type="button" className="session-subagents-trigger" aria-haspopup="dialog" aria-expanded={open}
+      onClick={() => setOpen(value => !value)}>{jobs.length} 个子智能体<Icon name="chevron" /></button>
+    {open && <div ref={popover.panel} className="composer-popover session-subagents-popover" role="dialog" aria-label="子智能体"><SubagentPanel jobs={jobs} /></div>}
+  </div>;
 }

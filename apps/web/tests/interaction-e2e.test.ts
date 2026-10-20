@@ -123,8 +123,10 @@ test("production Web trust, cancellation, recovery and composer E2E", { timeout:
       await p.locator(".session-header-title button").waitFor();
     };
     const add = async (path: string) => {
-      await p.getByRole("combobox", { name: "Agent 模式", exact: true }).selectOption("web-e2e");
-      await p.getByRole("button", { name: "添加新的工作区", exact: true }).click();
+      await p.getByRole("button", { name: "Agent 模式", exact: true }).click();
+      await p.locator('[role="menuitemradio"][data-preset-id="web-e2e"]').click();
+      await p.getByRole("button", { name: "选择工作区", exact: true }).click();
+      await p.getByRole("menuitem", { name: "添加工作区…", exact: true }).click();
       const picker = p.getByRole("dialog", { name: "添加工作区", exact: true });
       await until(async () => await picker.getByRole("button", { name: "添加工作区", exact: true }).isEnabled(), "Directory listing did not finish");
       await picker.getByRole("textbox", { name: "文件夹路径" }).fill(path);
@@ -179,8 +181,10 @@ test("production Web trust, cancellation, recovery and composer E2E", { timeout:
       assert.equal(submitCount(), 1, "Pending approval must block keyboard submission");
       assert.equal(await input.inputValue(), "审批期间保留的草稿");
       await p.setViewportSize({ width: 375, height: 840 });
-      const bounds = await approval.boundingBox();
-      assert.ok(bounds && bounds.x >= 0 && bounds.x + bounds.width <= 375 && bounds.y >= 0 && bounds.y + bounds.height <= 840);
+      await until(async () => {
+        const bounds = await approval.boundingBox();
+        return !!bounds && bounds.x >= 0 && bounds.x + bounds.width <= 375 && bounds.y >= 0 && bounds.y + bounds.height <= 840;
+      }, "Approval must remain within the narrow viewport after responsive layout commits");
       // Chromium may acknowledge viewport changes before the responsive layout commits.
       await until(async () => {
         const buttons = await approval.getByRole("button").all();
@@ -230,7 +234,14 @@ test("production Web trust, cancellation, recovery and composer E2E", { timeout:
         const box = await p.locator(".composer").boundingBox(); assert.ok(box && box.height < 165, JSON.stringify(box));
         for (const selector of [".composer-tools > button", ".send-button", ".permission-trigger", ".model-trigger"]) {
           const rect = await p.locator(selector).boundingBox();
-          assert.ok(rect && rect.x >= 0 && rect.x + rect.width <= width && rect.height >= 44, `${width}: ${selector} ${JSON.stringify(rect)}`);
+          assert.ok(rect && rect.x >= 0 && rect.x + rect.width <= width && rect.height >= 28, `${width}: ${selector} ${JSON.stringify(rect)}`);
+          const hitTarget = await p.locator(selector).evaluate(element => {
+            const b = element.getBoundingClientRect(), pseudo = getComputedStyle(element, "::before");
+            const x = b.x + b.width / 2, y = b.y + b.height / 2;
+            return parseFloat(pseudo.width) >= 44 && parseFloat(pseudo.height) >= 44
+              && [y - 21, y + 21].every(probeY => { const hit = document.elementFromPoint(x, probeY); return hit === element || !!hit && element.contains(hit); });
+          });
+          assert.equal(hitTarget, true, `${width}: ${selector} keeps a real 44px hit target around source-sized chrome`);
         }
         if (artifacts && [1440, 375].includes(width)) {
           await mkdir(artifacts, { recursive: true }); await p.screenshot({ path: join(artifacts, `composer-${width}.png`) });

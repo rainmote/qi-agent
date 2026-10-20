@@ -662,7 +662,7 @@ svg { flex: 0 0 auto; }
 
 @media (max-width: 760px) {
   .app-shell, .app-shell.sidebar-collapsed, .app-shell.details-open, .app-shell.sidebar-collapsed.details-open { display: block; }
-  .sidebar { position: fixed; inset: 0 auto 0 0; width: min(300px, 86vw) !important; transform: translateX(-102%); transition: transform .2s var(--ease); box-shadow: none; }
+  .sidebar { position: fixed; inset: 0 auto 0 0; width: min(300px, 86vw); transform: translateX(-102%); transition: transform .2s var(--ease); box-shadow: none; }
   .sidebar.is-open { transform: translateX(0); box-shadow: var(--shadow); }.sidebar-collapsed .brand-identity > :not(svg), .sidebar-collapsed .sidebar-settings span { display: initial; }
   .sidebar-collapsed .sidebar-brand-row { padding: 0 14px; }.sidebar-collapsed .sidebar-brand-row:is(:hover, :focus-within) .brand-button { opacity: 1; }.sidebar-collapsed .brand-button { flex: 1; width: auto; }.sidebar-collapsed .sidebar-toggle { position: static; opacity: 1; }.sidebar-collapsed .new-session { width: auto; margin-inline: 14px; padding: 0 14px; }.sidebar-collapsed .sidebar-settings { width: calc(100% - 16px); justify-content: flex-start; padding: 0 10px; }
   .mobile-scrim { display: block; position: fixed; inset: 0; z-index: 11; width: 100%; height: 100%; border: 0; background: rgba(0,0,0,.55); }
@@ -674,7 +674,7 @@ svg { flex: 0 0 auto; }
   .run-overview-heading { flex-basis: 100%; }
   .run-overview-metrics { column-gap: 12px; }
   .command-menu { width: 100%; }
-  .sidebar .icon-button, .sidebar .session-more { width: 44px; height: 44px; min-height: 44px; }.sidebar .sidebar-toggle { width: 44px !important; height: 44px !important; min-height: 44px !important; }
+  .sidebar .icon-button, .sidebar .session-more { width: 44px; height: 44px; min-height: 44px; }.sidebar .sidebar-toggle { width: 44px; height: 44px; min-height: 44px; }
   .sidebar .workspace-heading { height: 44px; }.sidebar .workspace-select select { height: 44px; }.sidebar .view-menu { top: 194px; }.session-more { display: grid; top: 2px; right: 2px; }.session-link { padding-right: 48px; }
   .message-actions { opacity: 1; }.message-actions button, .tool-summary, .command-menu button, .model-options button, .effort-options button { min-height: 44px; }.message-actions button { width: 44px; }.message { margin-bottom: 10px; }
   .session-menu button, .view-menu button { min-height: 44px; }

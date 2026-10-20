@@ -11,11 +11,11 @@ const policy={mode:'ask',modes:[{id:'deny',label:'Read Only'},{id:'ask',label:'W
 const models={current:{id:'mock-a',model:'Model A'},providers:[{id:'mock-a',model:'Model A'},{id:'mock-b',model:'Model B'}]};
 function snapshot(id,n=2){return {session_id:id,path:`/mock/${id}.jsonl`,cursor:{generation:1,sequence:n},events:Array.from({length:n},(_,i)=>({id:`${id}-${i}`,seq:i+1,at:'2026-10-02T01:00:00Z',type:'message',data:{message:{role:i%2?'assistant':'user',content:`${id}-controlled-message-${i}`}}})),state:{phase:'idle',revision:2},models,policy,interactions:[],interactions_revision:0};}
 function deferred(){let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};}
-async function fixture(initialCount=2){
- const page=await browser.newPage({viewport:{width:1440,height:1000}});
+async function fixture(initialCount=2, pageOptions={}){
+ const page=await browser.newPage({viewport:{width:1440,height:1000},...pageOptions});
  page.on('pageerror',e=>errors.push(e.message));
  await page.addInitScript(()=>{window.sources=[];window.EventSource=class extends EventTarget{constructor(url){super();this.url=url;window.sources.push(this);queueMicrotask(()=>this.dispatchEvent(new Event('ready')));}close(){this.closed=true;}}});
- const controls={holdSnapshot:null,holdOpen:null,holdPolicy:null,holdModels:null,holdCatalog:null,catalogGates:[],additionalSessions:[],forks:0,snapshotOverride:null,steers:[],modelCatalog:models,providerSaves:0,providerRetries:0,dropSubmit:false,rejectSubmit:false,uploads:[],submissions:[],operationStatus:"completed",preferenceEvents:{A:[],B:[]},rejectPreference:false,verification:undefined};
+ const controls={policySelections:[],rejectPolicy:false,holdSnapshot:null,holdOpen:null,holdPolicy:null,holdModels:null,holdCatalog:null,catalogGates:[],additionalSessions:[],forks:0,snapshotOverride:null,steers:[],modelCatalog:models,providerSaves:0,providerRetries:0,dropSubmit:false,rejectSubmit:false,uploads:[],submissions:[],operationStatus:"completed",preferenceEvents:{A:[],B:[]},rejectPreference:false,verification:undefined};
  const sessionSnapshot=(id,n=2)=>{const value=snapshot(id,n);value.events.push(...controls.preferenceEvents[id]);return value;};
  const provider={id:"mock-provider",name:"Mock Provider",protocol:"openai-completions",baseUrl:"https://example.invalid/v1",apiKeyConfigured:true,authType:"api-key",authStatus:"configured",models:[{id:"mock-model",name:"Mock Model"}]};
  await page.route('**/api/**', async route=>{
@@ -32,7 +32,7 @@ async function fixture(initialCount=2){
   else if(path.endsWith('/changes')) result={turnId:'fixture-turn',partial:!controls.verification,verification:controls.verification,files:[{path:'note.md',status:'modified',before:'old',after:'new',diff:'--- a/note.md\n+++ b/note.md\n-old\n+new'}],notice:'Fixture changes only'};
   else if(path.endsWith('/references')) result={files:[{path:'note.md'}],sessions:[sessions[1]]};
   else if(path.endsWith('/resolve-references')) result=route.request().postDataJSON().message+'\n[User-selected source]\nbounded file fixture';
-  else if(path==='/api/presets') result=[{id:'standard',name:'Standard',trust:'system'}];
+  else if(path==='/api/presets') result=controls.presetCatalog || [{id:'standard',name:'Standard',trust:'system'}];
   else if(path==='/api/providers') {
    if(route.request().method()==='GET')result={providers:[provider],presets:[]};
    else{controls.providerSaves++;result={...provider,reload:{scope:'open-web-sessions',applied:[],failures:[{sessionId:'A',sessionName:'会话A',message:'模拟超时'}]}};}
@@ -47,6 +47,7 @@ async function fixture(initialCount=2){
    else if(method==='plugins.ui-slots') result={slots:[]};
    else if(method==='subagent.status') result={providers:[],jobs:controls.jobs || []};
    else if(method==='policy.status') {result=policy;if(id===controls.holdPolicy?.id){held=controls.holdPolicy;result={...policy,mode:'allow'};}}
+   else if(method==='policy.select') {controls.policySelections.push(route.request().postDataJSON());if(controls.rejectPolicy){controls.rejectPolicy=false;await route.fulfill({status:400,json:{ok:false,error:{message:'Fixture policy rejected'}}});return;}result={mode:route.request().postDataJSON().params.mode};}
    else if(method==='turn.submit'){controls.submissions.push(route.request().postDataJSON());if(controls.dropSubmit){controls.dropSubmit=false;await route.abort();return;}if(controls.rejectSubmit){controls.rejectSubmit=false;await route.fulfill({status:400,json:{ok:false,error:{message:'Fixture rejected before acceptance'}}});return;}result={accepted:true};}
    else if(method==='turn.steer'){controls.steers.push(route.request().postDataJSON());result={id:'steer-fixture'};}
    else if(method==='command.execute') result={output:'test-only'};
@@ -67,6 +68,156 @@ const gate=(id)=>({id,seen:deferred(),release:deferred(),done:deferred()});
 const settle=(page)=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
 const open=async(page,id)=>{await page.locator('.session-link').filter({hasText:`会话${id}`}).click();await page.locator('.session-header-title button').filter({hasText:`会话${id}`}).waitFor();};
 try{
+ {
+  const {page,controls}=await fixture();
+  await page.addInitScript(({workspaceId})=>{
+   const replace=history.replaceState.bind(history);
+   history.replaceState=(data,title,url)=>{
+    replace(data,title,url);
+    const target=new URL(String(url),location.href);
+    if(!window.bootstrapHistoryRace&&target.hash==='#workspace='+workspaceId){
+     window.bootstrapHistoryRace=true;
+     // A real popstate can arrive after bootstrap chose a route and before
+     // the first subscription. Force that scheduling gap without timers.
+     target.hash='workspace='+workspaceId+'&session=B';
+     replace(null,'',target);
+     dispatchEvent(new PopStateEvent('popstate'));
+    }
+   };
+  },{workspaceId});
+  await page.goto(base+'/#workspace='+workspaceId+'&session=missing-bootstrap-route');
+  await page.waitForFunction(()=>window.bootstrapHistoryRace===true);
+  try{
+   await page.locator('.session-header-title button').filter({hasText:'会话B'}).waitFor({timeout:5000});
+  }catch(error){
+   console.log(JSON.stringify({bootstrapHistoryRace:'failed',state:await page.evaluate(()=>({hash:location.hash,text:document.body.innerText.slice(0,500)}))}));throw error;
+  }
+  assert.match(page.url(),/session=B/);assert.equal(controls.submissions.length,0);
+  await page.close();console.log(JSON.stringify({bootstrapHistoryRace:'passed',cases:['popstate before first route subscription','allowed session restoration','no submission']}));
+ }
+ for(const target of ['B','A']){
+  const {page,controls}=await fixture();const held=gate('A');controls.holdOpen=held;
+  await page.addInitScript(({workspaceId,target})=>{
+   const request=window.fetch.bind(window);window.historyPushes=0;
+   const push=history.pushState.bind(history);history.pushState=(...args)=>{window.historyPushes++;return push(...args)};
+   window.fetch=(input,init)=>{
+    const pending=request(input,init);
+    const url=new URL(typeof input==='string'?input:input.url,location.href);
+    if(!window.bootstrapOpenRace&&url.pathname==='/api/sessions/A/open'){
+     window.bootstrapOpenRace=true;
+     history.replaceState(null,'',target==='A'?'#session=A&workspace='+workspaceId:'#workspace='+workspaceId+'&session=B');
+     dispatchEvent(new PopStateEvent('popstate'));
+    }
+    return pending;
+   };
+  },{workspaceId,target});
+  await page.goto(base+'/#workspace='+workspaceId+'&session=A');await held.seen.promise;
+  try{if(target==='B')await page.locator('.session-header-title button').filter({hasText:'会话B'}).waitFor();}
+  finally{held.release.resolve()}
+  await held.done.promise;await page.locator('.session-header-title button').filter({hasText:'会话'+target}).waitFor();await settle(page);
+  assert.equal(await page.locator('.session-header-title button').innerText(),'会话'+target,'startup response respects the current allowed route');
+  assert.match(page.url(),new RegExp('session='+target));assert.equal(await page.evaluate(()=>window.historyPushes),0);assert.equal(controls.submissions.length,0);
+  await page.close();console.log(JSON.stringify({bootstrapLateOpen:'passed',target,cases:['A open held','navigation before initial subscription','release A','URL and visible allowed session preserved','semantic hash order','zero pushes or submissions']}));
+ }
+ {
+  const {page,controls}=await fixture();
+  const opens=[];page.on('request',request=>{if(new URL(request.url()).pathname.endsWith('/open'))opens.push(request.url())});
+  await page.addInitScript(({workspaceId})=>{
+   const replace=history.replaceState.bind(history);
+   history.replaceState=(data,title,url)=>{
+    replace(data,title,url);
+    if(!window.bootstrapInvalidRace&&new URL(String(url),location.href).hash==='#workspace='+workspaceId){
+     window.bootstrapInvalidRace=true;
+     replace(null,'','#workspace='+workspaceId+'&session=another-missing-route');
+     dispatchEvent(new PopStateEvent('popstate'));
+    }
+   };
+  },{workspaceId});
+  await page.goto(base+'/#workspace='+workspaceId+'&session=missing-bootstrap-route');await page.waitForFunction(()=>window.bootstrapInvalidRace===true);
+  await page.waitForURL(url=>url.hash==='#workspace='+workspaceId);await page.locator('.new-session-center').waitFor();
+  assert.equal(opens.length,0,'unlisted history IDs never open');assert.equal(controls.submissions.length,0);
+  await page.close();console.log(JSON.stringify({bootstrapInvalidRoute:'passed',cases:['same parsed route with missing id','canonical URL restored','unlisted id never requested']}));
+ }
+ {
+  const {page,controls}=await fixture();await page.goto(base);await page.locator('.session-header-title button').waitFor();
+  const trigger=page.getByRole('button',{name:'更多操作',exact:true});await trigger.click();
+  const menu=page.getByRole('menu',{name:'会话操作',exact:true});await menu.waitFor();
+  assert.deepEqual(await menu.getByRole('menuitem').allTextContents(),['重命名','创建分支','归档']);
+  await page.keyboard.press('Escape');assert.equal(await menu.count(),0);assert.equal(await trigger.evaluate(node=>document.activeElement===node),true);
+  await trigger.click();const prompt=page.waitForEvent('dialog');const choosing=menu.getByRole('menuitem',{name:'重命名',exact:true}).click();
+  await (await prompt).dismiss();await choosing;await settle(page);
+  assert.equal(await menu.count(),0);assert.equal(await trigger.evaluate(node=>document.activeElement===node),true);
+  assert.match(page.url(),/session=A/);assert.equal(controls.submissions.length,0);
+  await page.close();console.log(JSON.stringify({headerSessionActions:'passed',cases:['existing callbacks exposed','Escape restores focus','rename cancellation','no navigation or submission']}));
+ }
+ {
+  const {page,controls}=await fixture();await page.goto(base);await page.locator('.session-header-title button').waitFor();
+  const footer=page.getByRole('button',{name:'设置',exact:true});await footer.click();
+  await page.keyboard.press('Home');await page.keyboard.press('ArrowDown');
+  assert.equal(await page.evaluate(()=>document.activeElement.tagName),'A','arrow keys visit the feedback link');
+  await page.keyboard.press('Escape');assert.equal(await footer.evaluate(e=>e===document.activeElement),true);
+  await footer.click();await page.getByRole('menuitem',{name:'设置',exact:true}).click();
+  let settings=page.getByRole('dialog',{name:'设置',exact:true});
+  const fontSize=settings.getByRole('spinbutton',{name:'会话字号',exact:true});await fontSize.fill('15');
+  await settings.getByRole('button',{name:'增大会话字号',exact:true}).click();assert.equal(await fontSize.inputValue(),'16');
+  assert.equal(await page.evaluate(()=>localStorage.getItem('qi-agent.content-font-size')),'16');
+  await settings.getByRole('button',{name:'减小会话字号',exact:true}).click();assert.equal(await fontSize.inputValue(),'15');
+  await fontSize.fill('');await settings.getByRole('button',{name:'通用设置',exact:true}).focus();assert.equal(await fontSize.inputValue(),'15','invalid drafts restore the last valid size');
+  await fontSize.fill('22');assert.equal(await settings.getByRole('button',{name:'增大会话字号',exact:true}).isDisabled(),true);
+  await fontSize.fill('10');assert.equal(await settings.getByRole('button',{name:'减小会话字号',exact:true}).isDisabled(),true);
+  await fontSize.fill('14');
+  const language=settings.getByRole('button',{name:'语言：中文',exact:true});await language.click();await page.getByRole('menuitemradio',{name:'中文',exact:true}).click();assert.equal(await language.evaluate(e=>e===document.activeElement),true,'supported language selection returns focus');
+  for(const key of ['Tab','Shift+Tab']){
+   await language.click();await page.keyboard.press(key);await settle(page);
+   assert.equal(await page.getByRole('menu',{name:'语言',exact:true}).count(),0,'Tab dismisses a portaled menu');
+   assert.equal(await settings.evaluate(node=>node.contains(document.activeElement)),true,'Tab keeps focus inside settings');
+   assert.equal(controls.policySelections.length,0,'tab navigation never changes access');
+  }
+  let access=settings.locator('.permission-trigger');
+  await access.click();await page.keyboard.press('Escape');
+  assert.equal(await settings.isVisible(),true,'Escape closes only the nested access menu');
+  assert.equal(await access.evaluate(e=>e===document.activeElement),true);
+  for(const cancel of ['button','escape']){
+   await access.click();await page.getByRole('menuitemradio',{name:/完全权限/}).click();
+   const risk=page.getByRole('dialog',{name:'确认启用 Full Access？',exact:true});await risk.waitFor();
+   assert.equal(await page.getByRole('dialog').count(),1,'only the risk dialog remains mounted');
+   assert.equal(await page.getByRole('button',{name:'启用 Full Access',exact:true}).isDisabled(),true);
+   if(cancel==='button')await page.getByRole('button',{name:'取消',exact:true}).click();else await page.keyboard.press('Escape');
+   settings=page.getByRole('dialog',{name:'设置',exact:true});await settings.waitFor();access=settings.locator('.permission-trigger');
+   await settle(page);assert.equal(await access.evaluate(e=>e===document.activeElement),true);
+   assert.equal(controls.policySelections.length,0,'cancel cannot select policy');
+  }
+  controls.rejectPolicy=true;
+  await access.click();await page.getByRole('menuitemradio',{name:/完全权限/}).click();
+  await page.getByRole('checkbox',{name:'我已了解风险，并愿意继续'}).check();
+  await page.getByRole('button',{name:'启用 Full Access',exact:true}).click();
+  await page.getByText('Fixture policy rejected',{exact:true}).waitFor();
+  settings=page.getByRole('dialog',{name:'设置',exact:true});await settings.waitFor();access=settings.locator('.permission-trigger');
+  assert.equal(await access.getAttribute('aria-label'),'访问权限：Workspace Write','rejection restores the actual policy');
+  await access.click();await page.getByRole('menuitemradio',{name:/完全权限/}).click();
+  await page.getByRole('dialog',{name:'确认启用 Full Access？',exact:true}).waitFor();
+  assert.equal(await page.getByRole('dialog').count(),1,'retry uses the same confirmation path');
+  await page.getByRole('checkbox',{name:'我已了解风险，并愿意继续'}).check();
+  await page.getByRole('button',{name:'启用 Full Access',exact:true}).evaluate(e=>{e.click();e.click()});
+  await page.getByRole('dialog',{name:'设置',exact:true}).waitFor();await settle(page);
+  assert.equal(controls.policySelections.length,2,'one rejected write and one retry; repeated confirm does not duplicate');
+  assert.equal(controls.submissions.length,0,'presentation and policy controls never submit a turn');
+  await page.keyboard.press('Escape');assert.equal(await page.locator('#root').evaluate(e=>e.inert),false);
+  await page.locator('textarea').fill('focus after risk dialog');assert.equal(await page.locator('textarea').inputValue(),'focus after risk dialog');
+  await page.close();console.log(JSON.stringify({settingsRiskAndMenu:'passed',cases:['nested Escape','link keyboard navigation','cancel button','cancel Escape','one modal','risk acknowledgment','policy rejection and confirmed retry','double click once','root restored']}));
+ }
+ {
+  const {page}=await fixture(2,{locale:'zh-CN',colorScheme:'light',reducedMotion:'reduce'});await page.goto(base);await page.locator('.session-header-title button').waitFor();await page.locator('.new-session').click();
+  for(const [width,height,x,y,w] of [[1440,1000,469.296875,493,774.390625],[1024,844,296,415,705],[768,844,72,415,673],[390,844,72,415,295],[320,844,72,447,225]]){
+   await page.setViewportSize({width,height});await page.waitForTimeout(350);await settle(page);const card=await page.locator('.composer').boundingBox();
+   for(const [key,expected] of Object.entries({x,y,width:w,height:114}))assert.ok(Math.abs(card[key]-expected)<0.1,`${width}: ${key}: ${card[key]} != official ${expected}; ${JSON.stringify(await page.locator(".new-session-view").evaluate(e=>({padding:getComputedStyle(e).padding,scrollLeft:e.scrollLeft,client:e.clientWidth,rect:e.getBoundingClientRect().toJSON()})))}`);
+   assert.equal((await page.locator('.send-button').boundingBox()).width,34);
+  }
+  await page.getByRole('button',{name:'设置',exact:true}).click();await page.getByRole('menuitem',{name:'设置',exact:true}).click();
+  await page.getByRole('button',{name:'深色',exact:true}).click();await page.keyboard.press('Escape');
+  assert.equal((await page.locator('.composer').boundingBox()).height,114,'theme and overlay round trip keep the empty input floor');
+  await page.close();console.log(JSON.stringify({harnessGeometry:'passed',reference:'687f282',viewports:[1440,390,320],toleranceCssPixels:0.1}));
+ }
  {
   const {page,controls}=await fixture(0);await page.goto(base);await page.locator('.session-header-title button').waitFor();
   const ends=['completed','failed','cancelled','uncertain'].map((status,index)=>({id:`outcome-${status}`,seq:100+index,at:'2026-10-15T00:00:00Z',type:'agent/run/end',data:{'run-id':`native-${status}`,status,reason:status==='uncertain'?'restored':status,verification:'not-run',...(status==='failed'?{error:'Offline provider fixture'}:{})}}));
@@ -125,10 +276,10 @@ try{
   const {page,controls}=await fixture();await page.goto(base);await page.locator('.session-header-title button').waitFor();
   const held=gate('A');controls.holdModels=held;
   await page.locator('.new-session').click();await held.seen.promise;
-  await page.getByRole('button',{name:'模型：Model A',exact:true}).click();
+  await page.getByRole('button',{name:'模型：Model A',exact:true}).click();await page.locator('.model-root-cell[data-pane=model]').click();
   await page.getByRole('menuitemradio',{name:'Model B',exact:true}).click();
   await page.getByRole('button',{name:'访问权限：Workspace Write',exact:true}).click();
-  await page.getByRole('menuitemradio',{name:/Read Only/}).click();
+  await page.getByRole('menuitemradio',{name:/仅可查看/}).click();
   held.release.resolve();await held.done.promise;await settle(page);
   assert.equal(await page.getByRole('button',{name:'模型：Model B',exact:true}).count(),1);
   assert.equal(await page.getByRole('button',{name:'访问权限：Read Only',exact:true}).count(),1);await page.close();
@@ -210,7 +361,7 @@ try{
  }
  {
   const {page,controls}=await fixture();await page.goto(base);await page.locator('.session-header-title button').waitFor();
-  await page.getByRole('button',{name:'设置',exact:true}).click();await page.getByRole('button',{name:'模型',exact:true}).click();
+  await page.getByRole('button',{name:'设置',exact:true}).click();await page.getByRole('menuitem',{name:'设置',exact:true}).click();await page.getByRole('button',{name:'模型',exact:true}).click();
   await page.getByRole('button',{name:'编辑 Mock Provider (mock-provider)',exact:true}).click();
   await page.getByRole('button',{name:'保存',exact:true}).click();
   await page.getByText('配置已保存，1 个 Web 会话尚未生效。',{exact:true}).waitFor();
@@ -278,10 +429,30 @@ try{
   await page.getByRole('button',{name:'打开导航',exact:true}).click();
   await page.locator('.sidebar .new-session').click();
   await page.getByRole('heading',{name:'探索未至之境',exact:true}).waitFor();
-  assert.equal(await page.getByRole('combobox',{name:'Agent 模式',exact:true}).inputValue(),'standard');
-  await page.getByRole('button',{name:'分析项目',exact:true}).click();
+  assert.equal(await page.getByRole('button',{name:'Agent 模式',exact:true}).getAttribute('data-preset-id'),'standard');
+  await page.getByRole('button',{name:'添加附件与工具',exact:true}).click();await page.getByRole('menuitem',{name:'分析项目',exact:true}).click();
   assert.match(await page.getByRole('textbox',{name:'给代理发送消息',exact:true}).inputValue(),/分析当前项目结构/);
   await page.close();console.log(JSON.stringify({compactNavigation:'passed',cases:['desktop collapse persists','phone drawer restores sessions','vertical session list','session switch','new session','quick start draft']}));
+ }
+ for(const width of [1440,320]){
+  const {page,controls}=await fixture();
+  controls.presetCatalog=[{id:'standard',name:'标准模式',trust:'system',description:'标准任务说明'},
+   {id:'creator',name:'创造模式',trust:'system',description:'真实创造模式说明'}];
+  await page.setViewportSize({width,height:844});await page.goto(base);await page.locator('.session-header-title button').waitFor();
+  if(width===320)await page.getByRole('button',{name:'打开导航',exact:true}).click();
+  await page.locator('.new-session').click();const trigger=page.getByRole('button',{name:'Agent 模式',exact:true});
+  await trigger.click();let menu=page.getByRole('menu',{name:'Agent 模式',exact:true});
+  assert.equal(await menu.getByRole('menuitemradio').count(),2);await menu.getByText('真实创造模式说明',{exact:true}).waitFor();
+  await page.keyboard.press('Escape');assert.equal(await menu.count(),0);assert.equal(await trigger.evaluate(e=>e===document.activeElement),true);
+  assert.equal(await trigger.getAttribute('data-preset-id'),'standard');
+  await trigger.click();await page.keyboard.press('ArrowDown');await page.keyboard.press('Enter');
+  assert.equal(await trigger.getAttribute('data-preset-id'),'creator');assert.equal(await trigger.evaluate(e=>e===document.activeElement),true);
+  await trigger.click();await page.keyboard.press('Tab');assert.equal(await menu.count(),0);
+  assert.equal(await trigger.getAttribute('data-preset-id'),'creator');assert.equal(controls.submissions.length,0);
+  await trigger.click();await menu.locator('[data-preset-id="standard"]').dblclick();await settle(page);
+  assert.equal(await trigger.getAttribute('data-preset-id'),'standard');assert.equal(controls.submissions.length,0);
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+  await page.close();console.log(JSON.stringify({presetMenu:'passed',width,cases:['real descriptions','Escape cancellation','arrow and Enter selection','focus return','Tab dismisses without mutation','double click does not create or submit','no horizontal overflow']}));
  }
  {
   const {page,controls}=await fixture();
@@ -289,15 +460,17 @@ try{
   await page.goto(base);await page.locator('.session-header-title button').waitFor();
   await page.locator('.new-session').click();await page.getByRole('button',{name:'模型：Model A',exact:true}).waitFor();
   const trigger=page.locator('.model-trigger');
-  await trigger.click();
+  await trigger.click();await page.locator('.model-root-cell[data-pane=model]').click();
   const search=page.getByRole('searchbox',{name:'搜索模型',exact:true});await search.waitFor();
   assert.equal(await search.evaluate(node=>node===document.activeElement),true);
   await search.fill('not-a-model');await page.getByText('没有匹配的模型',{exact:true}).waitFor();
   await search.fill('MODEL f');assert.equal(await page.getByRole('menuitemradio').count(),1);
   await search.dispatchEvent('keydown',{key:'Enter',isComposing:true});
   assert.equal(await trigger.getAttribute('aria-expanded'),'true');
-  await search.press('ArrowDown');await page.keyboard.press('Enter');
+  await search.press('ArrowDown');assert.equal(await search.evaluate(e=>e===document.activeElement),true,'search arrows keep input focus');await page.keyboard.press('Enter');
   assert.equal(await trigger.getAttribute('aria-label'),'模型：Model F');
+  await trigger.click();await page.keyboard.press('Tab');await search.waitFor();await search.fill('Model E');await search.press('Tab');assert.equal(await trigger.getAttribute('aria-label'),'模型：Model E','Tab accepts the highlighted search result');
+  await trigger.click();await page.keyboard.press('Tab');await page.keyboard.press('Shift+Tab');await page.locator('.model-root-cell[data-pane=model]').waitFor();await page.keyboard.press('Shift+Tab');assert.equal(await trigger.getAttribute('aria-expanded'),'false','Shift+Tab from root closes the model menu');assert.equal(await trigger.evaluate(e=>e===document.activeElement),true);
   assert.equal(await trigger.evaluate(node=>node===document.activeElement),true);
   for(const width of [1440,768,414,375,320]){
    await page.setViewportSize({width,height:840});
@@ -305,7 +478,7 @@ try{
     const button=page.locator(selector);await button.click();await settle(page);
     const box=await page.locator('.composer-popover').boundingBox();
     assert.ok(box.x>=11&&box.x+box.width<=width-11&&box.y>=11&&box.y+box.height<=840-11,`${width}: ${JSON.stringify(box)}`);
-    if(selector==='.model-trigger')assert.equal(await search.inputValue(),'');
+    if(selector==='.model-trigger'){await page.locator('.model-root-cell[data-pane=model]').click();assert.equal(await search.inputValue(),'');await page.keyboard.press('Escape');}
     await page.keyboard.press('Escape');assert.equal(await button.evaluate(node=>node===document.activeElement),true);
    }
   }
@@ -315,6 +488,26 @@ try{
   // Test the focus-out contract without targeting a point covered by the open menu.
   await trigger.click();await page.locator('textarea').focus();assert.equal(await page.locator('.model-menu').count(),0);
   await page.close();console.log(JSON.stringify({composerSelection:'passed',cases:['search and empty state','IME guard','keyboard selection and focus return','1440/768/414/375/320 bounds','outside focus closes']}));
+ }
+ {
+  const {page,controls}=await fixture();controls.modelCatalog={current:models.current,providers:[models.current]};
+  await page.goto(base);await page.locator('.session-header-title button').waitFor();await page.locator('.new-session').click();
+  const trigger=page.locator('.model-trigger');
+  for(const width of [1440,390,320]){
+   await page.setViewportSize({width,height:844});await settle(page);await trigger.focus();await page.keyboard.press('Enter');
+   const summary=page.locator('.model-root-cell[data-pane=model]');await summary.waitFor();
+   assert.equal(await summary.evaluate(e=>e===document.activeElement),true,'initial focus skips hidden options');
+   await page.keyboard.press('Enter');const option=page.getByRole('menuitemradio',{name:'Model A',exact:true});await option.waitFor();await settle(page);
+   assert.equal(await option.evaluate(e=>e===document.activeElement),true);
+   let box=await page.locator('.harness-model-menu').boundingBox();
+   assert.ok(box.x>=11&&box.x+box.width<=width-11&&box.y>=11&&box.y+box.height<=844-11,`single ${width}: ${JSON.stringify(box)}`);
+   await page.keyboard.press('Escape');assert.equal(await summary.evaluate(e=>e===document.activeElement),true,'Escape backs out to the root cell');
+   await page.keyboard.press('Escape');assert.equal(await trigger.evaluate(e=>e===document.activeElement),true);
+   await trigger.click();await summary.click();await option.waitFor();box=await page.locator('.harness-model-menu').boundingBox();
+   assert.ok(box.x>=11&&box.x+box.width<=width-11,`hover single ${width}: ${JSON.stringify(box)}`);
+   await option.click();assert.equal(await trigger.getAttribute('aria-expanded'),'false');
+  }
+  await page.close();console.log(JSON.stringify({singleModelMenu:'passed',viewports:[1440,390,320],cases:['visible initial focus','keyboard drill','pointer drill','bounds','Escape backs then closes','selection close']}));
  }
  {
   const {page}=await fixture();await page.goto(base);await page.locator('.session-header-title button').waitFor();
@@ -352,8 +545,8 @@ try{
   await page.goto(base);await page.getByText('HARNESS-FINAL-ANSWER',{exact:true}).waitFor();
   assert.equal(await page.locator('.tool-summary').count(),0,'settled process starts folded');
   await page.getByRole('button',{name:/工作步骤 ·/}).click();await page.locator('.tool-summary').waitFor();
-  await page.locator('.reasoning-row summary').click();await page.locator('.reasoning-row[open] .markdown-content').getByText('HARNESS-REASONING',{exact:true}).waitFor();
-  await page.getByRole('button',{name:'设置',exact:true}).click();
+  await page.locator('.reasoning-row > summary').click();await page.locator('.reasoning-content > summary').click();await page.locator('.reasoning-row[open] .markdown-content').getByText('HARNESS-REASONING',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'设置',exact:true}).click();await page.getByRole('menuitem',{name:'设置',exact:true}).click();
   assert.equal(await page.locator('#root').evaluate(e=>e.inert),true);
   await page.getByRole('combobox',{name:'工作步骤展示'}).selectOption('verbose');
   await page.keyboard.press('Escape');await page.getByRole('dialog',{name:'设置',exact:true}).waitFor({state:'hidden'});
@@ -362,15 +555,15 @@ try{
   await page.locator('.tool-batch-row').click();await page.getByText('HARNESS-TOOL-DETAIL',{exact:true}).waitFor();
   assert.equal(controls.submissions.length,0,'presentation controls cannot submit a command');
   await page.reload();await page.locator('.tool-batch-row').waitFor();
-  await page.locator('.subagent-disclosure summary').first().click();await page.getByText('HARNESS-CHILD-RESULT',{exact:true}).waitFor();
+  await page.locator('.session-subagents-trigger').click();await page.locator('.session-subagents .subagent-disclosure summary').first().click();await page.getByText('HARNESS-CHILD-RESULT',{exact:true}).waitFor();
   for(const width of [768,390,320]){
    await page.setViewportSize({width,height:844});await settle(page);
-   if(width===768)await page.locator('.sidebar-toggle').click();else await page.getByRole('button',{name:'打开导航',exact:true}).click();
+   await page.getByRole('button',{name:'打开导航',exact:true}).click();
    await page.getByRole('dialog',{name:'导航',exact:true}).waitFor();
    assert.equal(await page.locator('main').evaluate(e=>e.inert),true);
    await page.locator('.session-link').filter({hasText:'会话B'}).click();await page.locator('.session-header-title button').filter({hasText:'会话B'}).waitFor();
-   if(width===768)await page.locator('.sidebar-toggle').click();else await page.getByRole('button',{name:'打开导航',exact:true}).click();
-   await page.getByRole('button',{name:'设置',exact:true}).click();
+   await page.getByRole('button',{name:'打开导航',exact:true}).click();
+   await page.getByRole('button',{name:'设置',exact:true}).click();await page.getByRole('menuitem',{name:'设置',exact:true}).click();
    const navigation=await page.locator('.settings-layout > nav').boundingBox();
    for(const button of await page.locator('.settings-layout > nav > button').all()){
     const box=await button.boundingBox();assert.ok(box.y>=navigation.y&&box.y+box.height<=navigation.y+navigation.height,'settings labels cannot be vertically clipped');
@@ -406,13 +599,13 @@ try{
   await page.close();console.log(JSON.stringify({detailedSettlementFocus:'passed'}));
  }
  {
-  const {page}=await fixture(0);await page.goto(base);const input=page.locator('textarea');await input.waitFor();
+  const {page}=await fixture(0,{reducedMotion:'reduce'});await page.goto(base);await page.locator('.session-header-title button').waitFor();const input=page.locator('textarea');await input.waitFor();
   for(const width of [390,320]){
    await page.setViewportSize({width,height:844});await settle(page);
-   assert.equal(await input.evaluate(e=>{
-    const probe=e.cloneNode();probe.value=e.placeholder;Object.assign(probe.style,{height:'0px',minHeight:'0px',position:'absolute',visibility:'hidden',width:`${e.clientWidth}px`});
-    e.parentElement.append(probe);const required=probe.scrollHeight;probe.remove();return e.clientHeight>=required;
-   }),true,'wrapped empty placeholder must fit after a width change');
+   const placeholder = page.locator('.composer-placeholder');
+   assert.equal(await placeholder.isVisible(),true);
+   assert.equal(await placeholder.evaluate(e => getComputedStyle(e).whiteSpace), 'nowrap', 'docked empty hint stays a single truncated line');
+   assert.equal(await input.evaluate(e=>e.clientHeight),36,'empty docked input does not grow to fit placeholder text');
   }
   await page.setViewportSize({width:1440,height:1000});await input.fill('响应式输入 '.repeat(30));
   await page.setViewportSize({width:390,height:844});await settle(page);

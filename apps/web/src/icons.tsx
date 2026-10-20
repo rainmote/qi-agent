@@ -1,12 +1,14 @@
-import type { SVGProps } from "react";
+import type { SVGProps, ComponentType } from "react";
+import { PermissionIconReadOnlyRegular, PermissionIconWorkspaceWriteRegular, PermissionIconFullAccessRegular } from "./vendor/harness-icons/permission";
+import * as Harness from "./vendor/harness-icons";
 
-export type IconName = "menu" | "plus" | "settings" | "panel" | "send" | "stop" |
+export type IconName = "folderOpen" | "appearanceLight" | "appearanceDark" | "appearanceSystem" | "model" | "chevronUp" | "chevronDown" | "composerAdd" | "settingsGeneral" | "settingsModels" | "settingsPlugins" | "folderClosed" | "think" | "folderAdd" | "feedback" | "newChat" | "system" | "plugin" | "menu" | "plus" | "settings" | "panel" | "send" | "stop" |
   "terminal" | "chevron" | "bot" | "branch" | "folder" | "refresh" | "x" |
   "check" | "shield" | "activity" | "edit" | "search" | "sliders" | "archive" |
   "more" | "copy" | "moon" | "sun" | "command" | "sparkles" | "trash" |
   "clock" | "squareMinus" | "squarePlus" | "eye" | "folderEdit" | "shieldAlert";
 
-const paths: Record<IconName, React.ReactNode> = {
+const paths: Partial<Record<IconName, React.ReactNode>> = {
   menu: <><path d="M4 6h16M4 12h16M4 18h16" /></>,
   plus: <><path d="M12 5v14M5 12h14" /></>,
   settings: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z" /></>,
@@ -42,7 +44,57 @@ const paths: Record<IconName, React.ReactNode> = {
   shieldAlert: <><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z" /><path d="M12 8v5" /><path d="M12 17h.01" /></>,
 };
 
+const harnessIcons: Partial<Record<IconName, ComponentType<Harness.IconProps>>> = {
+  appearanceLight: Harness.IconLightOutlineMedium,
+  appearanceDark: Harness.IconDarkOutlineMedium,
+  appearanceSystem: Harness.IconFollowsystemOutlineMedium,
+  folderOpen: Harness.IconFolderOpenRegular,
+  model: Harness.IconDataOutlineRegular,
+  chevronUp: Harness.IconChevronUpOutlineRegular,
+  chevronDown: Harness.IconChevronDownOutlineRegular,
+  composerAdd: Harness.IconPlusOutlineMedium,
+  settingsGeneral: Harness.IconSettingsOutlineMedium,
+  settingsModels: Harness.IconDataOutlineMedium,
+  settingsPlugins: Harness.IconPersonalizationOutlineMedium,
+  folderClosed: Harness.IconFolderCloseRegular,
+  think: Harness.IconThinkOutlineRegular,
+  terminal: Harness.IconApiOutlineRegular,
+  folderAdd: Harness.IconProjectAddOutlineRegular,
+  feedback: Harness.IconPaperPlaneOutlineMedium,
+  newChat: Harness.IconNewChatOutlineMedium,
+  system: Harness.IconFollowsystemOutlineRegular,
+  plugin: Harness.IconPluginPinwheelOutlineRegular,
+  plus: Harness.IconPlusOutlineRegular,
+  folderEdit: PermissionIconWorkspaceWriteRegular,
+  settings: Harness.IconSettingsOutlineRegular,
+  panel: Harness.IconPanelLeftOutlineRegular,
+  chevron: Harness.IconChevronRightOutlineRegular,
+  bot: Harness.IconAgentPresetOutlineRegular,
+  branch: Harness.IconBranchOutlineRegular,
+  folder: Harness.IconFolderOpenOutlineRegular,
+  refresh: Harness.IconRefreshOutlineRegular,
+  x: Harness.IconCloseOutlineRegular,
+  check: Harness.IconCheckOutlineRegular,
+  shield: Harness.IconShieldOutlineRegular,
+  edit: Harness.IconEditOutlineRegular,
+  search: Harness.IconSearchOutlineRegular,
+  sliders: Harness.IconSlidersTwoOutlineRegular,
+  archive: Harness.IconArchiveOutlineRegular,
+  more: Harness.IconEllipsisOutlineRegular,
+  copy: Harness.IconCopyOutlineRegular,
+  moon: Harness.IconDarkOutlineRegular,
+  sun: Harness.IconLightOutlineRegular,
+  sparkles: Harness.IconSparkleRegular,
+  trash: Harness.IconTrashOutlineRegular,
+  clock: Harness.IconClockOutlineRegular,
+  eye: PermissionIconReadOnlyRegular,
+  shieldAlert: PermissionIconFullAccessRegular,
+};
+
 export function Icon({ name, ...props }: { name: IconName } & SVGProps<SVGSVGElement>) {
+  const SharedIcon = harnessIcons[name];
+  if (SharedIcon) return <SharedIcon size={16} {...props as Harness.IconProps} />;
+  if (name === "send") return <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" {...props}><path d="M8.3125 0.980183C8.66767 1.0531 8.97902 1.20418 9.2627 1.43233C9.48724 1.61297 9.73029 1.85793 9.97949 2.10714L14.707 6.83468L13.293 8.24874L9 3.95577V15.0417H7V3.95577L2.70703 8.24874L1.29297 6.83468L6.02051 2.10714C6.26971 1.85793 6.51277 1.61297 6.7373 1.43233C6.97662 1.23986 7.28445 1.04402 7.6875 0.980183C7.8973 0.947006 8.1031 0.95516 8.3125 0.980183Z" fill="currentColor" /></svg>;
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"
     strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>{paths[name]}</svg>;
 }

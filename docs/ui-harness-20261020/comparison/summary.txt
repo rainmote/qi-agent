@@ -1,0 +1,202 @@
+[
+  {
+    "name": "conversation-light-1440",
+    "mode": "baseline",
+    "raw_unmasked": {
+      "width": 1440,
+      "height": 1000,
+      "mae_0_255": 3.60591,
+      "pixels_gt16": 69481,
+      "pixels_gt16_percent": 4.82507
+    },
+    "exclusions": [],
+    "composer_region": {
+      "box": [
+        469,
+        872,
+        1244,
+        970
+      ],
+      "width": 775,
+      "height": 98,
+      "mae_0_255": 5.73352,
+      "pixels_gt16": 6295,
+      "pixels_gt16_percent": 8.28835
+    }
+  },
+  {
+    "name": "conversation-light-1440",
+    "mode": "candidate",
+    "raw_unmasked": {
+      "width": 1440,
+      "height": 1000,
+      "mae_0_255": 0.68411,
+      "pixels_gt16": 10213,
+      "pixels_gt16_percent": 0.70924
+    },
+    "exclusions": [],
+    "composer_region": {
+      "box": [
+        469,
+        872,
+        1244,
+        970
+      ],
+      "width": 775,
+      "height": 98,
+      "mae_0_255": 0.07312,
+      "pixels_gt16": 88,
+      "pixels_gt16_percent": 0.11587
+    }
+  },
+  {
+    "name": "new-session-light-1440",
+    "mode": "baseline",
+    "raw_unmasked": {
+      "width": 1440,
+      "height": 1000,
+      "mae_0_255": 2.42574,
+      "pixels_gt16": 38480,
+      "pixels_gt16_percent": 2.67222
+    },
+    "exclusions": [],
+    "composer_region": {
+      "box": [
+        469,
+        493,
+        1244,
+        607
+      ],
+      "width": 775,
+      "height": 114,
+      "mae_0_255": 7.39815,
+      "pixels_gt16": 9178,
+      "pixels_gt16_percent": 10.38823
+    }
+  },
+  {
+    "name": "new-session-light-1440",
+    "mode": "candidate",
+    "raw_unmasked": {
+      "width": 1440,
+      "height": 1000,
+      "mae_0_255": 0.50022,
+      "pixels_gt16": 5795,
+      "pixels_gt16_percent": 0.40243
+    },
+    "exclusions": [],
+    "composer_region": {
+      "box": [
+        469,
+        493,
+        1244,
+        607
+      ],
+      "width": 775,
+      "height": 114,
+      "mae_0_255": 0.08589,
+      "pixels_gt16": 143,
+      "pixels_gt16_percent": 0.16186
+    }
+  },
+  {
+    "name": "new-session-light-390",
+    "mode": "baseline",
+    "raw_unmasked": {
+      "width": 390,
+      "height": 844,
+      "mae_0_255": 6.48759,
+      "pixels_gt16": 18071,
+      "pixels_gt16_percent": 5.49004
+    },
+    "exclusions": [],
+    "composer_region": {
+      "box": [
+        72,
+        415,
+        367,
+        529
+      ],
+      "width": 295,
+      "height": 114,
+      "mae_0_255": 13.55683,
+      "pixels_gt16": 6681,
+      "pixels_gt16_percent": 19.86619
+    }
+  },
+  {
+    "name": "new-session-light-390",
+    "mode": "candidate",
+    "raw_unmasked": {
+      "width": 390,
+      "height": 844,
+      "mae_0_255": 0.60019,
+      "pixels_gt16": 1587,
+      "pixels_gt16_percent": 0.48214
+    },
+    "exclusions": [],
+    "composer_region": {
+      "box": [
+        72,
+        415,
+        367,
+        529
+      ],
+      "width": 295,
+      "height": 114,
+      "mae_0_255": 0.16405,
+      "pixels_gt16": 84,
+      "pixels_gt16_percent": 0.24978
+    }
+  },
+  {
+    "name": "settings-light-1440",
+    "mode": "baseline",
+    "raw_unmasked": {
+      "width": 1440,
+      "height": 1000,
+      "mae_0_255": 6.59342,
+      "pixels_gt16": 114319,
+      "pixels_gt16_percent": 7.93882
+    },
+    "exclusions": [],
+    "composer_region": {
+      "box": [
+        469,
+        872,
+        1244,
+        970
+      ],
+      "width": 775,
+      "height": 98,
+      "mae_0_255": 17.74039,
+      "pixels_gt16": 18340,
+      "pixels_gt16_percent": 24.14747
+    }
+  },
+  {
+    "name": "settings-light-1440",
+    "mode": "candidate",
+    "raw_unmasked": {
+      "width": 1440,
+      "height": 1000,
+      "mae_0_255": 1.7924,
+      "pixels_gt16": 28489,
+      "pixels_gt16_percent": 1.9784
+    },
+    "exclusions": [],
+    "composer_region": {
+      "box": [
+        469,
+        872,
+        1244,
+        970
+      ],
+      "width": 775,
+      "height": 98,
+      "mae_0_255": 2.85907,
+      "pixels_gt16": 2444,
+      "pixels_gt16_percent": 3.21791
+    }
+  }
+]

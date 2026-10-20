@@ -1,0 +1,1221 @@
+{
+  "gallery": "passed",
+  "states": 26,
+  "checked": [
+    {
+      "name": "account-menu-light-1440",
+      "mode": "side-by-side",
+      "available": true,
+      "path": "comparison/account-menu-light-1440-side-by-side.png",
+      "width": 2880,
+      "height": 1032
+    },
+    {
+      "name": "account-menu-light-1440",
+      "mode": "overlay",
+      "available": true,
+      "path": "comparison/account-menu-light-1440-overlay.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "account-menu-light-1440",
+      "mode": "diff-x4",
+      "available": true,
+      "path": "comparison/account-menu-light-1440-diff-x4.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "account-menu-light-1440",
+      "mode": "reference",
+      "available": true,
+      "path": "reference/account-menu-light-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "account-menu-light-1440",
+      "mode": "candidate",
+      "available": true,
+      "path": "candidate/account-menu-light-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "account-menu-light-1440",
+      "mode": "baseline",
+      "available": false
+    },
+    {
+      "name": "conversation-light-1440",
+      "mode": "side-by-side",
+      "available": true,
+      "path": "comparison/conversation-light-1440-side-by-side.png",
+      "width": 2880,
+      "height": 1032
+    },
+    {
+      "name": "conversation-light-1440",
+      "mode": "overlay",
+      "available": true,
+      "path": "comparison/conversation-light-1440-overlay.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "conversation-light-1440",
+      "mode": "diff-x4",
+      "available": true,
+      "path": "comparison/conversation-light-1440-diff-x4.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "conversation-light-1440",
+      "mode": "reference",
+      "available": true,
+      "path": "reference/conversation-light-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "conversation-light-1440",
+      "mode": "candidate",
+      "available": true,
+      "path": "candidate/conversation-light-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "conversation-light-1440",
+      "mode": "baseline",
+      "available": true,
+      "path": "baseline/conversation-light-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "model-menu-light-1440",
+      "mode": "side-by-side",
+      "available": true,
+      "path": "comparison/model-menu-light-1440-side-by-side.png",
+      "width": 2880,
+      "height": 1032
+    },
+    {
+      "name": "model-menu-light-1440",
+      "mode": "overlay",
+      "available": true,
+      "path": "comparison/model-menu-light-1440-overlay.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "model-menu-light-1440",
+      "mode": "diff-x4",
+      "available": true,
+      "path": "comparison/model-menu-light-1440-diff-x4.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "model-menu-light-1440",
+      "mode": "reference",
+      "available": true,
+      "path": "reference/model-menu-light-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "model-menu-light-1440",
+      "mode": "candidate",
+      "available": true,
+      "path": "candidate/model-menu-light-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "model-menu-light-1440",
+      "mode": "baseline",
+      "available": false
+    },
+    {
+      "name": "model-options-light-1440",
+      "mode": "side-by-side",
+      "available": true,
+      "path": "comparison/model-options-light-1440-side-by-side.png",
+      "width": 2880,
+      "height": 1032
+    },
+    {
+      "name": "model-options-light-1440",
+      "mode": "overlay",
+      "available": true,
+      "path": "comparison/model-options-light-1440-overlay.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "model-options-light-1440",
+      "mode": "diff-x4",
+      "available": true,
+      "path": "comparison/model-options-light-1440-diff-x4.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "model-options-light-1440",
+      "mode": "reference",
+      "available": true,
+      "path": "reference/model-options-light-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "model-options-light-1440",
+      "mode": "candidate",
+      "available": true,
+      "path": "candidate/model-options-light-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "model-options-light-1440",
+      "mode": "baseline",
+      "available": false
+    },
+    {
+      "name": "model-options-light-320",
+      "mode": "side-by-side",
+      "available": true,
+      "path": "comparison/model-options-light-320-side-by-side.png",
+      "width": 640,
+      "height": 876
+    },
+    {
+      "name": "model-options-light-320",
+      "mode": "overlay",
+      "available": true,
+      "path": "comparison/model-options-light-320-overlay.png",
+      "width": 320,
+      "height": 844
+    },
+    {
+      "name": "model-options-light-320",
+      "mode": "diff-x4",
+      "available": true,
+      "path": "comparison/model-options-light-320-diff-x4.png",
+      "width": 320,
+      "height": 844
+    },
+    {
+      "name": "model-options-light-320",
+      "mode": "reference",
+      "available": true,
+      "path": "reference/model-options-light-320.png",
+      "width": 320,
+      "height": 844
+    },
+    {
+      "name": "model-options-light-320",
+      "mode": "candidate",
+      "available": true,
+      "path": "candidate/model-options-light-320.png",
+      "width": 320,
+      "height": 844
+    },
+    {
+      "name": "model-options-light-320",
+      "mode": "baseline",
+      "available": false
+    },
+    {
+      "name": "model-options-light-390",
+      "mode": "side-by-side",
+      "available": true,
+      "path": "comparison/model-options-light-390-side-by-side.png",
+      "width": 780,
+      "height": 876
+    },
+    {
+      "name": "model-options-light-390",
+      "mode": "overlay",
+      "available": true,
+      "path": "comparison/model-options-light-390-overlay.png",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "name": "model-options-light-390",
+      "mode": "diff-x4",
+      "available": true,
+      "path": "comparison/model-options-light-390-diff-x4.png",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "name": "model-options-light-390",
+      "mode": "reference",
+      "available": true,
+      "path": "reference/model-options-light-390.png",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "name": "model-options-light-390",
+      "mode": "candidate",
+      "available": true,
+      "path": "candidate/model-options-light-390.png",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "name": "model-options-light-390",
+      "mode": "baseline",
+      "available": false
+    },
+    {
+      "name": "new-session-dark-1440",
+      "mode": "side-by-side",
+      "available": true,
+      "path": "comparison/new-session-dark-1440-side-by-side.png",
+      "width": 2880,
+      "height": 1032
+    },
+    {
+      "name": "new-session-dark-1440",
+      "mode": "overlay",
+      "available": true,
+      "path": "comparison/new-session-dark-1440-overlay.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "new-session-dark-1440",
+      "mode": "diff-x4",
+      "available": true,
+      "path": "comparison/new-session-dark-1440-diff-x4.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "new-session-dark-1440",
+      "mode": "reference",
+      "available": true,
+      "path": "reference/new-session-dark-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "new-session-dark-1440",
+      "mode": "candidate",
+      "available": true,
+      "path": "candidate/new-session-dark-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "new-session-dark-1440",
+      "mode": "baseline",
+      "available": true,
+      "path": "baseline/new-session-dark-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "new-session-dark-390",
+      "mode": "side-by-side",
+      "available": true,
+      "path": "comparison/new-session-dark-390-side-by-side.png",
+      "width": 780,
+      "height": 876
+    },
+    {
+      "name": "new-session-dark-390",
+      "mode": "overlay",
+      "available": true,
+      "path": "comparison/new-session-dark-390-overlay.png",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "name": "new-session-dark-390",
+      "mode": "diff-x4",
+      "available": true,
+      "path": "comparison/new-session-dark-390-diff-x4.png",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "name": "new-session-dark-390",
+      "mode": "reference",
+      "available": true,
+      "path": "reference/new-session-dark-390.png",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "name": "new-session-dark-390",
+      "mode": "candidate",
+      "available": true,
+      "path": "candidate/new-session-dark-390.png",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "name": "new-session-dark-390",
+      "mode": "baseline",
+      "available": true,
+      "path": "baseline/new-session-dark-390.png",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "name": "new-session-light-1024",
+      "mode": "side-by-side",
+      "available": true,
+      "path": "comparison/new-session-light-1024-side-by-side.png",
+      "width": 2048,
+      "height": 876
+    },
+    {
+      "name": "new-session-light-1024",
+      "mode": "overlay",
+      "available": true,
+      "path": "comparison/new-session-light-1024-overlay.png",
+      "width": 1024,
+      "height": 844
+    },
+    {
+      "name": "new-session-light-1024",
+      "mode": "diff-x4",
+      "available": true,
+      "path": "comparison/new-session-light-1024-diff-x4.png",
+      "width": 1024,
+      "height": 844
+    },
+    {
+      "name": "new-session-light-1024",
+      "mode": "reference",
+      "available": true,
+      "path": "reference/new-session-light-1024.png",
+      "width": 1024,
+      "height": 844
+    },
+    {
+      "name": "new-session-light-1024",
+      "mode": "candidate",
+      "available": true,
+      "path": "candidate/new-session-light-1024.png",
+      "width": 1024,
+      "height": 844
+    },
+    {
+      "name": "new-session-light-1024",
+      "mode": "baseline",
+      "available": true,
+      "path": "baseline/new-session-light-1024.png",
+      "width": 1024,
+      "height": 844
+    },
+    {
+      "name": "new-session-light-1440",
+      "mode": "side-by-side",
+      "available": true,
+      "path": "comparison/new-session-light-1440-side-by-side.png",
+      "width": 2880,
+      "height": 1032
+    },
+    {
+      "name": "new-session-light-1440",
+      "mode": "overlay",
+      "available": true,
+      "path": "comparison/new-session-light-1440-overlay.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "new-session-light-1440",
+      "mode": "diff-x4",
+      "available": true,
+      "path": "comparison/new-session-light-1440-diff-x4.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "new-session-light-1440",
+      "mode": "reference",
+      "available": true,
+      "path": "reference/new-session-light-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "new-session-light-1440",
+      "mode": "candidate",
+      "available": true,
+      "path": "candidate/new-session-light-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "new-session-light-1440",
+      "mode": "baseline",
+      "available": true,
+      "path": "baseline/new-session-light-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "new-session-light-320",
+      "mode": "side-by-side",
+      "available": true,
+      "path": "comparison/new-session-light-320-side-by-side.png",
+      "width": 640,
+      "height": 876
+    },
+    {
+      "name": "new-session-light-320",
+      "mode": "overlay",
+      "available": true,
+      "path": "comparison/new-session-light-320-overlay.png",
+      "width": 320,
+      "height": 844
+    },
+    {
+      "name": "new-session-light-320",
+      "mode": "diff-x4",
+      "available": true,
+      "path": "comparison/new-session-light-320-diff-x4.png",
+      "width": 320,
+      "height": 844
+    },
+    {
+      "name": "new-session-light-320",
+      "mode": "reference",
+      "available": true,
+      "path": "reference/new-session-light-320.png",
+      "width": 320,
+      "height": 844
+    },
+    {
+      "name": "new-session-light-320",
+      "mode": "candidate",
+      "available": true,
+      "path": "candidate/new-session-light-320.png",
+      "width": 320,
+      "height": 844
+    },
+    {
+      "name": "new-session-light-320",
+      "mode": "baseline",
+      "available": true,
+      "path": "baseline/new-session-light-320.png",
+      "width": 320,
+      "height": 844
+    },
+    {
+      "name": "new-session-light-390",
+      "mode": "side-by-side",
+      "available": true,
+      "path": "comparison/new-session-light-390-side-by-side.png",
+      "width": 780,
+      "height": 876
+    },
+    {
+      "name": "new-session-light-390",
+      "mode": "overlay",
+      "available": true,
+      "path": "comparison/new-session-light-390-overlay.png",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "name": "new-session-light-390",
+      "mode": "diff-x4",
+      "available": true,
+      "path": "comparison/new-session-light-390-diff-x4.png",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "name": "new-session-light-390",
+      "mode": "reference",
+      "available": true,
+      "path": "reference/new-session-light-390.png",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "name": "new-session-light-390",
+      "mode": "candidate",
+      "available": true,
+      "path": "candidate/new-session-light-390.png",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "name": "new-session-light-390",
+      "mode": "baseline",
+      "available": true,
+      "path": "baseline/new-session-light-390.png",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "name": "new-session-light-768",
+      "mode": "side-by-side",
+      "available": true,
+      "path": "comparison/new-session-light-768-side-by-side.png",
+      "width": 1536,
+      "height": 876
+    },
+    {
+      "name": "new-session-light-768",
+      "mode": "overlay",
+      "available": true,
+      "path": "comparison/new-session-light-768-overlay.png",
+      "width": 768,
+      "height": 844
+    },
+    {
+      "name": "new-session-light-768",
+      "mode": "diff-x4",
+      "available": true,
+      "path": "comparison/new-session-light-768-diff-x4.png",
+      "width": 768,
+      "height": 844
+    },
+    {
+      "name": "new-session-light-768",
+      "mode": "reference",
+      "available": true,
+      "path": "reference/new-session-light-768.png",
+      "width": 768,
+      "height": 844
+    },
+    {
+      "name": "new-session-light-768",
+      "mode": "candidate",
+      "available": true,
+      "path": "candidate/new-session-light-768.png",
+      "width": 768,
+      "height": 844
+    },
+    {
+      "name": "new-session-light-768",
+      "mode": "baseline",
+      "available": true,
+      "path": "baseline/new-session-light-768.png",
+      "width": 768,
+      "height": 844
+    },
+    {
+      "name": "permission-menu-light-1440",
+      "mode": "side-by-side",
+      "available": true,
+      "path": "comparison/permission-menu-light-1440-side-by-side.png",
+      "width": 2880,
+      "height": 1032
+    },
+    {
+      "name": "permission-menu-light-1440",
+      "mode": "overlay",
+      "available": true,
+      "path": "comparison/permission-menu-light-1440-overlay.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "permission-menu-light-1440",
+      "mode": "diff-x4",
+      "available": true,
+      "path": "comparison/permission-menu-light-1440-diff-x4.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "permission-menu-light-1440",
+      "mode": "reference",
+      "available": true,
+      "path": "reference/permission-menu-light-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "permission-menu-light-1440",
+      "mode": "candidate",
+      "available": true,
+      "path": "candidate/permission-menu-light-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "permission-menu-light-1440",
+      "mode": "baseline",
+      "available": false
+    },
+    {
+      "name": "preset-menu-light-1440",
+      "mode": "side-by-side",
+      "available": true,
+      "path": "comparison/preset-menu-light-1440-side-by-side.png",
+      "width": 2880,
+      "height": 1032
+    },
+    {
+      "name": "preset-menu-light-1440",
+      "mode": "overlay",
+      "available": true,
+      "path": "comparison/preset-menu-light-1440-overlay.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "preset-menu-light-1440",
+      "mode": "diff-x4",
+      "available": true,
+      "path": "comparison/preset-menu-light-1440-diff-x4.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "preset-menu-light-1440",
+      "mode": "reference",
+      "available": true,
+      "path": "reference/preset-menu-light-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "preset-menu-light-1440",
+      "mode": "candidate",
+      "available": true,
+      "path": "candidate/preset-menu-light-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "preset-menu-light-1440",
+      "mode": "baseline",
+      "available": false
+    },
+    {
+      "name": "preset-menu-light-320",
+      "mode": "side-by-side",
+      "available": true,
+      "path": "comparison/preset-menu-light-320-side-by-side.png",
+      "width": 640,
+      "height": 876
+    },
+    {
+      "name": "preset-menu-light-320",
+      "mode": "overlay",
+      "available": true,
+      "path": "comparison/preset-menu-light-320-overlay.png",
+      "width": 320,
+      "height": 844
+    },
+    {
+      "name": "preset-menu-light-320",
+      "mode": "diff-x4",
+      "available": true,
+      "path": "comparison/preset-menu-light-320-diff-x4.png",
+      "width": 320,
+      "height": 844
+    },
+    {
+      "name": "preset-menu-light-320",
+      "mode": "reference",
+      "available": true,
+      "path": "reference/preset-menu-light-320.png",
+      "width": 320,
+      "height": 844
+    },
+    {
+      "name": "preset-menu-light-320",
+      "mode": "candidate",
+      "available": true,
+      "path": "candidate/preset-menu-light-320.png",
+      "width": 320,
+      "height": 844
+    },
+    {
+      "name": "preset-menu-light-320",
+      "mode": "baseline",
+      "available": false
+    },
+    {
+      "name": "process-open-dark-1440",
+      "mode": "side-by-side",
+      "available": true,
+      "path": "comparison/process-open-dark-1440-side-by-side.png",
+      "width": 2880,
+      "height": 1032
+    },
+    {
+      "name": "process-open-dark-1440",
+      "mode": "overlay",
+      "available": true,
+      "path": "comparison/process-open-dark-1440-overlay.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "process-open-dark-1440",
+      "mode": "diff-x4",
+      "available": true,
+      "path": "comparison/process-open-dark-1440-diff-x4.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "process-open-dark-1440",
+      "mode": "reference",
+      "available": true,
+      "path": "reference/process-open-dark-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "process-open-dark-1440",
+      "mode": "candidate",
+      "available": true,
+      "path": "candidate/process-open-dark-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "process-open-dark-1440",
+      "mode": "baseline",
+      "available": true,
+      "path": "baseline/process-open-dark-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "process-open-light-1440",
+      "mode": "side-by-side",
+      "available": true,
+      "path": "comparison/process-open-light-1440-side-by-side.png",
+      "width": 2880,
+      "height": 1032
+    },
+    {
+      "name": "process-open-light-1440",
+      "mode": "overlay",
+      "available": true,
+      "path": "comparison/process-open-light-1440-overlay.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "process-open-light-1440",
+      "mode": "diff-x4",
+      "available": true,
+      "path": "comparison/process-open-light-1440-diff-x4.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "process-open-light-1440",
+      "mode": "reference",
+      "available": true,
+      "path": "reference/process-open-light-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "process-open-light-1440",
+      "mode": "candidate",
+      "available": true,
+      "path": "candidate/process-open-light-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "process-open-light-1440",
+      "mode": "baseline",
+      "available": true,
+      "path": "baseline/process-open-light-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "reasoning-body-open-light-1440",
+      "mode": "side-by-side",
+      "available": true,
+      "path": "comparison/reasoning-body-open-light-1440-side-by-side.png",
+      "width": 2880,
+      "height": 1032
+    },
+    {
+      "name": "reasoning-body-open-light-1440",
+      "mode": "overlay",
+      "available": true,
+      "path": "comparison/reasoning-body-open-light-1440-overlay.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "reasoning-body-open-light-1440",
+      "mode": "diff-x4",
+      "available": true,
+      "path": "comparison/reasoning-body-open-light-1440-diff-x4.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "reasoning-body-open-light-1440",
+      "mode": "reference",
+      "available": true,
+      "path": "reference/reasoning-body-open-light-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "reasoning-body-open-light-1440",
+      "mode": "candidate",
+      "available": true,
+      "path": "candidate/reasoning-body-open-light-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "reasoning-body-open-light-1440",
+      "mode": "baseline",
+      "available": false
+    },
+    {
+      "name": "reasoning-open-light-1440",
+      "mode": "side-by-side",
+      "available": true,
+      "path": "comparison/reasoning-open-light-1440-side-by-side.png",
+      "width": 2880,
+      "height": 1032
+    },
+    {
+      "name": "reasoning-open-light-1440",
+      "mode": "overlay",
+      "available": true,
+      "path": "comparison/reasoning-open-light-1440-overlay.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "reasoning-open-light-1440",
+      "mode": "diff-x4",
+      "available": true,
+      "path": "comparison/reasoning-open-light-1440-diff-x4.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "reasoning-open-light-1440",
+      "mode": "reference",
+      "available": true,
+      "path": "reference/reasoning-open-light-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "reasoning-open-light-1440",
+      "mode": "candidate",
+      "available": true,
+      "path": "candidate/reasoning-open-light-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "reasoning-open-light-1440",
+      "mode": "baseline",
+      "available": false
+    },
+    {
+      "name": "settings-dark-1440",
+      "mode": "side-by-side",
+      "available": true,
+      "path": "comparison/settings-dark-1440-side-by-side.png",
+      "width": 2880,
+      "height": 1032
+    },
+    {
+      "name": "settings-dark-1440",
+      "mode": "overlay",
+      "available": true,
+      "path": "comparison/settings-dark-1440-overlay.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "settings-dark-1440",
+      "mode": "diff-x4",
+      "available": true,
+      "path": "comparison/settings-dark-1440-diff-x4.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "settings-dark-1440",
+      "mode": "reference",
+      "available": true,
+      "path": "reference/settings-dark-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "settings-dark-1440",
+      "mode": "candidate",
+      "available": true,
+      "path": "candidate/settings-dark-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "settings-dark-1440",
+      "mode": "baseline",
+      "available": true,
+      "path": "baseline/settings-dark-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "settings-dark-390",
+      "mode": "side-by-side",
+      "available": true,
+      "path": "comparison/settings-dark-390-side-by-side.png",
+      "width": 780,
+      "height": 876
+    },
+    {
+      "name": "settings-dark-390",
+      "mode": "overlay",
+      "available": true,
+      "path": "comparison/settings-dark-390-overlay.png",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "name": "settings-dark-390",
+      "mode": "diff-x4",
+      "available": true,
+      "path": "comparison/settings-dark-390-diff-x4.png",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "name": "settings-dark-390",
+      "mode": "reference",
+      "available": true,
+      "path": "reference/settings-dark-390.png",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "name": "settings-dark-390",
+      "mode": "candidate",
+      "available": true,
+      "path": "candidate/settings-dark-390.png",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "name": "settings-dark-390",
+      "mode": "baseline",
+      "available": true,
+      "path": "baseline/settings-dark-390.png",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "name": "settings-light-1440",
+      "mode": "side-by-side",
+      "available": true,
+      "path": "comparison/settings-light-1440-side-by-side.png",
+      "width": 2880,
+      "height": 1032
+    },
+    {
+      "name": "settings-light-1440",
+      "mode": "overlay",
+      "available": true,
+      "path": "comparison/settings-light-1440-overlay.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "settings-light-1440",
+      "mode": "diff-x4",
+      "available": true,
+      "path": "comparison/settings-light-1440-diff-x4.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "settings-light-1440",
+      "mode": "reference",
+      "available": true,
+      "path": "reference/settings-light-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "settings-light-1440",
+      "mode": "candidate",
+      "available": true,
+      "path": "candidate/settings-light-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "settings-light-1440",
+      "mode": "baseline",
+      "available": true,
+      "path": "baseline/settings-light-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "settings-light-390",
+      "mode": "side-by-side",
+      "available": true,
+      "path": "comparison/settings-light-390-side-by-side.png",
+      "width": 780,
+      "height": 876
+    },
+    {
+      "name": "settings-light-390",
+      "mode": "overlay",
+      "available": true,
+      "path": "comparison/settings-light-390-overlay.png",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "name": "settings-light-390",
+      "mode": "diff-x4",
+      "available": true,
+      "path": "comparison/settings-light-390-diff-x4.png",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "name": "settings-light-390",
+      "mode": "reference",
+      "available": true,
+      "path": "reference/settings-light-390.png",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "name": "settings-light-390",
+      "mode": "candidate",
+      "available": true,
+      "path": "candidate/settings-light-390.png",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "name": "settings-light-390",
+      "mode": "baseline",
+      "available": true,
+      "path": "baseline/settings-light-390.png",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "name": "tools-open-light-1440",
+      "mode": "side-by-side",
+      "available": true,
+      "path": "comparison/tools-open-light-1440-side-by-side.png",
+      "width": 2880,
+      "height": 1032
+    },
+    {
+      "name": "tools-open-light-1440",
+      "mode": "overlay",
+      "available": true,
+      "path": "comparison/tools-open-light-1440-overlay.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "tools-open-light-1440",
+      "mode": "diff-x4",
+      "available": true,
+      "path": "comparison/tools-open-light-1440-diff-x4.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "tools-open-light-1440",
+      "mode": "reference",
+      "available": true,
+      "path": "reference/tools-open-light-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "tools-open-light-1440",
+      "mode": "candidate",
+      "available": true,
+      "path": "candidate/tools-open-light-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "tools-open-light-1440",
+      "mode": "baseline",
+      "available": false
+    },
+    {
+      "name": "workspace-menu-light-1440",
+      "mode": "side-by-side",
+      "available": true,
+      "path": "comparison/workspace-menu-light-1440-side-by-side.png",
+      "width": 2880,
+      "height": 1032
+    },
+    {
+      "name": "workspace-menu-light-1440",
+      "mode": "overlay",
+      "available": true,
+      "path": "comparison/workspace-menu-light-1440-overlay.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "workspace-menu-light-1440",
+      "mode": "diff-x4",
+      "available": true,
+      "path": "comparison/workspace-menu-light-1440-diff-x4.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "workspace-menu-light-1440",
+      "mode": "reference",
+      "available": true,
+      "path": "reference/workspace-menu-light-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "workspace-menu-light-1440",
+      "mode": "candidate",
+      "available": true,
+      "path": "candidate/workspace-menu-light-1440.png",
+      "width": 1440,
+      "height": 1000
+    },
+    {
+      "name": "workspace-menu-light-1440",
+      "mode": "baseline",
+      "available": false
+    }
+  ],
+  "html_sha256": "6e16d017c63a6483fd780204c76a49d18c00114601baa46fdb5ca9e8615b6995",
+  "browser": "155.0.8059.85",
+  "pageErrors": []
+}

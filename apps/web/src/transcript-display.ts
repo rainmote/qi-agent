@@ -10,7 +10,7 @@ export function transcriptView(value: string | null): TranscriptView {
   return transcriptViews.find(view => view.id === value)?.id || "standard";
 }
 export type TurnControl = {
-  id: string; kind: "turn-control"; open: boolean; label: string; members: string[];
+  id: string; kind: "turn-control"; open: boolean; label: string; caption: string; members: string[];
 };
 
 /** Fold only settled, uninterrupted turns; retain answers, decisions and failure outcomes. */
@@ -52,10 +52,15 @@ export function displayTranscript(model: TimelineModel, mode: TranscriptView,
       if (!result) missing++; else if (result.data.ok === false) failed++;
     }
     const summary = [failed ? `${failed} 失败` : "", missing ? `${missing} 项结果未确认` : ""].filter(Boolean);
+    const startedAt = segment.find(row => "event" in row)?.event.at;
+    const endedAt = "event" in outcome ? outcome.event.at : undefined;
+    const elapsed = startedAt && endedAt ? Date.parse(endedAt) - Date.parse(startedAt) : NaN;
+    const duration = Number.isFinite(elapsed) ? `，用时 ${Math.max(1, Math.round(elapsed / 1000))}秒` : "";
     let inserted = false;
     for (const row of segment) {
       if (!inserted && (process.has(row.id) || row.id === finalId)) {
         rows.push({ id, kind: "turn-control", open,
+          caption: `已完成${duration}${summary.length ? ` · ${summary.join(" · ")}` : ""}`,
           members: segment.flatMap(member => [member.id, ...(member.kind === "tools" ? member.batch.calls.map(call => `call:${call.id}`) : [])]),
           label: `工作步骤 · ${count} 项${summary.length ? ` · ${summary.join(" · ")}` : ""}` });
         inserted = true;

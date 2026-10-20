@@ -1,11 +1,14 @@
 # Third-party notices
 
-The Web presentation in `apps/web/src/harness.css` adapts layout measurements and
-theme values from [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness),
-commit `687f282e8625c6b8d11ff58211a90524be2e4317`. The transcript presentation also
-follows its documented folding behavior. qi-agent keeps its own artwork, runtime,
-protocol, authorization and approval policy. No DeepSeek trademark or account UI
-is used to imply affiliation.
+The Web presentation adapts code and assets from [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), commit `687f282e8625c6b8d11ff58211a90524be2e4317`:
+
+- `apps/web/src/vendor/harness-icons/`: product and permission SVG components from `packages/client/ui-primitives/src/` (MIT).
+- `apps/web/src/vendor/harness-rank-by-name.ts`: model search ranking from `packages/client/ui-primitives/src/rank-by-name.ts` (MIT).
+- `apps/web/src/MenuSurface.tsx`: plain Web menu material adapted from `packages/client/ui-primitives/src/MenuSurface.tsx` (MIT).
+- `apps/web/src/assets/harness/{design-platform,base,gradient-shadow-text,brand-font,corner-shape}.css` and `harness.css`: theme, typography, curvature, elevation and measured layout adaptations (MIT).
+- `apps/web/src/assets/harness/montserrat-*.woff2`: Montserrat 300/400/500 fonts, under the SIL Open Font License 1.1, reproduced in `Montserrat-OFL.txt`.
+
+qi-agent keeps its own identifying brand mark and name, runtime, protocol, authorization and approval policy. DeepSeek's branding guidelines do not grant trademark rights; the interface must not imply that qi-agent is an official DeepSeek product. Shared non-brand UI artwork follows the MIT grant below. Built Web bundles include these notices under `licenses/` via Vite's public directory.
 
 MIT License
 

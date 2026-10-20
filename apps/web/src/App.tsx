@@ -2,14 +2,15 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { uncertainOperation, type PendingOperation, api, type Bootstrap } from "./api";
 import { RequestScope } from "./request-scope";
 import { BrandMark } from "./BrandMark";
-import { ComposerTools, ContextMeter, ModelControl, PermissionControl } from "./ComposerControls";
+import { useComposerPopover, SidebarMenu, ComposerTools, SessionActions, ContextMeter, ModelControl, PermissionControl } from "./ComposerControls";
 import { useProjectTrust } from "./ProjectTrust";
 import { ApprovalPanel, FullAccessDialog, SettingsDialog, WorkspaceDialog } from "./Dialogs";
 import { Icon } from "./icons";
+import { MenuSurface } from "./MenuSurface";
 import { applyHostEvent, fromSnapshot, type Projection } from "./projection";
 import { Timeline } from "./Timeline";
 import { RunOverview } from "./RunOverview";
-import { SubagentPanel } from "./SubagentPanel";
+import { SubagentMenu, SubagentPanel } from "./SubagentPanel";
 import { transcriptView, type TranscriptView } from "./transcript-display";
 import { Trajectory } from "./Trajectory";
 import { WorkspacePanel } from "./WorkspacePanel";
@@ -44,6 +45,16 @@ function readNavigation(data: Bootstrap) {
   const explicit = route.has("workspace") || route.has("session");
   const session = explicit ? sessions.find(session => session.id === requestedSession) : sessions[0];
   return { workspaceId, session, missing: Boolean((requestedWorkspace && requestedWorkspace !== workspaceId) || (requestedSession && !session)) };
+}
+
+function sessionAge(at: string | null | undefined): string {
+  if (!at) return "";
+  const elapsed = Date.now() - Date.parse(at);
+  if (!Number.isFinite(elapsed)) return "";
+  if (elapsed < 60_000) return "刚刚";
+  if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)}分钟`;
+  if (elapsed < 86_400_000) return `${Math.floor(elapsed / 3_600_000)}小时`;
+  return `${Math.floor(elapsed / 86_400_000)}天`;
 }
 
 function phaseLabel(phase: string) {
@@ -90,12 +101,24 @@ export function PresetSelector({ presets, value, onChange }: {
   value: AgentPresetId;
   onChange: (value: AgentPresetId) => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const popover = useComposerPopover(open, () => setOpen(false), true, "below");
   const selected = presets.find((preset) => preset.id === value);
   const description = selected ? `${presetDescription(selected)}。会话创建后保持不变。` : undefined;
-  return <select className="toolbar-select preset-select" aria-label="Agent 模式" aria-description={description}
-    title={description} value={value} onChange={(event) => onChange(event.target.value as AgentPresetId)}>
-    {presets.map((preset) => <option key={preset.id} value={preset.id} title={presetDescription(preset)}>{preset.name}</option>)}
-  </select>;
+  return <div className="draft-preset" ref={popover.root} onKeyDown={popover.onKeyDown}>
+    <button type="button" className="preset-trigger" ref={popover.trigger} aria-label="Agent 模式" aria-description={description}
+      title={description} data-preset-id={value} aria-haspopup="menu" aria-expanded={open} disabled={!presets.length}
+      onClick={() => setOpen(value => !value)}><Icon name="bot" /><span>{selected?.name || "选择模式"}</span><Icon name="chevronDown" /></button>
+    {open && <MenuSurface ref={popover.panel} className="composer-popover preset-menu" role="menu" aria-label="Agent 模式">
+      <div className="menu-viewport">{presets.map(preset => <div className="menu-item-wrap" key={preset.id}>
+        <button type="button" role="menuitemradio" aria-checked={preset.id === value} data-preset-id={preset.id}
+          onClick={() => { popover.dismiss(); if (preset.id !== value) onChange(preset.id); }}>
+          <span className="preset-option-copy"><span className="preset-option-name">{preset.name}</span><span className="preset-option-description">{presetDescription(preset)}</span></span>
+          {preset.id === value && <Icon name="check" />}
+        </button>
+      </div>)}</div>
+    </MenuSurface>}
+  </div>;
 }
 
 function presetDescription(preset: AgentPresetSummary): string {
@@ -111,17 +134,19 @@ export function WorkspaceSelector({ workspaces, value, onChange, onAdd }: {
   onChange: (value: string) => void;
   onAdd: () => void;
 }) {
-  return <div className="workspace-context-row">
-    <label className="workspace-context-select">
-      <Icon name="folder" />
-      <select value={value} aria-label="选择工作区" onChange={(event) => onChange(event.target.value)}>
-        <option value="" disabled>选择工作区</option>
-        {workspaces.map((workspace) => <option value={workspace.id} key={workspace.id}>{workspace.name}</option>)}
-      </select>
-      <Icon name="chevron" />
-    </label>
-    <button type="button" className="workspace-context-add" onClick={onAdd}
-      aria-label="添加新的工作区" title="添加工作区"><Icon name="plus" /></button>
+  const [open, setOpen] = useState(false);
+  const popover = useComposerPopover(open, () => setOpen(false), true, "below");
+  const selected = workspaces.find(workspace => workspace.id === value);
+  return <div className="workspace-context-row" ref={popover.root} onKeyDown={popover.onKeyDown}>
+    <button type="button" ref={popover.trigger} className="workspace-context-select" aria-label="选择工作区" aria-haspopup="menu" aria-expanded={open}
+      onClick={() => setOpen(value => !value)}><Icon name={selected ? "folderOpen" : "folderClosed"} /><span>{selected?.name || "选择工作区"}</span><Icon name="chevronDown" /></button>
+    {open && <MenuSurface ref={popover.panel} className="composer-popover workspace-menu" role="menu" aria-label="工作区">
+      <div className="menu-viewport">
+      {workspaces.map(workspace => <button type="button" role="menuitemradio" aria-checked={workspace.id === value} key={workspace.id}
+        onClick={() => { popover.dismiss(); if (workspace.id !== value) onChange(workspace.id); }}><Icon name="folderClosed" /><span>{workspace.name}</span>{workspace.id === value && <Icon name="check" />}</button>)}
+      </div>
+      <div className="menu-footer"><button type="button" role="menuitem" onClick={() => { popover.dismiss(); onAdd(); }}><Icon name="plus" /><span>添加工作区…</span></button></div>
+    </MenuSurface>}
   </div>;
 }
 
@@ -146,6 +171,7 @@ export function App() {
   const [stopError, setStopError] = useState<string | null>(null);
   const noticeTimer = useRef<number | null>(null);
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null);
+  const bootstrapNavigation = useRef<{ workspaceId: string | null; sessionId: string | null } | null>(null);
   const [presets, setPresets] = useState<AgentPresetSummary[]>([]);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [activeSession, setActiveSession] = useState<SessionSummary | null>(null);
@@ -208,6 +234,7 @@ export function App() {
   }, [mobileSidebar]);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [returnToSettings, setReturnToSettings] = useState(false);
   const [stepsView, setStepsView] = useState<TranscriptView>(() => transcriptView(localStorage.getItem("qi-agent.transcript-view")));
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
   const [fullAccessDialogOpen, setFullAccessDialogOpen] = useState(false);
@@ -270,7 +297,11 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    const apply = () => document.body.dataset.theme = resolvedTheme(theme);
+    const apply = () => {
+      document.body.dataset.theme = resolvedTheme(theme);
+      const fontSize = Number(localStorage.getItem("qi-agent.content-font-size"));
+      if (Number.isInteger(fontSize) && fontSize >= 10 && fontSize <= 22) document.body.style.setProperty("--qi-content-font-size", `${fontSize}px`);
+    };
     apply();
     localStorage.setItem("qi-agent.theme", theme);
     const query = window.matchMedia("(prefers-color-scheme: dark)");
@@ -348,13 +379,15 @@ export function App() {
     void loadRuntime(session.id).catch((error) => { if (current()) showError(error); });
   }, [acceptSnapshot, loadRuntime, showError, catalogScope]);
 
-  const openSession = useCallback(async (session: SessionSummary, navigation: NavigationMode = "push") => {
+  const openSession = useCallback(async (session: SessionSummary, navigation: NavigationMode = "push", initialRouteCurrent?: () => boolean) => {
     const current = navigationScope.current.advance();
     trust.reset();
     setBusy(true);
     try {
       const opened = await api.openSession(session.id);
-      if (current()) acceptOpen(opened.session, opened.snapshot, opened.eventCursor, navigation);
+      if (current() && (!initialRouteCurrent || initialRouteCurrent())) {
+        acceptOpen(opened.session, opened.snapshot, opened.eventCursor, navigation);
+      }
     } catch (error) { if (current()) showError(error); }
     finally { if (current()) setBusy(false); }
   }, [acceptOpen, showError]);
@@ -370,8 +403,12 @@ export function App() {
       setPresets(available);
       setPendingPreset(initialPreset);
       const route = readNavigation(data);
+      bootstrapNavigation.current = { workspaceId: route.workspaceId, sessionId: route.session?.id || null };
       setWorkspaceId(route.workspaceId);
-      if (route.session) void openSession(route.session, "replace");
+      if (route.session) void openSession(route.session, "replace", () => {
+        const current = readNavigation(data);
+        return !current.missing && current.workspaceId === route.workspaceId && current.session?.id === route.session?.id;
+      });
       else writeNavigation(route.workspaceId, null, "replace");
       if (route.missing) flashNotice("历史位置中的会话或工作区已不可用，请重新选择。", 8_000);
     }).catch(showError);
@@ -467,11 +504,19 @@ export function App() {
     const restore = () => {
       const route = readNavigation(bootstrap);
       setSettingsOpen(false); setWorkspaceDialogOpen(false);
-      if (route.session) void openSession(route.session, "restore");
+      if (route.session) void openSession(route.session, route.missing ? "replace" : "restore");
       else resetSessionView(route.workspaceId, route.missing ? "replace" : "restore");
       if (route.missing) flashNotice("历史位置中的会话或工作区已不可用，请重新选择。", 8_000);
     };
     window.addEventListener("popstate", restore);
+    // Navigation may arrive after bootstrap picked a route but before this
+    // first subscription. Reconcile once, using the same allowed-route path.
+    const initial = bootstrapNavigation.current;
+    bootstrapNavigation.current = null;
+    if (initial) {
+      const route = readNavigation(bootstrap);
+      if (route.missing || route.workspaceId !== initial.workspaceId || (route.session?.id || null) !== initial.sessionId) restore();
+    }
     return () => window.removeEventListener("popstate", restore);
   }, [bootstrap, openSession, resetSessionView, flashNotice]);
 
@@ -751,11 +796,13 @@ export function App() {
     try {
       await api.rpc((activeSession || draftSession)!.id, "policy.select", { mode });
       if (current()) setPolicy((current) => current ? { ...current, mode } : current);
-    } catch (error) { if (current()) showError(error); }
+    } catch (error) { if (current()) { setPendingPolicy(null); showError(error); } }
   };
 
+  const needsFullAccessConfirmation = (mode: PolicyStatus["mode"]) =>
+    mode === "allow" && (pendingPolicy || policy?.mode) !== "allow";
   const requestPolicy = (mode: PolicyStatus["mode"]) => {
-    if (mode === "allow" && (pendingPolicy || policy?.mode) !== "allow") {
+    if (needsFullAccessConfirmation(mode)) {
       setFullAccessDialogOpen(true);
       return;
     }
@@ -815,9 +862,9 @@ export function App() {
     if (!input) return;
     const resize = () => {
       input.style.height = "0px";
-      const nextHeight = Math.max(44, Math.min(input.scrollHeight, 180));
+      const nextHeight = input.value ? Math.max(activeSession ? 36 : 52, Math.min(input.scrollHeight, 336)) : activeSession ? 36 : 52;
       input.style.height = `${nextHeight}px`;
-      input.style.overflowY = input.scrollHeight > 180 ? "auto" : "hidden";
+      input.style.overflowY = input.scrollHeight > 336 ? "auto" : "hidden";
     };
     resize();
     let width = input.clientWidth;
@@ -885,7 +932,7 @@ export function App() {
       <ComposerAttachments key={`${workspaceId}:${activeSession?.id || "draft"}`} workspaceId={workspaceId || ""}
         inputRef={attachmentInput} items={attachments} onChange={setAttachments} upload={api.uploadAttachment}
         disabled={!workspaceId || busy || !!pendingOperation} onBusyChange={setUploading}>
-      <textarea ref={composerInput} rows={1} value={composer} disabled={!workspaceId || busy} placeholder={workspaceId ? "描述你想要构建的内容，/ 调用指令，@ 文件或会话" : "选择一个工作区开始"}
+      <div className="composer-editor"><textarea ref={composerInput} rows={1} value={composer} disabled={!workspaceId || busy} placeholder={workspaceId ? activeSession ? "发消息或创建任务, / 调用指令, @ 文件或对话" : "描述你想要构建的内容, / 调用指令, @ 文件或对话" : "选择一个工作区开始"}
         aria-controls={commandSuggestions.length ? "command-suggestions" : undefined}
         onChange={(event) => setComposer(event.target.value)} onKeyDown={(event) => {
           if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
@@ -903,9 +950,13 @@ export function App() {
           }
           if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); }
         }} aria-label="给代理发送消息" />
+      {!composer && <span className="composer-placeholder" aria-hidden="true">{workspaceId ? activeSession ? "发消息或创建任务, / 调用指令, @ 文件或对话" : "描述你想要构建的内容, / 调用指令, @ 文件或对话" : "选择一个工作区开始"}</span>}</div>
       <div className="composer-footer">
         <div className="composer-left">
           <ComposerTools actions={[
+            { label: "分析项目", icon: "search", run: () => { setComposer("分析当前项目结构，指出最值得优先处理的问题，并给出执行建议。"); composerInput.current?.focus(); } },
+            { label: "定位问题", icon: "activity", run: () => { setComposer("检查当前项目中的失败测试和明显缺陷，定位根因并修复。"); composerInput.current?.focus(); } },
+            ...(creatorDraftPresetId(presets) ? [{ label: "创建 Agent", icon: "sparkles" as const, run: startCreatorDraft }] : []),
             { label: "添加附件", icon: "plus", disabled: !workspaceId || busy || uploading || !!pendingOperation || attachments.length >= 8, run: () => attachmentInput.current?.click() },
             { label: "引用文件 / 会话", icon: "copy", disabled: !workspaceId || busy, run: () => { setComposer(value => `${value}${value ? " " : ""}@`); composerInput.current?.focus(); } },
             { label: "命令", icon: "command", disabled: !workspaceId || busy, run: () => { setComposer(value => value.startsWith("/") ? value : "/"); composerInput.current?.focus(); } },
@@ -958,11 +1009,11 @@ export function App() {
           aria-label={mobileSidebar ? "收起导航" : sidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}><Icon name="panel" /></button>
       </div>
       <button className="new-session" type="button" onClick={startNewSession} disabled={!workspaceId || busy}>
-        <Icon name="plus" />{(!sidebarCollapsed || mobileSidebar) && <span>新会话</span>}
+        <Icon name="newChat" />{(!sidebarCollapsed || mobileSidebar) && <span>新会话</span>}
       </button>
       <nav className="sidebar-actions" aria-label="工作台入口">
         <button type="button" disabled={!activeSession} onClick={() => { setWorkbench("plugins"); setMobileSidebar(false); }} title="插件（打开会话后可用）">
-          <Icon name="command" />{(!sidebarCollapsed || mobileSidebar) && <span>插件</span>}</button>
+          <Icon name="plugin" />{(!sidebarCollapsed || mobileSidebar) && <span>插件</span>}</button>
         <button type="button" disabled={!activeSession} onClick={() => { setWorkbench("automation"); setMobileSidebar(false); }} title="自动化任务（打开会话后可用）">
           <Icon name="clock" />{(!sidebarCollapsed || mobileSidebar) && <span>自动化任务</span>}</button>
       </nav>
@@ -970,7 +1021,7 @@ export function App() {
         <div className="workspace-heading"><span>工作区</span><div>
           <button className={`icon-button compact ${searchOpen ? "active" : ""}`} type="button" onClick={() => setSearchOpen((value) => !value)} aria-label="搜索会话"><Icon name="search" /></button>
           <button className={`icon-button compact ${viewMenuOpen ? "active" : ""}`} type="button" onClick={() => setViewMenuOpen((value) => !value)} aria-label="视图选项"><Icon name="sliders" /></button>
-          <button className="icon-button compact" type="button" onClick={() => setWorkspaceDialogOpen(true)} aria-label="添加工作区" title="添加工作区"><Icon name="plus" /></button>
+          <button className="icon-button compact" type="button" onClick={() => setWorkspaceDialogOpen(true)} aria-label="添加工作区" title="添加工作区"><Icon name="folderAdd" /></button>
         </div></div>
         <div className="sidebar-workspace">
           <label className="workspace-select"><Icon name="folder" /><select value={workspaceId || ""} aria-label="工作区"
@@ -986,11 +1037,12 @@ export function App() {
             onClick={() => { setSortBy("name"); setViewMenuOpen(false); }}>按名称</button>
         </div>}
         <nav className="session-nav" aria-label="会话列表">
+          {!activeSession && workspaceId && <div className="session-row active draft-session-row"><button type="button" className="draft-session-link" aria-current="page" onClick={() => composerInput.current?.focus()}>新会话</button></div>}
           {sessions.length ? sessions.map((session) => <div className={`session-row ${session.id === activeSession?.id ? "active" : ""}`} key={session.id}>
             <button type="button" className="session-link" aria-current={session.id === activeSession?.id ? "page" : undefined}
               title={`${session.name || "未命名会话"} · ${session.messageCount} 条消息`} onClick={() => void openSession(session)}>
               <span className="session-title">{session.name || "未命名会话"}</span>
-              <span className="session-meta">{session.messageCount} 条消息 · {session.updatedAt ? new Date(session.updatedAt).toLocaleDateString() : "刚刚"}</span>
+              <span className="session-meta">{sessionAge(session.updatedAt)}</span>
             </button>
             <button type="button" className="session-more" aria-label={`会话操作: ${session.name || "未命名会话"}`}
               onClick={() => setSessionMenu((current) => current === session.id ? null : session.id)}><Icon name="more" /></button>
@@ -1002,48 +1054,44 @@ export function App() {
           </div>) : <div className="empty-nav">{search ? "没有匹配的会话" : "暂无会话"}</div>}
         </nav>
       </>}
-      <button className="sidebar-settings" type="button" onClick={() => setSettingsOpen(true)} aria-label="设置"><Icon name="settings" />{(!sidebarCollapsed || mobileSidebar) && <span>设置</span>}</button>
+      <div className="rail-workspace-actions">
+        <button type="button" aria-label="添加工作区" onClick={() => setWorkspaceDialogOpen(true)}><Icon name="folderAdd" /></button>
+        <button type="button" aria-label="搜索会话" onClick={() => { setSearchOpen(true); setMobileSidebar(true); requestAnimationFrame(() => sidebarElement.current?.querySelector<HTMLInputElement>(".session-search")?.focus()); }}><Icon name="search" /></button>
+      </div>
+      <SidebarMenu collapsed={sidebarCollapsed && !mobileSidebar} onSettings={() => { setMobileSidebar(false); setSettingsOpen(true); }} onWorkspace={() => { setMobileSidebar(false); setWorkspaceDialogOpen(true); }} />
     </aside>
     {mobileSidebar && <button className="mobile-scrim" aria-label="关闭导航" onClick={() => setMobileSidebar(false)} />}
 
     <main ref={mainElement} className="main-panel">
       {!activeSession ? <section className="new-session-view">
-        <button className="mobile-nav-button" type="button" onClick={() => setMobileSidebar(true)} aria-label="打开导航"><Icon name="menu" /></button>
+        <button className="mobile-nav-button" type="button" onClick={() => setMobileSidebar(true)} aria-label="打开导航"><BrandMark size={24} /></button>
         <div className="new-session-center">
           <div className="welcome-copy">
-            <BrandMark size={34} /><h1>探索未至之境</h1>
+            <BrandMark size={34} /><div className="welcome-title-group"><h1>探索未至之境</h1><span className="preview-badge">预览版</span></div>
           </div>
           <div className="draft-workbench">
             <div className="draft-context">
               <WorkspaceSelector workspaces={bootstrap?.workspaces || []} value={workspaceId || ""}
                 onChange={id => resetSessionView(id)} onAdd={() => setWorkspaceDialogOpen(true)} />
-              <label className="draft-preset"><Icon name="bot" />
-                <PresetSelector presets={presets} value={pendingPreset} onChange={setPendingPreset} /><Icon name="chevron" />
-              </label>
+              <PresetSelector presets={presets} value={pendingPreset} onChange={setPendingPreset} />
             </div>
             {composerNode}
-            <div className="starter-actions" aria-label="快捷开始">
-              <button type="button" title="快速了解结构与风险" onClick={() => { setComposer("分析当前项目结构，指出最值得优先处理的问题，并给出执行建议。"); requestAnimationFrame(() => composerInput.current?.focus()); }}>
-                <Icon name="search" /><span>分析项目</span>
-              </button>
-              <button type="button" title="检查测试与明显缺陷" onClick={() => { setComposer("检查当前项目中的失败测试和明显缺陷，定位根因并修复。"); requestAnimationFrame(() => composerInput.current?.focus()); }}>
-                <Icon name="activity" /><span>定位问题</span>
-              </button>
-              {creatorDraftPresetId(presets) && <button type="button" className="creator-draft-button" title="用创造模式起草 Agent"
-                onClick={startCreatorDraft}><Icon name="sparkles" /><span>创建 Agent</span></button>}
-            </div>
+
           </div>
         </div>
       </section> : <section className="session-view">
         <header className="session-header">
-          <button className="mobile-nav-button" type="button" onClick={() => setMobileSidebar(true)} aria-label="打开导航"><Icon name="menu" /></button>
+          <button className="mobile-nav-button" type="button" onClick={() => setMobileSidebar(true)} aria-label="打开导航"><BrandMark size={24} /></button>
           <div className="session-header-title"><span className={`connection-status ${connected ? "online" : ""}`} title={connected ? "实时连接" : "正在重连"}>
             <span className="connection-dot" />{connected ? "已连接" : "重连中"}</span>
             <button type="button" onClick={() => void renameSession()}>{activeSession.name || "未命名会话"}</button>
-            <span>{presets.find((preset) => preset.id === activeSession.presetId)?.name
-              || activeSession.presetId || "旧版默认模式"}</span></div>
+            {activeSession.presetId && <span className="session-preset"><Icon name="bot" />{presets.find((preset) => preset.id === activeSession.presetId)?.name
+              || activeSession.presetId}</span>}
+            {!!subagents?.jobs.length && <SubagentMenu jobs={subagents.jobs} />}
+          </div>
           <div className="session-header-actions">
-            {subagents?.jobs.length ? <span className="job-pill">{subagents.jobs.filter((job) => job.status === "running").length} 个后台任务</span> : null}
+            <SessionActions key={activeSession.id} onRename={() => void renameSession()}
+              onFork={() => void forkSession()} onArchive={() => void archiveSession(activeSession)} />
             <div className="view-tabs" role="tablist" aria-label="会话视图"><button type="button" role="tab" aria-selected={conversationView === "chat"}
               onClick={() => setConversationView("chat")}>对话</button><button type="button" role="tab" aria-selected={conversationView === "trajectory"}
                 onClick={() => setConversationView("trajectory")}>轨迹</button></div>
@@ -1051,22 +1099,29 @@ export function App() {
               aria-expanded={detailsOpen} onClick={() => setDetailsOpen((value) => !value)}><Icon name="panel" /></button>
           </div>
         </header>
+        {(phase !== "idle" || pendingOperation || stopping) && <RunOverview phase={pendingOperation ? `${stopping ? "正在停止" : phaseLabel(phase)} · 操作结果待核对`
+          : stopping ? "stopping" : phase === "compacting" && projection?.state.compaction
+            ? `${phaseLabel(phase)} ${projection.state.compaction["completed-chunks"]}/${projection.state.compaction["total-chunks"]}` : phase}
+          turns={projection?.summary.turns ?? 0} steps={projection?.summary.steps ?? 0}
+          calls={projection?.summary.calls ?? 0} waitingCount={projection?.interactions.length ?? 0}
+          context={contextStatus} />}
+        <div className={`timeline ${conversationView === "trajectory" ? "trajectory-mode" : ""}`} ref={timeline} tabIndex={0} aria-label="会话内容">
+          {conversationView === "chat" && projection && <Timeline key={activeSession.id} projection={projection} scrollRef={timeline} pluginSlots={pluginSlots} view={stepsView} />}
+          {conversationView === "trajectory" && <Trajectory key={activeSession.id} events={projection?.events || []} />}
+        </div>
+        <div className="composer-wrap">{composerNode}<div className="session-run-summary">{runSummary}</div></div>
+      </section>}
+    </main>
+
+    {detailsOpen && activeSession && <aside className="details-panel">
+      <header><h2>会话日志</h2><button className="icon-button" type="button" onClick={() => setDetailsOpen(false)} aria-label="关闭详情"><Icon name="x" /></button></header>
         <RunOverview phase={pendingOperation ? `${stopping ? "正在停止" : phaseLabel(phase)} · 操作结果待核对`
           : stopping ? "stopping" : phase === "compacting" && projection?.state.compaction
             ? `${phaseLabel(phase)} ${projection.state.compaction["completed-chunks"]}/${projection.state.compaction["total-chunks"]}` : phase}
           turns={projection?.summary.turns ?? 0} steps={projection?.summary.steps ?? 0}
           calls={projection?.summary.calls ?? 0} waitingCount={projection?.interactions.length ?? 0}
           context={contextStatus} />
-        <div className={`timeline ${conversationView === "trajectory" ? "trajectory-mode" : ""}`} ref={timeline} tabIndex={0} aria-label="会话内容">
-          {conversationView === "chat" && projection && <Timeline key={activeSession.id} projection={projection} scrollRef={timeline} pluginSlots={pluginSlots} view={stepsView} />}
-          {conversationView === "trajectory" && <Trajectory key={activeSession.id} events={projection?.events || []} />}
-        </div>
-        <div className="composer-wrap"><SubagentPanel jobs={subagents?.jobs || []} />{composerNode}<div className="session-run-summary">{runSummary}</div></div>
-      </section>}
-    </main>
-
-    {detailsOpen && activeSession && <aside className="details-panel">
-      <header><h2>会话日志</h2><button className="icon-button" type="button" onClick={() => setDetailsOpen(false)} aria-label="关闭详情"><Icon name="x" /></button></header>
+      <section aria-label="运行摘要"><p>{runSummary}</p></section>
       <section><h3>会话</h3><dl><div><dt>工作区</dt><dd>{activeWorkspace?.name}</dd></div><div><dt>连接</dt><dd>{connected ? "实时" : "重连中"}</dd></div>
         <div><dt>状态</dt><dd>{phaseLabel(phase)}</dd></div><div><dt>事件</dt><dd>{projection?.events.length || 0}</dd></div></dl></section>
       <section><h3>子代理</h3>{subagents?.jobs.length ? <SubagentPanel jobs={subagents.jobs} /> : <p>暂无子代理任务</p>}</section>
@@ -1096,11 +1151,22 @@ export function App() {
     </section>}
 
     {trust.dialog}
-    {fullAccessDialogOpen && <FullAccessDialog onClose={() => setFullAccessDialogOpen(false)}
-      onConfirm={() => { setFullAccessDialogOpen(false); void selectPolicy("allow"); }} />}
+    {fullAccessDialogOpen && <FullAccessDialog onClose={() => {
+      setFullAccessDialogOpen(false);
+      if (returnToSettings) { setReturnToSettings(false); setSettingsOpen(true); requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(".settings-content .permission-trigger")?.focus()); }
+    }}
+      onConfirm={() => {
+        setFullAccessDialogOpen(false);
+        if (returnToSettings) { setReturnToSettings(false); setSettingsOpen(true); requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(".settings-content .permission-trigger")?.focus()); }
+        void selectPolicy("allow");
+      }} />}
     {settingsOpen && <SettingsDialog workspaces={bootstrap?.workspaces || []} runtime={runtime}
       view={stepsView} onViewChange={value => { setStepsView(value); localStorage.setItem("qi-agent.transcript-view", value); }}
       theme={theme} onThemeChange={setTheme} onClose={() => setSettingsOpen(false)}
+      policy={policy} onPolicyChange={mode => {
+        if (needsFullAccessConfirmation(mode)) { setReturnToSettings(true); setSettingsOpen(false); }
+        requestPolicy(mode);
+      }}
       onProvidersChanged={async () => {
         const current = captureOperation();
         const modelCurrent = modelScope.current.capture();

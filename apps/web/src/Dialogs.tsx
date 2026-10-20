@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 
 import { createPortal } from "react-dom";
 import { api } from "./api";
 import { Icon } from "./icons";
+import { PermissionControl, SettingsLanguageControl } from "./ComposerControls";
+import type { PolicyStatus } from "./types";
 import { ProviderSettingsPanel } from "./ProviderSettingsPanel";
 import type { Interaction, ProjectTrust, RuntimeStatus, Workspace } from "./types";
 import { transcriptViews, type TranscriptView } from "./transcript-display";
@@ -26,7 +28,7 @@ function DialogFrame({ title, children, onClose, className = "", dangerous = fal
       document.body.style.overflow = overflow;
       const box = opener?.getBoundingClientRect();
       if (opener?.isConnected && box && box.right > 0 && box.left < innerWidth) opener.focus();
-      else root?.querySelector<HTMLElement>("main .mobile-nav-button")?.focus();
+      else root?.querySelector<HTMLElement>(".sidebar-settings")?.focus();
     };
   }, []);
   const trap = (event: KeyboardEvent) => {
@@ -163,9 +165,41 @@ export function WorkspaceDialog({ initialPath, onClose, onSelect }: {
 
 type SettingsTab = "general" | "models" | "plugins" | "tools";
 
+function ContentFontControl() {
+  const [size, setSize] = useState(() => {
+    const stored = typeof localStorage === "undefined" ? 14 : Number(localStorage.getItem("qi-agent.content-font-size"));
+    return Number.isInteger(stored) && stored >= 10 && stored <= 22 ? stored : 14;
+  });
+  const [draft, setDraft] = useState(String(size));
+  const apply = (n: number) => {
+    if (!Number.isInteger(n) || n < 10 || n > 22) return;
+    setSize(n);
+    localStorage.setItem("qi-agent.content-font-size", String(n));
+    document.body.style.setProperty("--qi-content-font-size", `${n}px`);
+  };
+  const step = (delta: number) => {
+    const n = Math.max(10, Math.min(22, size + delta));
+    setDraft(String(n)); apply(n);
+  };
+  return <div className="content-font-control">
+    <span className="content-font-stepper">
+      <input type="number" min={10} max={22} aria-label="会话字号" value={draft}
+        onChange={event => { setDraft(event.target.value); apply(Number(event.target.value)); }}
+        onBlur={() => setDraft(String(size))} />
+      {/* Match the reference's normal-flow value; focus reveals the existing direct editor. */}
+      <span className="content-font-value" aria-hidden="true">{draft}</span>
+      <span className="content-font-arrows">
+        <button type="button" aria-label="增大会话字号" disabled={size >= 22} onClick={() => step(1)}><Icon name="chevronUp" /></button>
+        <button type="button" aria-label="减小会话字号" disabled={size <= 10} onClick={() => step(-1)}><Icon name="chevronDown" /></button>
+      </span>
+    </span><span className="content-font-unit">px</span>
+  </div>;
+}
+
 export function SettingsDialog({ workspaces, runtime, theme, onThemeChange, onClose, view, onViewChange,
-  onAddWorkspace, onRemoveWorkspace, onProvidersChanged }: {
+  onAddWorkspace, onRemoveWorkspace, onProvidersChanged, policy, onPolicyChange }: {
   workspaces: Workspace[]; runtime: RuntimeStatus | null;
+  policy?: PolicyStatus | null; onPolicyChange?: (mode: PolicyStatus["mode"]) => void;
   theme: "dark" | "light" | "system"; onThemeChange: (theme: "dark" | "light" | "system") => void;
   view: TranscriptView; onViewChange: (view: TranscriptView) => void;
   onClose: () => void; onAddWorkspace: () => void;
@@ -173,10 +207,10 @@ export function SettingsDialog({ workspaces, runtime, theme, onThemeChange, onCl
   onProvidersChanged?: () => Promise<void> | void;
 }) {
   const [tab, setTab] = useState<SettingsTab>("general");
-  const tabs: Array<{ id: SettingsTab; label: string; icon: "settings" | "sparkles" | "command" | "terminal" }> = [
-    { id: "general", label: "通用设置", icon: "settings" },
-    { id: "models", label: "模型", icon: "sparkles" },
-    { id: "plugins", label: "插件", icon: "command" },
+  const tabs: Array<{ id: SettingsTab; label: string; icon: "settingsGeneral" | "settingsModels" | "settingsPlugins" | "terminal" }> = [
+    { id: "general", label: "通用设置", icon: "settingsGeneral" },
+    { id: "models", label: "模型", icon: "settingsModels" },
+    { id: "plugins", label: "插件", icon: "settingsPlugins" },
     { id: "tools", label: "工具", icon: "terminal" },
   ];
   return <DialogFrame title="设置" onClose={onClose} className="settings-dialog">
@@ -191,11 +225,20 @@ export function SettingsDialog({ workspaces, runtime, theme, onThemeChange, onCl
       </nav>
       <div className="settings-content">
         {tab === "general" && <>
-          <section className="settings-option-row"><div><h3>外观</h3><p>选择界面的明暗模式</p></div>
+          <section className="settings-option-row"><div><h3>权限</h3><p>选择此会话的访问权限模式</p></div>
+            {policy && onPolicyChange ? <PermissionControl policy={policy} onChange={onPolicyChange} /> : <span>打开会话后可用</span>}
+          </section>
+          <section className="settings-option-row"><div><h3>语言</h3></div>
+            <SettingsLanguageControl />
+          </section>
+          <section className="settings-option-row appearance-row"><div><h3>外观</h3></div>
             <div className="theme-options">{(["light", "dark", "system"] as const).map((value) =>
               <button type="button" key={value} className={theme === value ? "active" : ""} aria-pressed={theme === value}
-                onClick={() => onThemeChange(value)}><Icon name={value === "dark" ? "moon" : value === "light" ? "sun" : "sliders"} />
+                onClick={() => onThemeChange(value)}><Icon name={value === "dark" ? "appearanceDark" : value === "light" ? "appearanceLight" : "appearanceSystem"} />
                 {value === "system" ? "跟随系统" : value === "light" ? "浅色" : "深色"}</button>)}</div>
+          </section>
+          <section className="settings-option-row"><div><h3>字号大小</h3><p>仅影响会话内容的字号</p></div>
+            <ContentFontControl />
           </section>
           <section className="settings-option-row"><div><h3>工作步骤展示</h3><p>选择希望看到多少工具调用细节</p></div>
             <select aria-label="工作步骤展示" value={view} onChange={event => onViewChange(event.target.value as TranscriptView)}>

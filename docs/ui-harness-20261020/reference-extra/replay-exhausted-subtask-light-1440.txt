@@ -1,0 +1,38 @@
+DSH 本地构建
+0.2.1-rc.2-687f282
+新会话
+⌥
+⌘
+N
+插件
+自动化任务
+工作区
+workspace
+Ask a research subagent to
+刚刚
+更多
+Ask a research subagent to
+标准模式
+1 个子智能体
+对话
+轨迹
+Ask a research subagent to explain event sourcing.
+10:06
+已完成
+已完成，用时 2秒
+
+Event sourcing is a pattern where all changes to an application's state are stored as an immutable, append-only sequence of events, rather than persisting only the current state, enabling full auditability, temporal queries, and event-driven architectures.
+
+10:06
+子任务状态更新
+10:06
+处理失败
+处理失败
+本轮运行失败llm-replay: script exhausted — session requested model call #2 but its script has only 1; re-record the scenario
+UNKNOWN
+发消息或创建任务, / 调用指令, @ 文件或对话
+工作区内修改
+DeepSeek-V4-Flash
+2 轮 2 步·36 tok/s
+7.9K tok·缓存命中 99%
+6%

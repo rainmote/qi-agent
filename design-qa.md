@@ -1,4 +1,16 @@
-# Design QA — Harness 对照改造
+# 2026-10-20 严格像素对照候选 — BLOCKED
+
+当前分支基线 `315860136df47f896ad61268ff29b408c2103351`；官方参考再次核实为 `687f282e8625c6b8d11ff58211a90524be2e4317`。本轮工程门禁通过，**严格全屏像素一致仍 blocked**。下方旧轮次的 passed 仅是历史范围，不能作为本轮严格验收结论。
+
+[完整报告](docs/ui-harness-20261020/README.md) · [可切换并排/叠加/原图索引](docs/ui-harness-20261020/index.html) · [全屏原始指标](docs/ui-harness-20261020/comparison/metrics.json) · [区域诊断](docs/ui-harness-20261020/comparison/regions.json) · [独立只读复核](docs/ui-harness-20261020/readonly-review.md) · [测试与源码指纹](docs/ui-harness-20261020/tested-source.json)。
+
+同 Chrome、DPR 1、字体、主题、视口与固定语义内容下：官方26、候选34、旧候选14张。首页浅色输入卡片五个视口的几何及原始像素一致；这不代表整个页面一致。新增模式菜单保留各自真实预设，官方4种、qi3种，内容差异明确计入。整屏指标无遮罩、无排除，26组原图仍有非零像素。品牌与真实后端功能差异、未定位的边缘/图标描边栅格残差及未验证的官方状态分别记录，不用百分比放宽验收。
+
+新会话重载后立即后退的失败和确定性修复前 red 已保留，早先可归档判断撤回。修复后类型、构建、75项UI、8项真实后端E2E和完整浏览器回归通过，提交后相关回归须另见最终交付收据。协议、command_id 幂等性、权限及人工审批边界保持，未推送或发布。
+
+---
+
+# 2026-10-19 Design QA — Harness 对照改造（历史）
 
 参考固定为 `deepseek-ai/deepseek-harness@687f282e8625c6b8d11ff58211a90524be2e4317`；实现基线为 qi-agent `d3173b5f01b86565bf300d54b7b24ea9d14d6060`。完整说明见 [对照报告](docs/webui-harness-comparison.md)。
 

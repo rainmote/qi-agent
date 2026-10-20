@@ -1,0 +1,119 @@
+{
+  "mode": "candidate",
+  "reference_sha": "687f282e8625c6b8d11ff58211a90524be2e4317",
+  "baseline_sha": "315860136df47f896ad61268ff29b408c2103351",
+  "tolerance_css_px": 0.1,
+  "passed": true,
+  "cases": [
+    {
+      "name": "new-session-light-1440",
+      "official": {
+        "x": 469.296875,
+        "y": 493,
+        "width": 774.390625,
+        "height": 114
+      },
+      "actual": {
+        "x": 469.296875,
+        "y": 493,
+        "width": 774.390625,
+        "height": 114
+      },
+      "delta_css_px": {
+        "x": 0.0,
+        "y": 0,
+        "width": 0.0,
+        "height": 0
+      },
+      "passed": true
+    },
+    {
+      "name": "new-session-light-1024",
+      "official": {
+        "x": 296,
+        "y": 415,
+        "width": 705,
+        "height": 114
+      },
+      "actual": {
+        "x": 296,
+        "y": 415,
+        "width": 705,
+        "height": 114
+      },
+      "delta_css_px": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0
+      },
+      "passed": true
+    },
+    {
+      "name": "new-session-light-768",
+      "official": {
+        "x": 72,
+        "y": 415,
+        "width": 673,
+        "height": 114
+      },
+      "actual": {
+        "x": 72,
+        "y": 415,
+        "width": 673,
+        "height": 114
+      },
+      "delta_css_px": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0
+      },
+      "passed": true
+    },
+    {
+      "name": "new-session-light-390",
+      "official": {
+        "x": 72,
+        "y": 415,
+        "width": 295,
+        "height": 114
+      },
+      "actual": {
+        "x": 72,
+        "y": 415,
+        "width": 295,
+        "height": 114
+      },
+      "delta_css_px": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0
+      },
+      "passed": true
+    },
+    {
+      "name": "new-session-light-320",
+      "official": {
+        "x": 72,
+        "y": 447,
+        "width": 225,
+        "height": 114
+      },
+      "actual": {
+        "x": 72,
+        "y": 447,
+        "width": 225,
+        "height": 114
+      },
+      "delta_css_px": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0
+      },
+      "passed": true
+    }
+  ]
+}

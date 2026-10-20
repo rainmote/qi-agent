@@ -1,0 +1,677 @@
+{
+  "viewport": {
+    "width": 1440,
+    "height": 1000,
+    "dpr": 1
+  },
+  "text": "qì\nagent\n新会话\n插件\n自动化任务\n工作区\nworkspace\nBegin your reply with the\nPrevious conversation\n设置\n已连接\nBegin your reply with the\n旧版默认模式\n对话\n轨迹\n就绪\n轮次\n1\n步数\n1\n工具调用\n1\n待确认\n0 项\n上下文\n未知\nBegin your reply with the plain sentence \"Reading the workspace now.\" as text, and in that same message call the bash tool with the command \"echo alpha\". After the tool result, reply with the single word DONE and stop.\n05:28\n工作步骤 · 2 项\n\nDONE\n\n05:28\n运行完成 · 尚未验收\nWorkspace Write\nDeepSeek-V4-Flash\n工具累计耗时 0.0s · 9 条轨迹",
+  "elements": [
+    {
+      "tag": "BUTTON",
+      "text": "qìagent",
+      "class": "brand-button",
+      "box": {
+        "x": 16,
+        "y": 12,
+        "width": 205,
+        "height": 40
+      },
+      "style": {
+        "font": "14px / 21px -apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "lineHeight": "21px",
+        "color": "rgb(15, 17, 21)",
+        "background": "rgba(0, 0, 0, 0)",
+        "border": "0px none rgb(15, 17, 21)",
+        "borderRadius": "0px",
+        "padding": "0px",
+        "gap": "normal",
+        "boxShadow": "none"
+      }
+    },
+    {
+      "tag": "BUTTON",
+      "text": "收起侧边栏",
+      "class": "icon-button sidebar-toggle",
+      "box": {
+        "x": 229,
+        "y": 15,
+        "width": 34,
+        "height": 34
+      },
+      "style": {
+        "font": "14px / 21px -apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "lineHeight": "21px",
+        "color": "rgb(78, 81, 88)",
+        "background": "rgba(0, 0, 0, 0)",
+        "border": "0px none rgb(78, 81, 88)",
+        "borderRadius": "8px",
+        "padding": "0px",
+        "gap": "normal",
+        "boxShadow": "none"
+      }
+    },
+    {
+      "tag": "BUTTON",
+      "text": "新会话",
+      "class": "new-session",
+      "box": {
+        "x": 14,
+        "y": 70,
+        "width": 251,
+        "height": 38
+      },
+      "style": {
+        "font": "500 14px / 21px -apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "lineHeight": "21px",
+        "color": "rgb(15, 17, 21)",
+        "background": "rgba(38, 49, 72, 0.1)",
+        "border": "1px solid rgba(0, 0, 0, 0.16)",
+        "borderRadius": "10px",
+        "padding": "0px 12px",
+        "gap": "8px",
+        "boxShadow": "none"
+      }
+    },
+    {
+      "tag": "BUTTON",
+      "text": "插件",
+      "class": "",
+      "box": {
+        "x": 12,
+        "y": 118,
+        "width": 255,
+        "height": 40
+      },
+      "style": {
+        "font": "14px / 21px -apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "lineHeight": "21px",
+        "color": "rgb(78, 81, 88)",
+        "background": "rgba(0, 0, 0, 0)",
+        "border": "0px none rgb(78, 81, 88)",
+        "borderRadius": "10px",
+        "padding": "0px 10px",
+        "gap": "10px",
+        "boxShadow": "none"
+      }
+    },
+    {
+      "tag": "BUTTON",
+      "text": "自动化任务",
+      "class": "",
+      "box": {
+        "x": 12,
+        "y": 160,
+        "width": 255,
+        "height": 40
+      },
+      "style": {
+        "font": "14px / 21px -apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "lineHeight": "21px",
+        "color": "rgb(78, 81, 88)",
+        "background": "rgba(0, 0, 0, 0)",
+        "border": "0px none rgb(78, 81, 88)",
+        "borderRadius": "10px",
+        "padding": "0px 10px",
+        "gap": "10px",
+        "boxShadow": "none"
+      }
+    },
+    {
+      "tag": "BUTTON",
+      "text": "搜索会话",
+      "class": "icon-button compact ",
+      "box": {
+        "x": 177,
+        "y": 217,
+        "width": 30,
+        "height": 30
+      },
+      "style": {
+        "font": "13px / 19.5px -apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "lineHeight": "19.5px",
+        "color": "rgb(78, 81, 88)",
+        "background": "rgba(0, 0, 0, 0)",
+        "border": "0px none rgb(78, 81, 88)",
+        "borderRadius": "6px",
+        "padding": "0px",
+        "gap": "normal",
+        "boxShadow": "none"
+      }
+    },
+    {
+      "tag": "BUTTON",
+      "text": "视图选项",
+      "class": "icon-button compact ",
+      "box": {
+        "x": 208,
+        "y": 217,
+        "width": 30,
+        "height": 30
+      },
+      "style": {
+        "font": "13px / 19.5px -apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "lineHeight": "19.5px",
+        "color": "rgb(78, 81, 88)",
+        "background": "rgba(0, 0, 0, 0)",
+        "border": "0px none rgb(78, 81, 88)",
+        "borderRadius": "6px",
+        "padding": "0px",
+        "gap": "normal",
+        "boxShadow": "none"
+      }
+    },
+    {
+      "tag": "BUTTON",
+      "text": "添加工作区",
+      "class": "icon-button compact",
+      "box": {
+        "x": 239,
+        "y": 217,
+        "width": 30,
+        "height": 30
+      },
+      "style": {
+        "font": "13px / 19.5px -apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "lineHeight": "19.5px",
+        "color": "rgb(78, 81, 88)",
+        "background": "rgba(0, 0, 0, 0)",
+        "border": "0px none rgb(78, 81, 88)",
+        "borderRadius": "6px",
+        "padding": "0px",
+        "gap": "normal",
+        "boxShadow": "none"
+      }
+    },
+    {
+      "tag": "SELECT",
+      "text": "workspace",
+      "class": "",
+      "box": {
+        "x": 42,
+        "y": 250,
+        "width": 225,
+        "height": 36
+      },
+      "style": {
+        "font": "13px -apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "lineHeight": "normal",
+        "color": "rgb(78, 81, 88)",
+        "background": "rgba(0, 0, 0, 0)",
+        "border": "0px none rgb(78, 81, 88)",
+        "borderRadius": "7px",
+        "padding": "0px 4px",
+        "gap": "normal",
+        "boxShadow": "none"
+      }
+    },
+    {
+      "tag": "BUTTON",
+      "text": "Begin your reply with the2 条消息 · 2026/10/20",
+      "class": "session-link",
+      "box": {
+        "x": 12,
+        "y": 288,
+        "width": 255,
+        "height": 32
+      },
+      "style": {
+        "font": "14px / 21px -apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "lineHeight": "21px",
+        "color": "rgb(15, 17, 21)",
+        "background": "rgba(0, 0, 0, 0)",
+        "border": "0px none rgb(15, 17, 21)",
+        "borderRadius": "10px",
+        "padding": "6px 32px 6px 28px",
+        "gap": "normal",
+        "boxShadow": "none"
+      }
+    },
+    {
+      "tag": "BUTTON",
+      "text": "会话操作: Begin your reply with the",
+      "class": "session-more",
+      "box": {
+        "x": 234,
+        "y": 291,
+        "width": 27,
+        "height": 27
+      },
+      "style": {
+        "font": "14px / 21px -apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "lineHeight": "21px",
+        "color": "rgb(109, 112, 120)",
+        "background": "rgba(0, 0, 0, 0)",
+        "border": "0px none rgb(109, 112, 120)",
+        "borderRadius": "6px",
+        "padding": "0px",
+        "gap": "normal",
+        "boxShadow": "none"
+      }
+    },
+    {
+      "tag": "BUTTON",
+      "text": "Previous conversation2 条消息 · 2026/10/20",
+      "class": "session-link",
+      "box": {
+        "x": 12,
+        "y": 322,
+        "width": 255,
+        "height": 32
+      },
+      "style": {
+        "font": "14px / 21px -apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "lineHeight": "21px",
+        "color": "rgb(15, 17, 21)",
+        "background": "rgba(0, 0, 0, 0)",
+        "border": "0px none rgb(15, 17, 21)",
+        "borderRadius": "10px",
+        "padding": "6px 32px 6px 28px",
+        "gap": "normal",
+        "boxShadow": "none"
+      }
+    },
+    {
+      "tag": "BUTTON",
+      "text": "设置",
+      "class": "sidebar-settings",
+      "box": {
+        "x": 8,
+        "y": 948,
+        "width": 263,
+        "height": 44
+      },
+      "style": {
+        "font": "14px / 21px -apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "lineHeight": "21px",
+        "color": "rgb(78, 81, 88)",
+        "background": "rgba(0, 0, 0, 0)",
+        "border": "0px none rgb(78, 81, 88)",
+        "borderRadius": "8px",
+        "padding": "0px 10px",
+        "gap": "10px",
+        "boxShadow": "none"
+      }
+    },
+    {
+      "tag": "BUTTON",
+      "text": "Begin your reply with the",
+      "class": "",
+      "box": {
+        "x": 300,
+        "y": 10,
+        "width": 153.90625,
+        "height": 30
+      },
+      "style": {
+        "font": "500 13px / 19.5px -apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "lineHeight": "19.5px",
+        "color": "rgb(15, 17, 21)",
+        "background": "rgba(0, 0, 0, 0)",
+        "border": "0px none rgb(15, 17, 21)",
+        "borderRadius": "0px",
+        "padding": "0px",
+        "gap": "normal",
+        "boxShadow": "none"
+      }
+    },
+    {
+      "tag": "BUTTON",
+      "text": "对话",
+      "class": "",
+      "box": {
+        "x": 300,
+        "y": 40,
+        "width": 28.53125,
+        "height": 36
+      },
+      "style": {
+        "font": "13px / 19.5px -apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "lineHeight": "19.5px",
+        "color": "rgb(15, 17, 21)",
+        "background": "rgba(0, 0, 0, 0)",
+        "border": "",
+        "borderRadius": "0px",
+        "padding": "0px 1px",
+        "gap": "normal",
+        "boxShadow": "none"
+      }
+    },
+    {
+      "tag": "BUTTON",
+      "text": "轨迹",
+      "class": "",
+      "box": {
+        "x": 352.53125,
+        "y": 40,
+        "width": 28.53125,
+        "height": 36
+      },
+      "style": {
+        "font": "13px / 19.5px -apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "lineHeight": "19.5px",
+        "color": "rgb(109, 112, 120)",
+        "background": "rgba(0, 0, 0, 0)",
+        "border": "",
+        "borderRadius": "0px",
+        "padding": "0px 1px",
+        "gap": "normal",
+        "boxShadow": "none"
+      }
+    },
+    {
+      "tag": "BUTTON",
+      "text": "会话信息",
+      "class": "header-action ",
+      "box": {
+        "x": 1384,
+        "y": 3,
+        "width": 44,
+        "height": 44
+      },
+      "style": {
+        "font": "12px / 18px -apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "lineHeight": "18px",
+        "color": "rgb(78, 81, 88)",
+        "background": "rgba(0, 0, 0, 0)",
+        "border": "0px none rgb(78, 81, 88)",
+        "borderRadius": "7px",
+        "padding": "0px",
+        "gap": "5px",
+        "boxShadow": "none"
+      }
+    },
+    {
+      "tag": "ARTICLE",
+      "text": "Begin your reply with the plain sentence \"Reading the workspace now.\" as text, and in that same message call the bash tool with the command \"echo alpha\". After ",
+      "class": "message message-user",
+      "box": {
+        "x": 488.796875,
+        "y": 129.5,
+        "width": 742.390625,
+        "height": 114
+      },
+      "style": {
+        "font": "14px / 21px -apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "lineHeight": "21px",
+        "color": "rgb(15, 17, 21)",
+        "background": "rgba(0, 0, 0, 0)",
+        "border": "0px none rgb(15, 17, 21)",
+        "borderRadius": "0px",
+        "padding": "0px",
+        "gap": "normal",
+        "boxShadow": "none"
+      }
+    },
+    {
+      "tag": "BUTTON",
+      "text": "复制",
+      "class": "",
+      "box": {
+        "x": 1167.671875,
+        "y": 215.5,
+        "width": 28,
+        "height": 28
+      },
+      "style": {
+        "font": "14px / 21px -apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "lineHeight": "21px",
+        "color": "rgb(109, 112, 120)",
+        "background": "rgba(0, 0, 0, 0)",
+        "border": "0px none rgb(109, 112, 120)",
+        "borderRadius": "6px",
+        "padding": "0px",
+        "gap": "normal",
+        "boxShadow": "none"
+      }
+    },
+    {
+      "tag": "BUTTON",
+      "text": "工作步骤 · 2 项",
+      "class": "turn-process-toggle",
+      "box": {
+        "x": 488.796875,
+        "y": 255.5,
+        "width": 106.59375,
+        "height": 36
+      },
+      "style": {
+        "font": "13px / 19.5px -apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "lineHeight": "19.5px",
+        "color": "rgb(109, 112, 120)",
+        "background": "rgba(0, 0, 0, 0)",
+        "border": "0px none rgb(109, 112, 120)",
+        "borderRadius": "0px",
+        "padding": "0px",
+        "gap": "6px",
+        "boxShadow": "none"
+      }
+    },
+    {
+      "tag": "ARTICLE",
+      "text": "DONE05:28",
+      "class": "message message-assistant",
+      "box": {
+        "x": 488.796875,
+        "y": 299.5,
+        "width": 742.390625,
+        "height": 52.5
+      },
+      "style": {
+        "font": "14px / 21px -apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "lineHeight": "21px",
+        "color": "rgb(15, 17, 21)",
+        "background": "rgba(0, 0, 0, 0)",
+        "border": "0px none rgb(15, 17, 21)",
+        "borderRadius": "0px",
+        "padding": "0px",
+        "gap": "normal",
+        "boxShadow": "none"
+      }
+    },
+    {
+      "tag": "P",
+      "text": "DONE",
+      "class": "",
+      "box": {
+        "x": 488.796875,
+        "y": 299.5,
+        "width": 742.390625,
+        "height": 24.5
+      },
+      "style": {
+        "font": "14px / 24.5px -apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "lineHeight": "24.5px",
+        "color": "rgb(15, 17, 21)",
+        "background": "rgba(0, 0, 0, 0)",
+        "border": "0px none rgb(15, 17, 21)",
+        "borderRadius": "0px",
+        "padding": "0px",
+        "gap": "normal",
+        "boxShadow": "none"
+      }
+    },
+    {
+      "tag": "BUTTON",
+      "text": "复制",
+      "class": "",
+      "box": {
+        "x": 488.796875,
+        "y": 324,
+        "width": 28,
+        "height": 28
+      },
+      "style": {
+        "font": "14px / 21px -apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "lineHeight": "21px",
+        "color": "rgb(109, 112, 120)",
+        "background": "rgba(0, 0, 0, 0)",
+        "border": "0px none rgb(109, 112, 120)",
+        "borderRadius": "6px",
+        "padding": "0px",
+        "gap": "normal",
+        "boxShadow": "none"
+      }
+    },
+    {
+      "tag": "DIV",
+      "text": "Workspace WriteDeepSeek-V4-Flash",
+      "class": "composer   ",
+      "box": {
+        "x": 472.796875,
+        "y": 872,
+        "width": 774.390625,
+        "height": 104
+      },
+      "style": {
+        "font": "14px / 21px -apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "lineHeight": "21px",
+        "color": "rgb(15, 17, 21)",
+        "background": "rgb(255, 255, 255)",
+        "border": "0px none rgb(15, 17, 21)",
+        "borderRadius": "28px",
+        "padding": "8px 0px 0px",
+        "gap": "normal",
+        "boxShadow": "rgba(0, 0, 0, 0.1) 0px 0px 0px 0.5px, rgba(0, 0, 0, 0.04) 0px 4px 12px 0px"
+      }
+    },
+    {
+      "tag": "TEXTAREA",
+      "text": "给代理发送消息",
+      "class": "",
+      "box": {
+        "x": 472.796875,
+        "y": 880,
+        "width": 774.390625,
+        "height": 44
+      },
+      "style": {
+        "font": "14px / 24px -apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "lineHeight": "24px",
+        "color": "rgb(15, 17, 21)",
+        "background": "rgba(0, 0, 0, 0)",
+        "border": "0px none rgb(15, 17, 21)",
+        "borderRadius": "0px",
+        "padding": "5px 14px 0px",
+        "gap": "normal",
+        "boxShadow": "none"
+      }
+    },
+    {
+      "tag": "BUTTON",
+      "text": "添加附件与工具",
+      "class": "toolbar-button",
+      "box": {
+        "x": 478.796875,
+        "y": 924,
+        "width": 44,
+        "height": 44
+      },
+      "style": {
+        "font": "14px / 21px -apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "lineHeight": "21px",
+        "color": "rgb(78, 81, 88)",
+        "background": "rgba(0, 0, 0, 0)",
+        "border": "0px none rgb(78, 81, 88)",
+        "borderRadius": "50%",
+        "padding": "0px",
+        "gap": "normal",
+        "boxShadow": "none"
+      }
+    },
+    {
+      "tag": "BUTTON",
+      "text": "Workspace Write",
+      "class": "composer-control-trigger permission-trigger",
+      "box": {
+        "x": 527.796875,
+        "y": 924,
+        "width": 144.078125,
+        "height": 44
+      },
+      "style": {
+        "font": "12px / 18px -apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "lineHeight": "18px",
+        "color": "rgb(109, 112, 120)",
+        "background": "rgba(0, 0, 0, 0)",
+        "border": "0px none rgb(109, 112, 120)",
+        "borderRadius": "15px",
+        "padding": "0px 7px",
+        "gap": "5px",
+        "boxShadow": "none"
+      }
+    },
+    {
+      "tag": "BUTTON",
+      "text": "DeepSeek-V4-Flash",
+      "class": "composer-control-trigger model-trigger",
+      "box": {
+        "x": 1050.078125,
+        "y": 924,
+        "width": 142.109375,
+        "height": 44
+      },
+      "style": {
+        "font": "12px / 18px -apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "lineHeight": "18px",
+        "color": "rgb(78, 81, 88)",
+        "background": "rgba(0, 0, 0, 0)",
+        "border": "0px none rgb(78, 81, 88)",
+        "borderRadius": "15px",
+        "padding": "0px 7px",
+        "gap": "5px",
+        "boxShadow": "none"
+      }
+    },
+    {
+      "tag": "BUTTON",
+      "text": "发送消息",
+      "class": "send-button ",
+      "box": {
+        "x": 1197.1875,
+        "y": 924,
+        "width": 44,
+        "height": 44
+      },
+      "style": {
+        "font": "14px / 21px -apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, sans-serif",
+        "lineHeight": "21px",
+        "color": "rgb(255, 255, 255)",
+        "background": "rgb(65, 118, 230)",
+        "border": "0px none rgb(255, 255, 255)",
+        "borderRadius": "50%",
+        "padding": "0px",
+        "gap": "normal",
+        "boxShadow": "none"
+      }
+    }
+  ]
+}

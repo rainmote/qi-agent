@@ -1,0 +1,55 @@
+{
+  "note": "Matching SVG markup, sampled computed styles and bounds do not prove identical rendered pixels. No pixels excluded from full metrics.",
+  "audits": [
+    {
+      "state": "new-session-light-1440",
+      "kind": "workspace-folder",
+      "normalized_svg_exact": true,
+      "normalization": "remove only CSS class attribute; retain all SVG paths and painting attributes",
+      "normalized_svg_sha256": [
+        "932ac9145918ec92959afebfddf88f2ca0a1335a865f8f0a1a9526764a1d8619",
+        "932ac9145918ec92959afebfddf88f2ca0a1335a865f8f0a1a9526764a1d8619"
+      ],
+      "geometry": {
+        "reference": {
+          "x": 481.296875,
+          "y": 463,
+          "width": 16,
+          "height": 16
+        },
+        "candidate": {
+          "x": 481.296875,
+          "y": 463,
+          "width": 16,
+          "height": 16
+        }
+      },
+      "computed_style_differences": {}
+    },
+    {
+      "state": "settings-light-1440",
+      "kind": "appearance-sun",
+      "normalized_svg_exact": true,
+      "normalization": "remove only CSS class attribute; retain all SVG paths and painting attributes",
+      "normalized_svg_sha256": [
+        "422907312224f0442b417b37a8ea5bfb21d73d45d87c7b8fa188feeacef7ba35",
+        "422907312224f0442b417b37a8ea5bfb21d73d45d87c7b8fa188feeacef7ba35"
+      ],
+      "geometry": {
+        "reference": {
+          "x": 615.328125,
+          "y": 367,
+          "width": 16,
+          "height": 16
+        },
+        "candidate": {
+          "x": 615.328125,
+          "y": 367,
+          "width": 16,
+          "height": 16
+        }
+      },
+      "computed_style_differences": {}
+    }
+  ]
+}

@@ -12,7 +12,7 @@ const commands = [
   { name: "model", description: "Select model" },
 ];
 
-test("new-session preset selector exposes standard and creator modes", () => {
+test("new-session preset selector filters broken modes and exposes the selected mode", () => {
   const presets = selectablePresets([
     { id: "broken", name: "Broken", order: 0, trust: "user", broken: true },
     { id: "creator", name: "创造模式", order: 2, trust: "system" },
@@ -25,9 +25,9 @@ test("new-session preset selector exposes standard and creator modes", () => {
     <PresetSelector presets={presets} value="creator" onChange={() => undefined} />,
   );
   assert.match(html, /aria-label="Agent 模式"/);
-  assert.match(html, /value="standard"/);
-  assert.match(html, /value="creator"[^>]*selected=""/);
-  assert.match(html, /标准模式/);
+  assert.match(html, /aria-haspopup="menu"/);
+  assert.match(html, /aria-expanded="false"/);
+  assert.match(html, /data-preset-id="creator"/);
   assert.match(html, /创造模式/);
 });
 
@@ -37,9 +37,8 @@ test("compact preset selector preserves mode descriptions and selected value", (
     { id: "creator", name: "创造模式", trust: "system" },
   ]} value="creator" onChange={() => undefined} />);
   assert.match(html, /aria-description="创建、检查并迭代 Agent preset 与运行时能力。会话创建后保持不变。"/);
-  assert.match(html, /适合编码、分析与日常项目协作/);
   assert.match(html, /创建、检查并迭代 Agent preset/);
-  assert.match(html, /value="creator"[^>]*selected=""/);
+  assert.match(html, /data-preset-id="creator"/);
 });
 
 test("creator draft entry is hidden when the creator preset is unavailable", () => {
@@ -49,14 +48,14 @@ test("creator draft entry is hidden when the creator preset is unavailable", () 
   ]), null);
 });
 
-test("workspace selector keeps adding a workspace beside selection", () => {
+test("workspace selector exposes the selected workspace and an accessible menu", () => {
   const html = renderToStaticMarkup(<WorkspaceSelector workspaces={[
     { id: "workspace-1", name: "qì agent", path: "/workspace/qi-agent", addedAt: "2026-08-29" },
   ]} value="workspace-1" onChange={() => undefined} onAdd={() => undefined} />);
   assert.match(html, /aria-label="选择工作区"/);
-  assert.match(html, /value="workspace-1" selected=""/);
-  assert.match(html, /aria-label="添加新的工作区"/);
-  assert.match(html, /添加工作区/);
+  assert.match(html, /aria-haspopup="menu"/);
+  assert.match(html, /aria-expanded="false"/);
+  assert.match(html, />qì agent</);
 });
 
 test("slash suggestions open while typing and close after command selection", () => {
@@ -88,7 +87,7 @@ test("composer permission control uses a distinct icon for every access mode", (
     ],
   }} onChange={() => undefined} />);
   assert.match(html, /访问权限：Read Only/);
-  assert.match(html, />Read Only</);
+  assert.match(html, />仅可查看</);
 });
 
 test("model control shows reasoning effort without a leading model icon", () => {
@@ -113,12 +112,15 @@ test("context meter exposes usage and compact token formatting", () => {
   assert.match(html, /stroke-dasharray="2 100"/);
 });
 
-test("model search matches configured names and identifiers without reordering the catalog", () => {
+test("model search uses reference subsequence ranking and retains configured identifier lookup", () => {
   const models = [{ id: "local-a", model: "example-code", "display-name": "本地代码" }, { id: "cloud-b", model: "example-chat" }];
   assert.deepEqual(matchingModels(models, " 本地 CODE "), [models[0]]);
   assert.deepEqual(matchingModels(models, "cloud"), [models[1]]);
   assert.deepEqual(matchingModels(models, "   "), models);
   assert.deepEqual(matchingModels(models, "unknown"), []);
+  const alphabet = ["A", "E", "F"].map(letter => ({ id: `mock-${letter.toLowerCase()}`, model: `Model ${letter}` }));
+  assert.deepEqual(matchingModels(alphabet, "Model E"), [alphabet[1]]);
+  assert.deepEqual(matchingModels(alphabet, "MdlF"), [alphabet[2]]);
 });
 
 test("inline approval retains explicit choices and exposes failures without a modal barrier", () => {

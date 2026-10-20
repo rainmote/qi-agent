@@ -1,0 +1,23 @@
+{
+  "result": "incomplete",
+  "exit_code": null,
+  "recorded_at": "2026-10-20T12:24:52.087860+00:00",
+  "cause": "execution session disappeared before a completion receipt; log is partial or empty",
+  "log_mtime_utc": "2026-10-20T12:21:16.578897+00:00",
+  "prior_completed_receipt": {
+    "command": [
+      "node",
+      "node_modules/tsx/dist/cli.mjs",
+      "--test",
+      "apps/web/tests/interaction-e2e.test.ts"
+    ],
+    "cwd": "/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent",
+    "start": "2026-10-20T12:16:48.267106+00:00",
+    "end": "2026-10-20T12:16:55.199763+00:00",
+    "exit_code": 0,
+    "isolation": "tools/isolation.sb; whitelisted environment",
+    "platform": "Darwin 27.0.0 arm64"
+  },
+  "prior_receipt_applies_to_this_run": false,
+  "must_not_count_as_pass": true
+}
