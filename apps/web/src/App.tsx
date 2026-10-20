@@ -1,3 +1,4 @@
+import { uiText as t } from "./i18n";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { uncertainOperation, type PendingOperation, api, type Bootstrap } from "./api";
 import { RequestScope } from "./request-scope";
@@ -8,6 +9,7 @@ import { useProjectTrust } from "./ProjectTrust";
 import { ApprovalPanel, FullAccessDialog, SettingsDialog, WorkspaceDialog } from "./Dialogs";
 import { Icon } from "./icons";
 import { MenuSurface } from "./MenuSurface";
+import { busySubmission, shortcutForEvent, useWebPreferences } from "./web-preferences";
 import { applyHostEvent, fromSnapshot, type Projection } from "./projection";
 import { Timeline } from "./Timeline";
 import { RunOverview } from "./RunOverview";
@@ -59,14 +61,14 @@ function sessionAge(at: string | null | undefined): string {
   if (!at) return "";
   const elapsed = Date.now() - Date.parse(at);
   if (!Number.isFinite(elapsed)) return "";
-  if (elapsed < 60_000) return "刚刚";
-  if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)}分钟`;
-  if (elapsed < 86_400_000) return `${Math.floor(elapsed / 3_600_000)}小时`;
-  return `${Math.floor(elapsed / 86_400_000)}天`;
+  if (elapsed < 60_000) return t("刚刚");
+  if (elapsed < 3_600_000) return t("{0}分钟", Math.floor(elapsed / 60_000));
+  if (elapsed < 86_400_000) return t("{0}小时", Math.floor(elapsed / 3_600_000));
+  return t("{0}天", Math.floor(elapsed / 86_400_000));
 }
 
 function phaseLabel(phase: string) {
-  return ({ idle: "就绪", model: "模型响应", tool: "执行工具", retry: "正在重试", compacting: "整理上下文" } as Record<string, string>)[phase] || phase;
+  return ({ idle: t("就绪"), model: t("模型响应"), tool: t("执行工具"), retry: t("正在重试"), compacting: t("整理上下文") } as Record<string, string>)[phase] || phase;
 }
 
 function resolvedTheme(theme: Theme): "dark" | "light" {
@@ -79,7 +81,7 @@ export function commandOutputNotice(output: unknown): string {
   if (Array.isArray(output)) {
     const names = output.map((entry) => entry && typeof entry === "object" && "name" in entry
       ? String((entry as { name: unknown }).name) : "").filter(Boolean);
-    if (names.length) return `可用命令：${names.slice(0, 12).map((name) => `/${name}`).join("、")}${names.length > 12 ? ` 等 ${names.length} 个` : ""}`;
+    if (names.length) return t("可用命令：{0}{1}", names.slice(0, 12).map((name) => `/${name}`).join("、"), names.length > 12 ? t(" 等 {0} 个", names.length) : "");
   }
   const serialized = JSON.stringify(output);
   return serialized.length > 420 ? `${serialized.slice(0, 419)}…` : serialized;
@@ -112,12 +114,12 @@ export function PresetSelector({ presets, value, onChange }: {
   const [open, setOpen] = useState(false);
   const popover = useComposerPopover(open, () => setOpen(false), true, "below");
   const selected = presets.find((preset) => preset.id === value);
-  const description = selected ? `${presetDescription(selected)}。会话创建后保持不变。` : undefined;
+  const description = selected ? t("{0}。会话创建后保持不变。", presetDescription(selected)) : undefined;
   return <div className="draft-preset" ref={popover.root} onKeyDown={popover.onKeyDown}>
-    <button type="button" className="preset-trigger" ref={popover.trigger} aria-label="Agent 模式" aria-description={description}
+    <button type="button" className="preset-trigger" ref={popover.trigger} aria-label={t("Agent 模式")} aria-description={description}
       title={description} data-preset-id={value} aria-haspopup="menu" aria-expanded={open} disabled={!presets.length}
-      onClick={() => setOpen(value => !value)}><Icon name="bot" /><span>{selected?.name || "选择模式"}</span><Icon name="chevronDown" /></button>
-    {open && <MenuSurface ref={popover.panel} className="composer-popover preset-menu" role="menu" aria-label="Agent 模式">
+      onClick={() => setOpen(value => !value)}><Icon name="bot" /><span>{selected?.name || t("选择模式")}</span><Icon name="chevronDown" /></button>
+    {open && <MenuSurface ref={popover.panel} className="composer-popover preset-menu" role="menu" aria-label={t("Agent 模式")}>
       <div className="menu-viewport">{presets.map(preset => <div className="menu-item-wrap" key={preset.id}>
         <button type="button" role="menuitemradio" aria-checked={preset.id === value} data-preset-id={preset.id}
           onClick={() => { popover.dismiss(); if (preset.id !== value) onChange(preset.id); }}>
@@ -131,9 +133,9 @@ export function PresetSelector({ presets, value, onChange }: {
 
 function presetDescription(preset: AgentPresetSummary): string {
   if (preset.description) return preset.description;
-  if (preset.id === "creator") return "创建、检查并迭代 Agent preset 与运行时能力";
-  if (preset.id === "standard") return "适合编码、分析与日常项目协作";
-  return "使用此 Agent 配置开始新会话";
+  if (preset.id === "creator") return t("创建、检查并迭代 Agent preset 与运行时能力");
+  if (preset.id === "standard") return t("适合编码、分析与日常项目协作");
+  return t("使用此 Agent 配置开始新会话");
 }
 
 export function WorkspaceSelector({ workspaces, value, onChange, onAdd }: {
@@ -146,26 +148,36 @@ export function WorkspaceSelector({ workspaces, value, onChange, onAdd }: {
   const popover = useComposerPopover(open, () => setOpen(false), true, "below");
   const selected = workspaces.find(workspace => workspace.id === value);
   return <div className="workspace-context-row" ref={popover.root} onKeyDown={popover.onKeyDown}>
-    <button type="button" ref={popover.trigger} className="workspace-context-select" aria-label="选择工作区" aria-haspopup="menu" aria-expanded={open}
-      onClick={() => setOpen(value => !value)}><Icon name={selected ? "folderOpen" : "folderClosed"} /><span>{selected?.name || "选择工作区"}</span><Icon name="chevronDown" /></button>
-    {open && <MenuSurface ref={popover.panel} className="composer-popover workspace-menu" role="menu" aria-label="工作区">
+    <button type="button" ref={popover.trigger} className="workspace-context-select" aria-label={t("选择工作区")} aria-haspopup="menu" aria-expanded={open}
+      onClick={() => setOpen(value => !value)}><Icon name={selected ? "folderOpen" : "folderClosed"} /><span>{selected?.name || t("选择工作区")}</span><Icon name="chevronDown" /></button>
+    {open && <MenuSurface ref={popover.panel} className="composer-popover workspace-menu" role="menu" aria-label={t("工作区")}>
       <div className="menu-viewport">
       {workspaces.map(workspace => <button type="button" role="menuitemradio" aria-checked={workspace.id === value} key={workspace.id}
         onClick={() => { popover.dismiss(); if (workspace.id !== value) onChange(workspace.id); }}><Icon name="folderClosed" /><span>{workspace.name}</span>{workspace.id === value && <Icon name="check" />}</button>)}
       </div>
-      <div className="menu-footer"><button type="button" role="menuitem" onClick={() => { popover.dismiss(); onAdd(); }}><Icon name="plus" /><span>添加工作区…</span></button></div>
+      <div className="menu-footer"><button type="button" role="menuitem" onClick={() => { popover.dismiss(); onAdd(); }}><Icon name="plus" /><span>{t("添加工作区…")}</span></button></div>
     </MenuSurface>}
   </div>;
 }
 
 function Brand({ collapsed = false }: { collapsed?: boolean }) {
-  return <div className="brand-identity" aria-label="器，qì agent" title="器以载道">
+  return <div className="brand-identity" aria-label={t("器，qì agent")} title={t("器以载道")}>
     <BrandMark size={24} />{!collapsed && <div className="brand-copy">
       <strong>qì agent</strong><span>Web {webVersion}</span>
     </div>}</div>;
 }
 
 export function App() {
+  const preferences = useWebPreferences();
+  useLayoutEffect(() => {
+    document.documentElement.lang = preferences.locale === "en" ? "en" : "zh-CN";
+    for (const role of ["text", "code", "terminal"] as const) {
+      if (preferences.fontFamilies[role]) document.body.style.setProperty(`--qi-${role}-font`, preferences.fontFamilies[role]);
+      else document.body.style.removeProperty(`--qi-${role}-font`);
+    }
+    document.body.style.setProperty("--qi-code-font-size", `${preferences.codeFontSize}px`);
+    document.body.style.setProperty("--qi-terminal-font-size", `${preferences.terminalFontSize}px`);
+  }, [preferences]);
   const started = useRef(false);
   const sidebarElement = useRef<HTMLElement>(null);
   const mainElement = useRef<HTMLElement>(null);
@@ -319,9 +331,9 @@ export function App() {
   }, [allSessions, search, sortBy]);
   const runSummary = useMemo(() => {
     const durationMs = projection?.summary.durationMs || 0;
-    const timing = durationMs > 0 ? `工具累计耗时 ${(durationMs / 1_000).toFixed(1)}s · ` : "";
-    return `${timing}${projection?.events.length || 0} 条轨迹`;
-  }, [projection?.summary, projection?.events.length]);
+    const timing = durationMs > 0 ? t("工具累计耗时 {0}s · ", (durationMs / 1_000).toFixed(1)) : "";
+    return t("{0}{1} 条轨迹", timing, projection?.events.length || 0);
+  }, [projection?.summary, projection?.events.length, preferences.locale]);
 
   const flashNotice = useCallback((message: string, timeout = 4_000) => {
     setNotice(message);
@@ -336,7 +348,7 @@ export function App() {
       setPendingOperation(api.pendingOperation(activeSessionId.current));
       setOperationMissing(false);
     }
-    flashNotice(error instanceof Error ? error.message : "操作失败", 5_000);
+    flashNotice(error instanceof Error ? error.message : t("操作失败"), 5_000);
   }, [flashNotice]);
 
   useEffect(() => () => {
@@ -445,7 +457,7 @@ export function App() {
     void Promise.all([api.bootstrap(), api.listPresets()]).then(([data, discovered]) => {
       const available = selectablePresets(discovered);
       const initialPreset = defaultPresetId(available);
-      if (!initialPreset) throw new Error("没有可用的 Agent 模式");
+      if (!initialPreset) throw new Error(t("没有可用的 Agent 模式"));
       setBootstrap(data);
       setPresets(available);
       setPendingPreset(initialPreset);
@@ -457,7 +469,7 @@ export function App() {
         return !current.missing && current.workspaceId === route.workspaceId && current.session?.id === route.session?.id;
       });
       else writeNavigation(route.workspaceId, null, "replace");
-      if (route.missing) flashNotice("历史位置中的会话或工作区已不可用，请重新选择。", 8_000);
+      if (route.missing) flashNotice(t("历史位置中的会话或工作区已不可用，请重新选择。"), 8_000);
     }).catch(showError);
   }, [loadRuntime, openSession, showError, flashNotice]);
 
@@ -553,7 +565,7 @@ export function App() {
       setSettingsOpen(false); setWorkspaceDialogOpen(false);
       if (route.session) void openSession(route.session, route.missing ? "replace" : "restore");
       else resetSessionView(route.workspaceId, route.missing ? "replace" : "restore");
-      if (route.missing) flashNotice("历史位置中的会话或工作区已不可用，请重新选择。", 8_000);
+      if (route.missing) flashNotice(t("历史位置中的会话或工作区已不可用，请重新选择。"), 8_000);
     };
     window.addEventListener("popstate", restore);
     // Navigation may arrive after bootstrap picked a route but before this
@@ -572,7 +584,7 @@ export function App() {
     if (!creator) return;
     startNewSession();
     setPendingPreset(creator);
-    setComposer("帮我创建一个自定义 Agent preset。请先加载 creating-agent-presets skill 并调用 preset_guide，再检查现有模式并从合适的基础模式复制。");
+    setComposer(t("帮我创建一个自定义 Agent preset。请先加载 creating-agent-presets skill 并调用 preset_guide，再检查现有模式并从合适的基础模式复制。"));
     requestAnimationFrame(() => composerInput.current?.focus());
   };
 
@@ -585,12 +597,14 @@ export function App() {
     setContextStatus(snapshot.context || null);
   };
 
-  const send = async (mode: "auto" | "steer" = "auto") => {
+  const send = async (mode: "auto" | "queue" | "steer" = "auto") => {
     if ((!composer.trim() && !attachments.length) || busy || uploading || stopping || !workspaceId || pendingOperation || projection?.interactions.length) return;
     let current = captureOperation();
     const message = composer.trim();
+    const running = Boolean(projection?.state.phase && projection.state.phase !== "idle");
+    const delivery = mode === "auto" ? busySubmission(preferences.busyEnter, running) : running ? mode : "auto";
     const selectedAttachments = attachments;
-    if (message.startsWith("/") && selectedAttachments.length) { flashNotice("命令不能携带附件，请先发送附件或移除附件。"); return; }
+    if (message.startsWith("/") && selectedAttachments.length) { flashNotice(t("命令不能携带附件，请先发送附件或移除附件。")); return; }
     setBusy(true);
     let session = activeSession || draftSession;
     let messageSubmitted = false;
@@ -646,17 +660,17 @@ export function App() {
             setPendingModel(output.current?.id || null);
             setPendingThinking(output.current?.["thinking-level"] || null);
           }
-          flashNotice("请从模型菜单中选择本会话使用的模型");
+          flashNotice(t("请从模型菜单中选择本会话使用的模型"));
         } else if (result.output != null) {
           flashNotice(commandOutputNotice(result.output));
         }
         await refreshSnapshot(session.id);
         const trustStatus = await api.rpc<import("./types").ProjectTrust>(session.id, "trust.status");
         if (current()) trust.setStatus(trustStatus);
-      } else if (mode === "steer") {
+      } else if (delivery === "steer") {
         await api.rpc(session.id, "turn.steer", { message: content });
-        if (current()) flashNotice("已接收，下一模型请求前生效");
-      } else if (projection?.state.phase && projection.state.phase !== "idle") {
+        if (current()) flashNotice(t("已接收，下一模型请求前生效"));
+      } else if (running) {
         await api.rpc(session.id, "turn.follow-up", { message: content });
       } else {
         await api.rpc(session.id, "turn.submit", { message: content });
@@ -682,7 +696,7 @@ export function App() {
         await api.retryOperation(operation.sessionId);
         if (!current()) return;
         setPendingOperation(null); setOperationMissing(false);
-        flashNotice("已核对并完成提交");
+        flashNotice(t("已核对并完成提交"));
       } else {
         const result = await api.operationStatus(operation.sessionId);
         if (!current()) return;
@@ -696,10 +710,10 @@ export function App() {
             const files = Array.isArray(content) ? content.filter(block => block?.type === "attachment" && block.workspaceId === workspaceId).slice(0, 8) as AttachmentRef[] : [];
             setComposer(value => value || text); setAttachments(value => value.length ? value : files);
           }
-          flashNotice(result.status === "completed" ? "已确认原操作完成，无需重复提交"
-            : result.error?.message || "已确认原操作失败，请检查后再操作", 8_000);
-        } else flashNotice(result.status === "pending" ? "仍在等待执行结果，请稍后再次核对"
-          : "尚未找到接纳记录，可使用原提交编号重试", 8_000);
+          flashNotice(result.status === "completed" ? t("已确认原操作完成，无需重复提交")
+            : result.error?.message || t("已确认原操作失败，请检查后再操作"), 8_000);
+        } else flashNotice(result.status === "pending" ? t("仍在等待执行结果，请稍后再次核对")
+          : t("尚未找到接纳记录，可使用原提交编号重试"), 8_000);
       }
       await refreshSnapshot(operation.sessionId);
     } catch (error) { if (current()) showError(error); }
@@ -720,7 +734,7 @@ export function App() {
       setProjection((current) => current ? { ...current,
         interactions: current.interactions.filter((entry) => entry.id !== interaction.id) } : current);
     } catch (error) { if (current()) {
-      setApprovalError({ key, message: error instanceof Error ? error.message : "确认失败，请重试" });
+      setApprovalError({ key, message: error instanceof Error ? error.message : t("确认失败，请重试") });
     } }
     finally {
       if (approvalInFlight.current === key) approvalInFlight.current = null;
@@ -745,7 +759,7 @@ export function App() {
         if (uncertainOperation(error)) {
           setPendingOperation(api.pendingOperation(id)); setOperationMissing(false);
         }
-        setStopError(error instanceof Error ? error.message : "停止失败，请重试。");
+        setStopError(error instanceof Error ? error.message : t("停止失败，请重试。"));
         showError(error);
       }
     }
@@ -754,7 +768,7 @@ export function App() {
   const renameSession = async (session = activeSession) => {
     const current = captureOperation();
     if (!session) return;
-    const name = window.prompt("会话名称", session.name || "");
+    const name = window.prompt(t("会话名称"), session.name || "");
     if (!name?.trim()) return;
     try {
       await api.rpc(session.id, "session.rename", { name: name.trim() });
@@ -768,7 +782,7 @@ export function App() {
     if (!session) return;
     setBusy(true);
     try {
-      const forked = await api.forkSession(session.id, `${session.name || "未命名会话"} · 分支`);
+      const forked = await api.forkSession(session.id, t("{0} · 分支", session.name || t("未命名会话")));
       if (current()) acceptOpen(forked.session, forked.snapshot, forked.eventCursor);
       await refreshCatalog(session.workspaceId);
     } catch (error) { if (current()) showError(error); }
@@ -777,12 +791,12 @@ export function App() {
 
   const archiveSession = async (session: SessionSummary) => {
     const current = captureOperation();
-    if (!window.confirm(`归档会话“${session.name || "未命名会话"}”？正在运行的任务会停止，会话文件会移到工作区的归档目录。`)) return;
+    if (!window.confirm(t("归档会话“{0}”？正在运行的任务会停止，会话文件会移到工作区的归档目录。", session.name || t("未命名会话")))) return;
     try {
       await api.archiveSession(session.id);
       if (current() && activeSessionId.current === session.id) startNewSession();
       await refreshCatalog(session.workspaceId);
-      if (current()) flashNotice("会话已归档");
+      if (current()) flashNotice(t("会话已归档"));
     } catch (error) { if (current()) showError(error); }
   };
 
@@ -805,7 +819,7 @@ export function App() {
       setPendingThinking(selected["thinking-level"] || null);
       void api.rpc<ContextStatus>((activeSession || draftSession)!.id, "context.status")
         .then((status) => { if (current()) setContextStatus(status); }).catch(() => undefined);
-      flashNotice(`已切换到 ${selected.model || provider}`);
+      flashNotice(t("已切换到 {0}", selected.model || provider));
     } catch (error) { if (current()) showError(error); }
   };
 
@@ -827,7 +841,7 @@ export function App() {
       if (!current()) return;
       setModels((current) => current ? { ...current, current: selected,
         providers: current.providers.map((entry) => entry.id === selected.id ? selected : entry) } : current);
-      flashNotice(`推力强度已设为 ${level}`);
+      flashNotice(t("推力强度已设为 {0}", level));
     } catch (error) { if (current()) showError(error); }
   };
 
@@ -862,7 +876,7 @@ export function App() {
     setBootstrap(data); resetSessionView(workspace.id);
     setPendingPreset(pendingPreset);
     setWorkspaceDialogOpen(false);
-    flashNotice(`已添加并切换到工作区“${workspace.name}”`);
+    flashNotice(t("已添加并切换到工作区“{0}”", workspace.name));
     const current = captureOperation();
     setBusy(true);
     try {
@@ -876,7 +890,7 @@ export function App() {
   };
 
   const removeWorkspace = async (workspace: Workspace) => {
-    if (!window.confirm(`从 Web UI 移除工作区“${workspace.name}”？不会删除任何项目文件。`)) return;
+    if (!window.confirm(t("从 Web UI 移除工作区“{0}”？不会删除任何项目文件。", workspace.name))) return;
     await api.removeWorkspace(workspace.id);
     const data = await api.bootstrap();
     setBootstrap(data);
@@ -940,12 +954,35 @@ export function App() {
 
   const workbenchRpc = useCallback((method: string, params: Record<string, unknown> = {}) => {
     const sessionId = activeSession?.id, current = viewScope.current.capture();
-    if (!sessionId) return Promise.reject(new Error("请先开始一个会话"));
+    if (!sessionId) return Promise.reject(new Error(t("请先开始一个会话")));
     return api.rpc(sessionId, method, params).catch(error => {
       if (current() && activeSessionId.current === sessionId) showError(error);
       throw error;
     });
   }, [activeSession?.id, showError]);
+
+  useEffect(() => {
+    if (!preferences.codeView && conversationView === "trajectory") setConversationView("chat");
+  }, [preferences.codeView, conversationView]);
+  useEffect(() => {
+    const keydown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.keyCode === 229 || document.getElementById("root")?.inert
+        || (document.activeElement instanceof Element && document.activeElement.closest('[role="dialog"], [role="menu"]'))) return;
+      const action = shortcutForEvent(event, preferences.shortcuts);
+      if (!action) return;
+      event.preventDefault();
+      if (action === "new-session" && workspaceId && !busy) startNewSession();
+      if (action === "sidebar") {
+        if (window.matchMedia("(max-width:1023px)").matches) setMobileSidebar(value => !value);
+        else toggleSidebar();
+      }
+      if (action === "settings") setSettingsOpen(true);
+      if (action === "composer") composerInput.current?.focus();
+      if (action === "files" && workspaceId) setWorkbench(value => value === "files" ? null : "files");
+    };
+    document.addEventListener("keydown", keydown);
+    return () => document.removeEventListener("keydown", keydown);
+  });
 
   const approvalNode = projection?.interactions[0] && <ApprovalPanel interaction={projection.interactions[0]} count={projection.interactions.length}
     resolving={resolving} onResolve={resolveApproval} onStop={() => void stopRun()} stopping={stopping} stopError={stopError}
@@ -955,13 +992,13 @@ export function App() {
     {workspaceId && <ComposerReferences workspaceId={workspaceId} value={composer} onChange={setComposer}
       suggest={api.referenceSuggestions} disabled={busy || !!pendingOperation} />}
     {pendingOperation && <div className="provider-reload-notice" role="status">
-      <p>上一项操作的结果尚未确认。核对完成前暂停新提交，以免重复执行。</p>
-      <button type="button" className="button ghost" disabled={busy} onClick={() => void reconcileOperation()}>核对结果</button>
+      <p>{t("上一项操作的结果尚未确认。核对完成前暂停新提交，以免重复执行。")}</p>
+      <button type="button" className="button ghost" disabled={busy} onClick={() => void reconcileOperation()}>{t("核对结果")}</button>
       {operationMissing && <button type="button" className="button ghost" disabled={busy}
-        onClick={() => void reconcileOperation(true)}>使用原编号重试</button>}
+        onClick={() => void reconcileOperation(true)}>{t("使用原编号重试")}</button>}
     </div>}
-    {commandSuggestions.length > 0 && <div id="command-suggestions" className="command-menu" role="listbox" aria-label="命令建议">
-      <div className="command-menu-title">命令</div>
+    {commandSuggestions.length > 0 && <div id="command-suggestions" className="command-menu" role="listbox" aria-label={t("命令建议")}>
+      <div className="command-menu-title">{t("命令")}</div>
       {commandSuggestions.map((command, index) => <button type="button" role="option" key={command.name}
         aria-selected={index === commandIndex} className={index === commandIndex ? "selected" : ""}
         onMouseEnter={() => setCommandIndex(index)} onClick={() => chooseCommand(index)}>
@@ -969,17 +1006,17 @@ export function App() {
     </div>}
     <div className={`composer ${phase !== "idle" ? "is-active" : ""} ${composer.trim() ? "has-content" : ""} ${projection?.interactions.length ? "has-approval" : ""}`} aria-busy={busy}>
       {trust.status?.configured && trust.status.decision === "deny" && <div className="composer-trust" role="status">
-        <Icon name="shield" /><span>项目受限 · 需要信任的命令已禁用</span>
+        <Icon name="shield" /><span>{t("项目受限 · 需要信任的命令已禁用")}</span>
         {trust.status.mutable !== false && <button type="button" disabled={busy} onClick={() => {
           const session = activeSession || draftSession;
           if (session) void trust.check(session.id, captureOperation(), true).catch(showError);
-        }}>信任项目</button>}
+        }}>{t("信任项目")}</button>}
       </div>}
       {!workbench && approvalNode}
       <ComposerAttachments key={`${workspaceId}:${activeSession?.id || "draft"}`} workspaceId={workspaceId || ""}
         inputRef={attachmentInput} items={attachments} onChange={setAttachments} upload={api.uploadAttachment}
         disabled={!workspaceId || busy || !!pendingOperation} onBusyChange={setUploading}>
-      <div className="composer-editor"><textarea ref={composerInput} rows={1} value={composer} disabled={!workspaceId || busy} placeholder={workspaceId ? activeSession ? "发消息或创建任务, / 调用指令, @ 文件或对话" : "描述你想要构建的内容, / 调用指令, @ 文件或对话" : "选择一个工作区开始"}
+      <div className="composer-editor"><textarea ref={composerInput} rows={1} value={composer} disabled={!workspaceId || busy} placeholder={workspaceId ? activeSession ? t("发消息或创建任务, / 调用指令, @ 文件或对话") : t("描述你想要构建的内容, / 调用指令, @ 文件或对话") : t("选择一个工作区开始")}
         aria-controls={commandSuggestions.length ? "command-suggestions" : undefined}
         onChange={(event) => setComposer(event.target.value)} onKeyDown={(event) => {
           if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
@@ -995,22 +1032,24 @@ export function App() {
           if (commandSuggestions.length && event.key === "Escape") {
             event.preventDefault(); setComposer(""); return;
           }
-          if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); }
-        }} aria-label="给代理发送消息" />
-      {!composer && <span className="composer-placeholder" aria-hidden="true">{workspaceId ? activeSession ? "发消息或创建任务, / 调用指令, @ 文件或对话" : "描述你想要构建的内容, / 调用指令, @ 文件或对话" : "选择一个工作区开始"}</span>}</div>
+          if (event.key === "Enter" && !event.shiftKey && !event.altKey) {
+            event.preventDefault(); void send(busySubmission(preferences.busyEnter, phase !== "idle", event.ctrlKey || event.metaKey));
+          }
+        }} aria-label={t("给代理发送消息")} />
+      {!composer && <span className="composer-placeholder" aria-hidden="true">{workspaceId ? activeSession ? t("发消息或创建任务, / 调用指令, @ 文件或对话") : t("描述你想要构建的内容, / 调用指令, @ 文件或对话") : t("选择一个工作区开始")}</span>}</div>
       <div className="composer-footer">
         <div className="composer-left">
           <ComposerTools actions={[
-            { label: "分析项目", icon: "search", run: () => { setComposer("分析当前项目结构，指出最值得优先处理的问题，并给出执行建议。"); composerInput.current?.focus(); } },
-            { label: "定位问题", icon: "activity", run: () => { setComposer("检查当前项目中的失败测试和明显缺陷，定位根因并修复。"); composerInput.current?.focus(); } },
-            ...(creatorDraftPresetId(presets) ? [{ label: "创建 Agent", icon: "sparkles" as const, run: startCreatorDraft }] : []),
-            { label: "添加附件", icon: "plus", disabled: !workspaceId || busy || uploading || !!pendingOperation || attachments.length >= 8, run: () => attachmentInput.current?.click() },
-            { label: "引用文件 / 会话", icon: "copy", disabled: !workspaceId || busy, run: () => { setComposer(value => `${value}${value ? " " : ""}@`); composerInput.current?.focus(); } },
-            { label: "命令", icon: "command", disabled: !workspaceId || busy, run: () => { setComposer(value => value.startsWith("/") ? value : "/"); composerInput.current?.focus(); } },
-            { label: "文件与变更", icon: "folder", disabled: !workspaceId, run: () => setWorkbench("files") },
-            { label: "计划与协作", icon: "bot", disabled: !activeSession, run: () => setWorkbench("orchestration") },
-            { label: "自动化", icon: "clock", disabled: !activeSession, run: () => setWorkbench("automation") },
-            { label: "插件", icon: "settings", disabled: !activeSession, run: () => setWorkbench("plugins") },
+            { label: t("分析项目"), icon: "search", run: () => { setComposer(t("分析当前项目结构，指出最值得优先处理的问题，并给出执行建议。")); composerInput.current?.focus(); } },
+            { label: t("定位问题"), icon: "activity", run: () => { setComposer(t("检查当前项目中的失败测试和明显缺陷，定位根因并修复。")); composerInput.current?.focus(); } },
+            ...(creatorDraftPresetId(presets) ? [{ label: t("创建 Agent"), icon: "sparkles" as const, run: startCreatorDraft }] : []),
+            { label: t("添加附件"), icon: "plus", disabled: !workspaceId || busy || uploading || !!pendingOperation || attachments.length >= 8, run: () => attachmentInput.current?.click() },
+            { label: t("引用文件 / 会话"), icon: "copy", disabled: !workspaceId || busy, run: () => { setComposer(value => `${value}${value ? " " : ""}@`); composerInput.current?.focus(); } },
+            { label: t("命令"), icon: "command", disabled: !workspaceId || busy, run: () => { setComposer(value => value.startsWith("/") ? value : "/"); composerInput.current?.focus(); } },
+            { label: t("文件与变更"), icon: "folder", disabled: !workspaceId, run: () => setWorkbench("files") },
+            { label: t("计划与协作"), icon: "bot", disabled: !activeSession, run: () => setWorkbench("orchestration") },
+            { label: t("自动化"), icon: "clock", disabled: !activeSession, run: () => setWorkbench("automation") },
+            { label: t("插件"), icon: "settings", disabled: !activeSession, run: () => setWorkbench("plugins") },
           ]} />
           {policy && <PermissionControl policy={policy} onChange={requestPolicy} />}
         </div>
@@ -1020,23 +1059,26 @@ export function App() {
             onSelectModel={(provider) => void selectModel(provider)}
             onSelectThinking={(level) => void selectThinking(level)} />}
           {composerContext && <ContextMeter status={composerContext} />}
+          {phase !== "idle" && activeSession && (composer.trim() || attachments.length > 0) && !projection?.interactions.length && <button type="button" className="busy-submit-button"
+            disabled={busy || uploading || stopping || !!pendingOperation} aria-label={preferences.busyEnter === "steer" ? t("插话发送") : t("排队发送")}
+            onClick={() => void send()}><Icon name="send" /></button>}
           {(phase !== "idle" || !!projection?.interactions.length || stopping) && activeSession ? <button type="button" className="send-button stop"
-            disabled={stopping} aria-busy={stopping} onClick={() => void stopRun()} aria-label={stopping ? "正在停止" : "停止运行"}><Icon name="stop" /></button>
+            disabled={stopping} aria-busy={stopping} onClick={() => void stopRun()} aria-label={stopping ? t("正在停止") : t("停止运行")}><Icon name="stop" /></button>
             : <button type="button" className={`send-button ${busy ? "loading" : ""}`} disabled={(!composer.trim() && !attachments.length) || busy || uploading || !workspaceId || !!pendingOperation}
-              aria-busy={busy} onClick={() => void send()} aria-label={busy ? "正在发送" : "发送消息"}><Icon name="send" /></button>}
+              aria-busy={busy} onClick={() => void send()} aria-label={busy ? t("正在发送") : t("发送消息")}><Icon name="send" /></button>}
         </div>
       </div>
       </ComposerAttachments>
     </div>
-    <div className={`composer-hint ${phase !== "idle" || stopping ? "has-run" : ""}`}><span>{stopping ? "请等待运行结束…" : projection?.interactions.length ? "先确认上方操作 · 可继续编辑草稿" : phase !== "idle" ? "Enter 排队发送 · Shift + Enter 换行" : "Enter 发送 · Shift + Enter 换行"}</span>
-      {phase !== "idle" && !projection?.interactions.length && composer.trim() && <button type="button" className="steer-button" disabled={busy || uploading || stopping || !!pendingOperation} onClick={() => void send("steer")}>下一步引导</button>}
+    <div className={`composer-hint ${phase !== "idle" || stopping ? "has-run" : ""}`}><span>{stopping ? t("请等待运行结束…") : projection?.interactions.length ? t("先确认上方操作 · 可继续编辑草稿") : phase !== "idle" ? preferences.busyEnter === "steer" ? t("Enter 插话发送 · Ctrl/Cmd+Enter 排队发送") : t("Enter 排队发送 · Ctrl/Cmd+Enter 插话发送") : t("Enter 发送 · Shift + Enter 换行")}</span>
+      {phase !== "idle" && !projection?.interactions.length && composer.trim() && <button type="button" className="steer-button" disabled={busy || uploading || stopping || !!pendingOperation} onClick={() => void send("steer")}>{t("下一步引导")}</button>}
     </div>
-    {stopError && !projection?.interactions.length && <p className="composer-error" role="alert">{stopError} <button type="button" onClick={() => void stopRun()}>重试停止</button></p>}
+    {stopError && !projection?.interactions.length && <p className="composer-error" role="alert">{stopError} <button type="button" onClick={() => void stopRun()}>{t("重试停止")}</button></p>}
   </div>;
 
   return <div className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${detailsOpen ? "details-open" : ""}`}>
     <aside ref={sidebarElement} className={`sidebar ${mobileSidebar ? "is-open" : ""}`}
-      role={mobileSidebar ? "dialog" : undefined} aria-modal={mobileSidebar || undefined} aria-label={mobileSidebar ? "导航" : undefined}
+      role={mobileSidebar ? "dialog" : undefined} aria-modal={mobileSidebar || undefined} aria-label={mobileSidebar ? t("导航") : undefined}
       onKeyDown={event => {
         if (!mobileSidebar) return;
         if (event.key === "Escape") { event.preventDefault(); setMobileSidebar(false); }
@@ -1048,76 +1090,76 @@ export function App() {
         }
       }}>
       <div className="sidebar-brand-row">
-        <button type="button" className="brand-button" onClick={startNewSession} aria-label="新建会话"><Brand collapsed={sidebarCollapsed && !mobileSidebar} /></button>
+        <button type="button" className="brand-button" onClick={startNewSession} aria-label={t("新建会话")}><Brand collapsed={sidebarCollapsed && !mobileSidebar} /></button>
         <button type="button" className="icon-button sidebar-toggle" onClick={() => {
           if (window.matchMedia("(max-width: 1023px)").matches) setMobileSidebar(value => !value);
           else toggleSidebar();
         }}
-          aria-label={mobileSidebar ? "收起导航" : sidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}><Icon name="panel" /></button>
+          aria-label={mobileSidebar ? t("收起导航") : sidebarCollapsed ? t("展开侧边栏") : t("收起侧边栏")}><Icon name="panel" /></button>
       </div>
       <button className="new-session" type="button" onClick={startNewSession} disabled={!workspaceId || busy}>
-        <Icon name="newChat" />{(!sidebarCollapsed || mobileSidebar) && <span>新会话</span>}
+        <Icon name="newChat" />{(!sidebarCollapsed || mobileSidebar) && <span>{t("新会话")}</span>}
       </button>
-      <nav className="sidebar-actions" aria-label="工作台入口">
-        <button type="button" disabled={!activeSession} onClick={() => { setWorkbench("plugins"); setMobileSidebar(false); }} title="插件（打开会话后可用）">
-          <Icon name="plugin" />{(!sidebarCollapsed || mobileSidebar) && <span>插件</span>}</button>
-        <button type="button" disabled={!activeSession} onClick={() => { setWorkbench("automation"); setMobileSidebar(false); }} title="自动化任务（打开会话后可用）">
-          <Icon name="clock" />{(!sidebarCollapsed || mobileSidebar) && <span>自动化任务</span>}</button>
+      <nav className="sidebar-actions" aria-label={t("工作台入口")}>
+        <button type="button" disabled={!activeSession} onClick={() => { setWorkbench("plugins"); setMobileSidebar(false); }} title={t("插件（打开会话后可用）")}>
+          <Icon name="plugin" />{(!sidebarCollapsed || mobileSidebar) && <span>{t("插件")}</span>}</button>
+        <button type="button" disabled={!activeSession} onClick={() => { setWorkbench("automation"); setMobileSidebar(false); }} title={t("自动化任务（打开会话后可用）")}>
+          <Icon name="clock" />{(!sidebarCollapsed || mobileSidebar) && <span>{t("自动化任务")}</span>}</button>
       </nav>
       {(!sidebarCollapsed || mobileSidebar) && <>
-        <div className="workspace-heading"><span>工作区</span><div>
-          <button className={`icon-button compact ${searchOpen ? "active" : ""}`} type="button" onClick={() => setSearchOpen((value) => !value)} aria-label="搜索会话"><Icon name="search" /></button>
-          <button className={`icon-button compact ${viewMenuOpen ? "active" : ""}`} type="button" onClick={() => setViewMenuOpen((value) => !value)} aria-label="视图选项"><Icon name="sliders" /></button>
-          <button className="icon-button compact" type="button" onClick={() => setWorkspaceDialogOpen(true)} aria-label="添加工作区" title="添加工作区"><Icon name="folderAdd" /></button>
+        <div className="workspace-heading"><span>{t("工作区")}</span><div>
+          <button className={`icon-button compact ${searchOpen ? "active" : ""}`} type="button" onClick={() => setSearchOpen((value) => !value)} aria-label={t("搜索会话")}><Icon name="search" /></button>
+          <button className={`icon-button compact ${viewMenuOpen ? "active" : ""}`} type="button" onClick={() => setViewMenuOpen((value) => !value)} aria-label={t("视图选项")}><Icon name="sliders" /></button>
+          <button className="icon-button compact" type="button" onClick={() => setWorkspaceDialogOpen(true)} aria-label={t("添加工作区")} title={t("添加工作区")}><Icon name="folderAdd" /></button>
         </div></div>
         <div className="sidebar-workspace">
-          <label className="workspace-select"><Icon name="folder" /><select value={workspaceId || ""} aria-label="工作区"
+          <label className="workspace-select"><Icon name="folder" /><select value={workspaceId || ""} aria-label={t("工作区")}
             onChange={(event) => resetSessionView(event.target.value)}>
             {bootstrap?.workspaces.map((workspace) => <option value={workspace.id} key={workspace.id}>{workspace.name}</option>)}</select></label>
         </div>
         {searchOpen && <input className="session-search" value={search} onChange={(event) => setSearch(event.target.value)}
-          placeholder="搜索会话…" aria-label="搜索会话" />}
+          placeholder={t("搜索会话…")} aria-label={t("搜索会话")} />}
         {viewMenuOpen && <div className="view-menu" role="menu">
           <button type="button" role="menuitem" className={sortBy === "recent" ? "active" : ""}
-            onClick={() => { setSortBy("recent"); setViewMenuOpen(false); }}>最近更新</button>
+            onClick={() => { setSortBy("recent"); setViewMenuOpen(false); }}>{t("最近更新")}</button>
           <button type="button" role="menuitem" className={sortBy === "name" ? "active" : ""}
-            onClick={() => { setSortBy("name"); setViewMenuOpen(false); }}>按名称</button>
+            onClick={() => { setSortBy("name"); setViewMenuOpen(false); }}>{t("按名称")}</button>
         </div>}
-        <nav className="session-nav" aria-label="会话列表">
-          {!activeSession && workspaceId && <div className="session-row active draft-session-row"><button type="button" className="draft-session-link" aria-current="page" onClick={() => composerInput.current?.focus()}>新会话</button></div>}
+        <nav className="session-nav" aria-label={t("会话列表")}>
+          {!activeSession && workspaceId && <div className="session-row active draft-session-row"><button type="button" className="draft-session-link" aria-current="page" onClick={() => composerInput.current?.focus()}>{t("新会话")}</button></div>}
           {sessions.length ? sessions.map((session) => <div className={`session-row ${session.id === activeSession?.id ? "active" : ""}`} key={session.id}>
             <button type="button" className="session-link" aria-current={session.id === activeSession?.id ? "page" : undefined}
-              title={`${session.name || "未命名会话"} · ${session.messageCount} 条消息`} onClick={() => void openSession(session)}>
-              <span className="session-title">{session.name || "未命名会话"}</span>
+              title={t("{0} · {1} 条消息", session.name || t("未命名会话"), session.messageCount)} onClick={() => void openSession(session)}>
+              <span className="session-title">{session.name || t("未命名会话")}</span>
               <span className="session-meta">{sessionAge(session.updatedAt)}</span>
             </button>
-            <button type="button" className="session-more" aria-label={`会话操作: ${session.name || "未命名会话"}`}
+            <button type="button" className="session-more" aria-label={t("会话操作: {0}", session.name || t("未命名会话"))}
               onClick={() => setSessionMenu((current) => current === session.id ? null : session.id)}><Icon name="more" /></button>
             {sessionMenu === session.id && <div className="session-menu" role="menu">
-              <button type="button" role="menuitem" onClick={() => { setSessionMenu(null); void renameSession(session); }}><Icon name="edit" />重命名</button>
-              <button type="button" role="menuitem" onClick={() => { setSessionMenu(null); void forkSession(session); }}><Icon name="branch" />创建分支</button>
-              <button type="button" role="menuitem" onClick={() => { setSessionMenu(null); void archiveSession(session); }}><Icon name="archive" />归档</button>
+              <button type="button" role="menuitem" onClick={() => { setSessionMenu(null); void renameSession(session); }}><Icon name="edit" />{t("重命名")}</button>
+              <button type="button" role="menuitem" onClick={() => { setSessionMenu(null); void forkSession(session); }}><Icon name="branch" />{t("创建分支")}</button>
+              <button type="button" role="menuitem" onClick={() => { setSessionMenu(null); void archiveSession(session); }}><Icon name="archive" />{t("归档")}</button>
             </div>}
-          </div>) : <div className="empty-nav">{search ? "没有匹配的会话" : "暂无会话"}</div>}
+          </div>) : <div className="empty-nav">{search ? t("没有匹配的会话") : t("暂无会话")}</div>}
         </nav>
       </>}
       <div className="rail-workspace-actions">
-        <button type="button" aria-label="添加工作区" onClick={() => setWorkspaceDialogOpen(true)}><Icon name="folderAdd" /></button>
-        <button type="button" aria-label="搜索会话" onClick={() => { setSearchOpen(true); setMobileSidebar(true); requestAnimationFrame(() => sidebarElement.current?.querySelector<HTMLInputElement>(".session-search")?.focus()); }}><Icon name="search" /></button>
+        <button type="button" aria-label={t("添加工作区")} onClick={() => setWorkspaceDialogOpen(true)}><Icon name="folderAdd" /></button>
+        <button type="button" aria-label={t("搜索会话")} onClick={() => { setSearchOpen(true); setMobileSidebar(true); requestAnimationFrame(() => sidebarElement.current?.querySelector<HTMLInputElement>(".session-search")?.focus()); }}><Icon name="search" /></button>
       </div>
       <SidebarMenu collapsed={sidebarCollapsed && !mobileSidebar} onSettings={() => { setMobileSidebar(false); setSettingsOpen(true); }} onWorkspace={() => { setMobileSidebar(false); setWorkspaceDialogOpen(true); }} />
     </aside>
-    {mobileSidebar && <button className="mobile-scrim" aria-label="关闭导航" onClick={() => setMobileSidebar(false)} />}
+    {mobileSidebar && <button className="mobile-scrim" aria-label={t("关闭导航")} onClick={() => setMobileSidebar(false)} />}
 
     <main ref={mainElement} className="main-panel">
       {!activeSession ? <section className="new-session-view">
-        <button className="mobile-nav-button" type="button" onClick={() => setMobileSidebar(true)} aria-label="打开导航"><BrandMark size={24} /></button>
+        <button className="mobile-nav-button" type="button" onClick={() => setMobileSidebar(true)} aria-label={t("打开导航")}><BrandMark size={24} /></button>
         {workspaceId && <button type="button" className={`header-action draft-files-trigger ${workbench === "files" ? "active" : ""}`}
-          aria-label="文件与变更" title="文件与变更" aria-expanded={workbench === "files"}
+          aria-label={t("文件与变更")} title={t("文件与变更")} aria-expanded={workbench === "files"}
           onClick={() => setWorkbench(value => value === "files" ? null : "files")}><Icon name="panel" /></button>}
         <div className="new-session-center">
           <div className="welcome-copy">
-            <BrandMark size={34} /><div className="welcome-title-group"><h1>探索未至之境</h1><span className="preview-badge">预览版</span></div>
+            <BrandMark size={34} /><div className="welcome-title-group"><h1>{t("探索未至之境")}</h1><span className="preview-badge">{t("预览版")}</span></div>
           </div>
           <div className="draft-workbench">
             <div className="draft-context">
@@ -1131,10 +1173,10 @@ export function App() {
         </div>
       </section> : <section className="session-view">
         <header className="session-header">
-          <button className="mobile-nav-button" type="button" onClick={() => setMobileSidebar(true)} aria-label="打开导航"><BrandMark size={24} /></button>
-          <div className="session-header-title"><span className={`connection-status ${connected ? "online" : ""}`} title={connected ? "实时连接" : "正在重连"}>
-            <span className="connection-dot" />{connected ? "已连接" : "重连中"}</span>
-            <button type="button" onClick={() => void renameSession()}>{activeSession.name || "未命名会话"}</button>
+          <button className="mobile-nav-button" type="button" onClick={() => setMobileSidebar(true)} aria-label={t("打开导航")}><BrandMark size={24} /></button>
+          <div className="session-header-title"><span className={`connection-status ${connected ? "online" : ""}`} title={connected ? t("实时连接") : t("正在重连")}>
+            <span className="connection-dot" />{connected ? t("已连接") : t("重连中")}</span>
+            <button type="button" onClick={() => void renameSession()}>{activeSession.name || t("未命名会话")}</button>
             {activeSession.presetId && <span className="session-preset"><Icon name="bot" />{presets.find((preset) => preset.id === activeSession.presetId)?.name
               || activeSession.presetId}</span>}
             {!!subagents?.jobs.length && <SubagentMenu jobs={subagents.jobs} />}
@@ -1142,20 +1184,20 @@ export function App() {
           <div className="session-header-actions">
             <SessionActions key={activeSession.id} onRename={() => void renameSession()}
               onFork={() => void forkSession()} onArchive={() => void archiveSession(activeSession)} />
-            <div className="view-tabs" role="tablist" aria-label="会话视图"><button type="button" role="tab" aria-selected={conversationView === "chat"}
-              onClick={() => setConversationView("chat")}>对话</button><button type="button" role="tab" aria-selected={conversationView === "trajectory"}
-                onClick={() => setConversationView("trajectory")}>轨迹</button></div>
-            <button type="button" className={`header-action ${detailsOpen ? "active" : ""}`} aria-label="会话信息" title="会话信息"
+            <div className="view-tabs" role="tablist" aria-label={t("会话视图")}><button type="button" role="tab" aria-selected={conversationView === "chat"}
+              onClick={() => setConversationView("chat")}>{t("对话")}</button>{preferences.codeView && <button type="button" role="tab" aria-selected={conversationView === "trajectory"}
+                onClick={() => setConversationView("trajectory")}>{t("轨迹")}</button>}</div>
+            <button type="button" className={`header-action ${detailsOpen ? "active" : ""}`} aria-label={t("会话信息")} title={t("会话信息")}
               aria-expanded={detailsOpen} onClick={() => setDetailsOpen((value) => !value)}><Icon name="panel" /></button>
           </div>
         </header>
-        {(phase !== "idle" || pendingOperation || stopping) && <RunOverview phase={pendingOperation ? `${stopping ? "正在停止" : phaseLabel(phase)} · 操作结果待核对`
+        {(phase !== "idle" || pendingOperation || stopping) && <RunOverview phase={pendingOperation ? t("{0} · 操作结果待核对", stopping ? t("正在停止") : phaseLabel(phase))
           : stopping ? "stopping" : phase === "compacting" && projection?.state.compaction
             ? `${phaseLabel(phase)} ${projection.state.compaction["completed-chunks"]}/${projection.state.compaction["total-chunks"]}` : phase}
           turns={projection?.summary.turns ?? 0} steps={projection?.summary.steps ?? 0}
           calls={projection?.summary.calls ?? 0} waitingCount={projection?.interactions.length ?? 0}
           context={contextStatus} />}
-        <div className={`timeline ${conversationView === "trajectory" ? "trajectory-mode" : ""}`} ref={timeline} tabIndex={0} aria-label="会话内容">
+        <div className={`timeline ${conversationView === "trajectory" ? "trajectory-mode" : ""}`} ref={timeline} tabIndex={0} aria-label={t("会话内容")}>
           {conversationView === "chat" && projection && <Timeline key={activeSession.id} projection={projection} scrollRef={timeline} pluginSlots={pluginSlots} view={stepsView} collapseTiming={stepsCollapseTiming} />}
           {conversationView === "trajectory" && <Trajectory key={activeSession.id} events={projection?.events || []} />}
         </div>
@@ -1164,22 +1206,22 @@ export function App() {
     </main>
 
     {detailsOpen && activeSession && <aside className="details-panel">
-      <header><h2>会话日志</h2><button className="icon-button" type="button" onClick={() => setDetailsOpen(false)} aria-label="关闭详情"><Icon name="x" /></button></header>
-        <RunOverview phase={pendingOperation ? `${stopping ? "正在停止" : phaseLabel(phase)} · 操作结果待核对`
+      <header><h2>{t("会话日志")}</h2><button className="icon-button" type="button" onClick={() => setDetailsOpen(false)} aria-label={t("关闭详情")}><Icon name="x" /></button></header>
+        <RunOverview phase={pendingOperation ? t("{0} · 操作结果待核对", stopping ? t("正在停止") : phaseLabel(phase))
           : stopping ? "stopping" : phase === "compacting" && projection?.state.compaction
             ? `${phaseLabel(phase)} ${projection.state.compaction["completed-chunks"]}/${projection.state.compaction["total-chunks"]}` : phase}
           turns={projection?.summary.turns ?? 0} steps={projection?.summary.steps ?? 0}
           calls={projection?.summary.calls ?? 0} waitingCount={projection?.interactions.length ?? 0}
           context={contextStatus} />
-      <section aria-label="运行摘要"><p>{runSummary}</p></section>
-      <section><h3>会话</h3><dl><div><dt>工作区</dt><dd>{activeWorkspace?.name}</dd></div><div><dt>连接</dt><dd>{connected ? "实时" : "重连中"}</dd></div>
-        <div><dt>状态</dt><dd>{phaseLabel(phase)}</dd></div><div><dt>事件</dt><dd>{projection?.events.length || 0}</dd></div></dl></section>
-      <section><h3>子代理</h3>{subagents?.jobs.length ? <SubagentPanel jobs={subagents.jobs} /> : <p>暂无子代理任务</p>}</section>
-      <section><h3>能力</h3><div className="detail-metrics"><span><strong>{runtime?.tools.length ?? "—"}</strong>工具</span>
-        <span><strong>{runtime?.plugins.length ?? "—"}</strong>插件</span></div></section>
+      <section aria-label={t("运行摘要")}><p>{runSummary}</p></section>
+      <section><h3>{t("会话")}</h3><dl><div><dt>{t("工作区")}</dt><dd>{activeWorkspace?.name}</dd></div><div><dt>{t("连接")}</dt><dd>{connected ? t("实时") : t("重连中")}</dd></div>
+        <div><dt>{t("状态")}</dt><dd>{phaseLabel(phase)}</dd></div><div><dt>{t("事件")}</dt><dd>{projection?.events.length || 0}</dd></div></dl></section>
+      <section><h3>{t("子代理")}</h3>{subagents?.jobs.length ? <SubagentPanel jobs={subagents.jobs} /> : <p>{t("暂无子代理任务")}</p>}</section>
+      <section><h3>{t("能力")}</h3><div className="detail-metrics"><span><strong>{runtime?.tools.length ?? "—"}</strong>{t("工具")}</span>
+        <span><strong>{runtime?.plugins.length ?? "—"}</strong>{t("插件")}</span></div></section>
     </aside>}
 
-    {workbench && workspaceId && <section ref={workbenchElement} className="workbench-drawer" aria-label="工作台"
+    {workbench && workspaceId && <section ref={workbenchElement} className="workbench-drawer" aria-label={t("工作台")}
       role={workbenchModal ? "dialog" : undefined} aria-modal={workbenchModal || undefined} onKeyDown={event => {
         if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setWorkbench(null); }
         if (event.key === "Tab") {
@@ -1192,17 +1234,17 @@ export function App() {
       }}>
       <span tabIndex={workbenchModal ? 0 : -1} data-focus-boundary="start" className="workbench-focus-boundary"
         onFocus={() => { if (workbenchElement.current) workbenchControls(workbenchElement.current).at(-1)?.focus(); }} />
-      <div className="workbench-content">{workbench === "files" ? <WorkspacePanel key={activeSession?.id || workspaceId} workspaceId={workspaceId} sessionId={activeSession?.id} api={api.workspaceFiles}
+      <div className="workbench-content">{workbench === "files" ? <WorkspacePanel key={activeSession?.id || workspaceId} workspaceId={workspaceId} sessionId={activeSession?.id} api={api.workspaceFiles} showChanges={preferences.codeView}
         responseDetail={([...projection?.events || []].reverse().find(event => event.type === "session/preferences")?.data.response_detail as "short" | "auto" | "detailed") || "auto"}
         onResponseDetail={async value => {
-          const id = activeSession?.id; if (!id) throw new Error("请先开始一个会话");
+          const id = activeSession?.id; if (!id) throw new Error(t("请先开始一个会话"));
           const current = captureOperation();
           await api.rpc(id, "session.preferences.set", { response_detail: value });
           if (current()) await refreshSnapshot(id);
         }}
         onClose={() => setWorkbench(null)} onReference={reference => { setComposer(value => `${value}${value ? " " : ""}${reference} `); workbenchReturnFocus.current = composerInput.current; setWorkbench(null); }} />
-        : <><header className="workbench-heading"><strong>{workbench === "automation" ? "自动化" : workbench === "plugins" ? "插件" : "计划与协作"}</strong>
-          <button type="button" onClick={() => setWorkbench(null)} aria-label="关闭工作台">×</button></header>
+        : <><header className="workbench-heading"><strong>{workbench === "automation" ? t("自动化") : workbench === "plugins" ? t("插件") : t("计划与协作")}</strong>
+          <button type="button" onClick={() => setWorkbench(null)} aria-label={t("关闭工作台")}>×</button></header>
           {activeSession && workbench === "automation" && <AutomationPanel agentId={activeSession.id} readOnly={policy?.mode === "deny"}
             rpc={workbenchRpc} />}
           {activeSession && workbench === "plugins" && <PluginPanel readOnly={policy?.mode === "deny"}

@@ -23,7 +23,7 @@ body[data-theme] {
   --accent-contrast: #fff; --accent-soft: var(--dsw-alias-state-business-tertiary);
   --code: var(--dsw-alias-bg-module-platform); --mask: var(--dsw-alias-bg-mask-1); --shadow: var(--dsw-elevation-prominent);
 }
-body { font-family: var(--dsw-font-family); line-height: 22px; }
+body { font-family: var(--qi-text-font,var(--dsw-font-family)); line-height: 22px; }
 .app-shell.sidebar-collapsed { --conversation-width: clamp(680px, calc((100vw - 56px) * .64), 920px); }
 .app-shell.details-open { --conversation-width: clamp(680px, calc((100vw - var(--sidebar-width) - var(--details-width)) * .64), 920px); }
 .sidebar { border-right-color: var(--dsw-alias-border-l4); }
@@ -266,6 +266,39 @@ body { font-family: var(--dsw-font-family); line-height: 22px; }
 .content-font-arrows button { display: inline-flex; align-items: center; justify-content: center; width: 17px; height: 12px; min-height: 0; padding: 0; border: 0; border-radius: 4px; background: color-mix(in srgb,var(--layer-1) 75%,transparent); color: var(--text); cursor: pointer; }
 .content-font-arrows button svg { width: 9px; height: 9px; }
 .content-font-arrows button:disabled { color: var(--text-3); cursor: default; }
+.content-font-control { position: relative; flex: none; }
+.font-settings-expander { position: absolute; right: 0; display: grid; place-items: center; width: 28px; height: 36px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--text-3); cursor: pointer; }
+.font-settings-expander:hover { background: var(--hover); }
+.font-settings-expander svg { width: 14px; height: 14px; }
+.settings-font-row > div { flex: 1; min-width: 0; }
+.settings-font-row > input { width: 45%; max-width: 240px; min-width: 100px; }
+.settings-font-row p[role="alert"],.shortcut-editor [role="alert"] { color: var(--danger); }
+.role-font-size { display: flex; flex: none; align-items: center; gap: 8px; font-size: 14px; }
+.role-font-size input { width: 72px; padding-inline: 8px; text-align: center; }
+.settings-switch { flex: none; width: 36px; height: 22px; padding: 2px; border: 0; border-radius: 12px; background: var(--text-4); cursor: pointer; }
+.settings-switch span { display: block; width: 18px; height: 18px; border-radius: 50%; background: #fff; transform: translateX(0); transition: transform .16s var(--ease); }
+.settings-switch[aria-checked="true"] { background: var(--accent); }
+.settings-switch[aria-checked="true"] span { transform: translateX(14px); }
+.shortcut-editor { padding: 16px 0; border-bottom: .5px solid var(--border-2); }
+.shortcut-editor p { color: var(--text-3); font-size: 12px; line-height: 18px; }
+.shortcut-editor-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 0; font-size: 13px; }
+.shortcut-editor-row > span { flex: 1; min-width: 110px; }
+.shortcut-editor-row .settings-preference-trigger { height: auto; padding-block: 7px; font-size: 12px; text-align: left; overflow-wrap: anywhere; }
+.shortcut-editor-row [aria-pressed="true"] { outline: 2px solid var(--accent); outline-offset: 2px; }
+.busy-submit-button { display: grid; flex: none; place-items: center; width: 34px; height: 34px; padding: 0; border: 0; border-radius: 50%; background: var(--text); color: var(--bg); cursor: pointer; }
+.busy-submit-button svg { width: 16px; height: 16px; }
+.busy-submit-button:disabled { opacity: .4; cursor: default; }
+.markdown-content :is(pre,code),.tool-details pre,.workspace-preview pre,.workspace-diff pre,.trajectory-detail-row pre { font-family: var(--qi-code-font,'SF Mono',Menlo,monospace); font-size: var(--qi-code-font-size,11px); }
+.tool-card[data-tool="bash"] .tool-details > div:nth-child(2) > pre,.tool-batch-items [data-tool-call="bash"] .tool-details > div:nth-child(2) > pre { font-family: var(--qi-terminal-font,'SF Mono',Menlo,monospace); font-size: var(--qi-terminal-font-size,13px); }
+@media (max-width:600px) {
+ .settings-font-row { flex-wrap: wrap; }
+ .settings-font-row > div { flex-basis: 100%; }
+ .settings-font-row > input { width: 100%; max-width: none; }
+ .settings-option-row > div:first-child { min-width: 0; }
+ .settings-preference-row > div:first-child { padding-right: 0; }
+ .settings-preference-trigger { max-width: 100%; height: auto; min-height: 36px; padding-block: 7px; overflow-wrap: anywhere; text-align: left; }
+ .shortcut-editor-row > span { flex-basis: 100%; }
+}
 .welcome-copy > svg { width: 34px; height: 25px; }
 .composer-attachments { display: flex; flex-direction: column; gap: 12px; }
 .composer .permission-trigger { padding: 0 4px 0 8px; }
@@ -471,4 +504,15 @@ body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; 
 @media (prefers-reduced-motion: reduce) {
  .composer-popover,.composer-popover * { animation-duration: 0s !important; transition-duration: 0s !important; }
  .settings-dialog,.settings-dialog * { animation-duration: 0s !important; transition-duration: 0s !important; }
+}
+/* Keep the actual preference controls readable in a narrow browser viewport. */
+@media (max-width:600px) {
+ .settings-layout { flex-direction: column; }
+ .settings-layout > nav { flex-direction: row; width: 100%; height: auto; padding: 16px 12px 0; overflow-x: auto; overflow-y: hidden; }
+ .settings-layout > nav > button { flex: none; width: auto; white-space: nowrap; }
+ .settings-brand { display: none; }
+ .settings-main { min-height: 0; }
+ .settings-preference-row > div:first-child { flex: 1 0 100%; padding-right: 0; }
+ .settings-option-row.settings-preference-row { flex-wrap: wrap; }
+ .settings-preference-trigger { height: auto; max-width: 100%; padding-block: 7px; white-space: normal; text-align: left; }
 }

@@ -1,3 +1,4 @@
+import { uiText as t } from "./i18n";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "./api";
 import { Icon } from "./icons";
@@ -28,16 +29,16 @@ function draftFromProvider(provider: ProviderSettings): ProviderDraft {
 export function providerAuthSummary(provider: ProviderSettings): string {
   if (provider.authType === "chatgpt-subscription") {
     switch (provider.authStatus) {
-      case "configured": return "订阅方式 · 已发现本地登录";
-      case "expired": return "订阅方式 · 登录已过期";
-      case "insecure": return "订阅方式 · 凭据权限不安全";
-      case "invalid": return "订阅方式 · 登录状态无效";
-      default: return "订阅方式 · 未发现本地登录";
+      case "configured": return t("订阅方式 · 已发现本地登录");
+      case "expired": return t("订阅方式 · 登录已过期");
+      case "insecure": return t("订阅方式 · 凭据权限不安全");
+      case "invalid": return t("订阅方式 · 登录状态无效");
+      default: return t("订阅方式 · 未发现本地登录");
     }
   }
-  if (provider.authStatus !== "configured") return "API 方式 · API Key 未配置";
+  if (provider.authStatus !== "configured") return t("API 方式 · API Key 未配置");
   return provider.authSource === "environment"
-    ? "API 方式 · 已从环境变量读取" : "API 方式 · API Key 已配置";
+    ? t("API 方式 · 已从环境变量读取") : t("API 方式 · API Key 已配置");
 }
 
 function draftFromPreset(preset: ProviderPreset): ProviderDraft {
@@ -78,28 +79,27 @@ function ModelCatalog({ models, onChange, onDiscover, discovering }: {
   const update = (index: number, patch: Partial<ProviderModelSettings>) => {
     onChange(models.map((model, modelIndex) => modelIndex === index ? { ...model, ...patch } : model));
   };
-  return <section className="provider-model-catalog" aria-label="模型目录">
-    <div className="provider-catalog-head"><div><strong>模型目录</strong>
-      <span>{models.length ? `${models.length} 个可选模型` : "模型选择器中将不显示任何模型"}</span></div>
+  return <section className="provider-model-catalog" aria-label={t("模型目录")}>
+    <div className="provider-catalog-head"><div><strong>{t("模型目录")}</strong>
+      <span>{models.length ? t("{0} 个可选模型", models.length) : t("模型选择器中将不显示任何模型")}</span></div>
       {onDiscover && <button type="button" className="button ghost compact-button" disabled={discovering}
-        onClick={onDiscover}><Icon name="refresh" />{discovering ? "正在获取" : "获取可用模型"}</button>}</div>
+        onClick={onDiscover}><Icon name="refresh" />{discovering ? t("正在获取") : t("获取可用模型")}</button>}</div>
     <div className="provider-model-list">
       {models.map((model, index) => <div className="provider-model-row" key={index}>
-        <input aria-label={`模型 ID ${index + 1}`} placeholder="模型 ID" value={model.id}
+        <input aria-label={t("模型 ID {0}", index + 1)} placeholder={t("模型 ID")} value={model.id}
           onChange={(event) => update(index, { id: event.target.value,
             ...(model.name === model.id || !model.name ? { name: event.target.value } : {}) })} />
-        <input aria-label={`显示名称 ${index + 1}`} placeholder="显示名称" value={model.name}
+        <input aria-label={t("显示名称 {0}", index + 1)} placeholder={t("显示名称")} value={model.name}
           onChange={(event) => update(index, { name: event.target.value })} />
-        <input className="provider-capacity" type="number" min={1} aria-label={`上下文容量 ${index + 1}`}
-          placeholder="容量" value={model.contextWindow || ""}
+        <input className="provider-capacity" type="number" min={1} aria-label={t("上下文容量 {0}", index + 1)}
+          placeholder={t("容量")} value={model.contextWindow || ""}
           onChange={(event) => update(index, { contextWindow: event.target.value ? Number(event.target.value) : undefined })} />
-        <button type="button" className="icon-button compact" aria-label={`删除模型 ${index + 1}`}
+        <button type="button" className="icon-button compact" aria-label={t("删除模型 {0}", index + 1)}
           onClick={() => onChange(models.filter((_, modelIndex) => modelIndex !== index))}><Icon name="trash" /></button>
       </div>)}
     </div>
     <button type="button" className="provider-add-model" onClick={() => onChange([...models, { id: "", name: "" }])}>
-      <Icon name="plus" />添加模型
-    </button>
+      <Icon name="plus" />{t("添加模型")}</button>
   </section>;
 }
 
@@ -124,9 +124,9 @@ function ProviderEditor({ editor, presets, onEditor, onSaved }: {
         baseUrl: draft.baseUrl,
         apiKey: draft.apiKey || undefined,
       });
-      if (!models.length) throw new Error("提供方没有返回可用模型");
+      if (!models.length) throw new Error(t("提供方没有返回可用模型"));
       patch({ models });
-    } catch (value) { setError(value instanceof Error ? value.message : "无法获取模型"); }
+    } catch (value) { setError(value instanceof Error ? value.message : t("无法获取模型")); }
     finally { setDiscovering(false); }
   };
   const save = async () => {
@@ -136,18 +136,18 @@ function ProviderEditor({ editor, presets, onEditor, onSaved }: {
       const result = await api.saveProvider(draft);
       await onSaved(result.reload);
       onEditor(null);
-    } catch (value) { setError(value instanceof Error ? value.message : "无法保存提供方"); }
+    } catch (value) { setError(value instanceof Error ? value.message : t("无法保存提供方")); }
     finally { setBusy(false); }
   };
   const remove = async () => {
     if (draft.builtin || editor.kind !== "edit"
-      || !window.confirm(`确定删除提供方“${draft.name}”吗？`)) return;
+      || !window.confirm(t("确定删除提供方“{0}”吗？", draft.name))) return;
     setBusy(true); setError(null);
     try {
       const result = await api.removeProvider(draft.id);
       await onSaved(result.reload);
       onEditor(null);
-    } catch (value) { setError(value instanceof Error ? value.message : "无法删除提供方"); }
+    } catch (value) { setError(value instanceof Error ? value.message : t("无法删除提供方")); }
     finally { setBusy(false); }
   };
   const refreshLogin = async () => {
@@ -155,64 +155,61 @@ function ProviderEditor({ editor, presets, onEditor, onSaved }: {
     try {
       await onSaved();
       onEditor(null);
-    } catch (value) { setError(value instanceof Error ? value.message : "无法刷新登录状态"); }
+    } catch (value) { setError(value instanceof Error ? value.message : t("无法刷新登录状态")); }
     finally { setBusy(false); }
   };
   return <div className="provider-editor">
     {editor.kind === "edit" && <div className="provider-editor-identity"><strong>{draft.name}</strong><span>{draft.id}</span></div>}
     {editor.kind !== "edit" && <div className="provider-editor-title">
-      {editor.kind === "custom" ? "自定义提供方" : "提供方"}
+      {editor.kind === "custom" ? t("自定义提供方") : t("提供方")}
     </div>}
-    {editor.kind === "preset" && <label>提供方<select aria-label="提供方" value={draft.id}
+    {editor.kind === "preset" && <label>{t("提供方")}<select aria-label={t("提供方")} value={draft.id}
       onChange={(event) => {
         const preset = presets.find((entry) => entry.id === event.target.value);
         if (preset) onEditor({ ...editor, draft: draftFromPreset(preset) });
       }}>{presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.id}</option>)}</select></label>}
     {editor.kind === "custom" && <><label>Provider ID<input aria-label="Provider ID" placeholder="acme-gateway"
       value={draft.id} onChange={(event) => patch({ id: event.target.value.toLocaleLowerCase() })} /></label>
-      <p className="provider-field-help">以小写字母开头的标识，在请求中唯一标识该提供方。</p></>}
-    {editor.kind === "custom" && <label>显示名称<input aria-label="显示名称" value={draft.name}
+      <p className="provider-field-help">{t("以小写字母开头的标识，在请求中唯一标识该提供方。")}</p></>}
+    {editor.kind === "custom" && <label>{t("显示名称")}<input aria-label={t("显示名称")} value={draft.name}
       onChange={(event) => patch({ name: event.target.value })} /></label>}
-    {subscription && editor.provider && <section className="subscription-login" aria-label="ChatGPT 本地登录状态">
+    {subscription && editor.provider && <section className="subscription-login" aria-label={t("ChatGPT 本地登录状态")}>
       <div className="subscription-login-head"><span className={`provider-status ${editor.provider.authStatus === "configured" ? "configured" : ""}`} />
         <strong>{providerAuthSummary(editor.provider)}</strong></div>
-      <p>自动读取 Codex 的本地 ChatGPT 登录，不需要填写 OpenAI API Key，也不会向 Web 返回访问令牌。</p>
+      <p>{t("自动读取 Codex 的本地 ChatGPT 登录，不需要填写 OpenAI API Key，也不会向 Web 返回访问令牌。")}</p>
       {editor.provider.authFile && <code>{editor.provider.authFile}</code>}
-      {editor.provider.authStatus !== "configured" && <p className="subscription-login-help">
-        请在终端运行 <code>codex login</code>，完成后刷新登录状态。
-      </p>}
+      {editor.provider.authStatus !== "configured" && <p className="subscription-login-help">{t("请在终端运行") + " "}<code>codex login</code>{t("，完成后刷新登录状态。")}</p>}
     </section>}
-    {editor.kind !== "custom" && !subscription && <label>API 密钥<input type="password" aria-label="API 密钥"
-      placeholder={editor.apiKeyConfigured ? "已配置——输入新值可替换" : "输入 API 密钥，或留空使用环境认证"}
+    {editor.kind !== "custom" && !subscription && <label>{t("API 密钥")}<input type="password" aria-label={t("API 密钥")}
+      placeholder={editor.apiKeyConfigured ? t("已配置——输入新值可替换") : t("输入 API 密钥，或留空使用环境认证")}
       value={draft.apiKey || ""} onChange={(event) => patch({ apiKey: event.target.value })} /></label>}
     {editor.kind !== "custom" && !subscription && <button type="button" className={`provider-advanced-toggle ${editor.advanced ? "open" : ""}`}
       onClick={() => onEditor({ ...editor, advanced: !editor.advanced })}>
-      <Icon name="chevron" />自定义设置
-    </button>}
+      <Icon name="chevron" />{t("自定义设置")}</button>}
     {!subscription && (editor.kind === "custom" || editor.advanced) && <div className="provider-advanced-fields">
-      <label>API 地址<input aria-label="API 地址" placeholder="https://gateway.example/v1" value={draft.baseUrl}
+      <label>{t("API 地址")}<input aria-label={t("API 地址")} placeholder="https://gateway.example/v1" value={draft.baseUrl}
         onChange={(event) => patch({ baseUrl: event.target.value })} /></label>
-      <label className="provider-protocol-field">API 协议<select aria-label="API 协议" value={draft.protocol}
+      <label className="provider-protocol-field">{t("API 协议")}<select aria-label={t("API 协议")} value={draft.protocol}
         onChange={(event) => patch({ protocol: event.target.value as ProviderProtocol })}>
         {Object.entries(protocolLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}
       </select></label>
-      {editor.kind === "custom" && <label>API 密钥<input type="password" aria-label="API 密钥"
-        placeholder="输入 API 密钥" value={draft.apiKey || ""}
+      {editor.kind === "custom" && <label>{t("API 密钥")}<input type="password" aria-label={t("API 密钥")}
+        placeholder={t("输入 API 密钥")} value={draft.apiKey || ""}
         onChange={(event) => patch({ apiKey: event.target.value })} /></label>}
       <ModelCatalog models={draft.models} onChange={(models) => patch({ models })}
         onDiscover={() => void discover()} discovering={discovering} />
     </div>}
     {editor.kind !== "custom" && !editor.advanced && !draft.models.length
-      && <p className="provider-field-help">展开自定义设置，获取或添加至少一个模型。</p>}
+      && <p className="provider-field-help">{t("展开自定义设置，获取或添加至少一个模型。")}</p>}
     {error && <p className="form-error">{error}</p>}
     <div className="provider-editor-actions">
       {editor.kind === "edit" && !draft.builtin && <button type="button" className="button danger provider-delete"
-        disabled={busy} onClick={() => void remove()}>删除提供方</button>}
-      <button type="button" className="button ghost" disabled={busy} onClick={() => onEditor(null)}>取消</button>
+        disabled={busy} onClick={() => void remove()}>{t("删除提供方")}</button>}
+      <button type="button" className="button ghost" disabled={busy} onClick={() => onEditor(null)}>{t("取消")}</button>
       {subscription ? <button type="button" className="button primary" disabled={busy} onClick={() => void refreshLogin()}>
-        <Icon name="refresh" />{busy ? "正在刷新" : "刷新登录状态"}
+        <Icon name="refresh" />{busy ? t("正在刷新") : t("刷新登录状态")}
       </button> : <button type="button" className="button primary" disabled={busy || !validDraft(draft)} onClick={() => void save()}>
-        {editor.kind === "custom" ? "创建提供方" : "保存"}
+        {editor.kind === "custom" ? t("创建提供方") : t("保存")}
       </button>}
     </div>
   </div>;
@@ -222,16 +219,16 @@ export function ProviderReloadNotice({ report, retrying, onRetry }: {
   report: ProviderReloadResult; retrying: boolean; onRetry: () => void;
 }) {
   return <div className="provider-reload-notice" role="status">
-    <p>{report.failures.length ? `配置已保存，${report.failures.length} 个 Web 会话尚未生效。`
-      : report.applied.length ? `配置已保存，已更新 ${report.applied.length} 个 Web 会话。`
-        : "配置已保存，将在新打开的 Web 会话中加载。"}</p>
+    <p>{report.failures.length ? t("配置已保存，{0} 个 Web 会话尚未生效。", report.failures.length)
+      : report.applied.length ? t("配置已保存，已更新 {0} 个 Web 会话。", report.applied.length)
+        : t("配置已保存，将在新打开的 Web 会话中加载。")}</p>
     {!!report.warnings?.length && <ul>{report.warnings.map((warning, index) =>
       <li key={`${warning.sessionId}-${index}`}><strong>{warning.sessionName}</strong>：{warning.message}</li>)}</ul>}
     {report.failures.length > 0 && <>
       <ul>{report.failures.map((failure) => <li key={failure.sessionId}>
         <strong>{failure.sessionName}</strong>：{failure.message}</li>)}</ul>
       <button type="button" className="button ghost" disabled={retrying} onClick={onRetry}>
-        {retrying ? "正在重试…" : "重试未生效会话"}</button>
+        {retrying ? t("正在重试…") : t("重试未生效会话")}</button>
     </>}
   </div>;
 }
@@ -247,7 +244,7 @@ export function ProviderSettingsPanel({ onChanged }: { onChanged?: () => Promise
     try {
       const result = await api.listProviders();
       setProviders(result.providers); setPresets(result.presets);
-    } catch (value) { setError(value instanceof Error ? value.message : "无法读取提供方"); }
+    } catch (value) { setError(value instanceof Error ? value.message : t("无法读取提供方")); }
     finally { setLoading(false); }
   };
   useEffect(() => { void load(); }, []);
@@ -260,7 +257,7 @@ export function ProviderSettingsPanel({ onChanged }: { onChanged?: () => Promise
     // Persistence already succeeded; a disconnected active view must not turn
     // this into a misleading "save failed" result or hide the retry report.
     try { await onChanged?.(); }
-    catch { setError("配置已保存，但当前页面信息未刷新，请重新打开会话。"); }
+    catch { setError(t("配置已保存，但当前页面信息未刷新，请重新打开会话。")); }
   };
   const retry = async () => {
     if (!reload || retrying) return;
@@ -268,14 +265,14 @@ export function ProviderSettingsPanel({ onChanged }: { onChanged?: () => Promise
     try {
       const result = await api.reloadProviders(reload.failures.map((failure) => failure.sessionId));
       await saved({ ...result, applied: [...new Set([...reload.applied, ...result.applied])] });
-    } catch (value) { setError(value instanceof Error ? value.message : "无法重新加载配置"); }
+    } catch (value) { setError(value instanceof Error ? value.message : t("无法重新加载配置")); }
     finally { setRetrying(false); }
   };
   const firstPreset = presets[0];
   return <section className="provider-settings-panel">
-    <h2>模型</h2>
-    <p className="provider-settings-copy">API 提供方使用 API Key；ChatGPT 订阅会自动读取本机 Codex 登录状态。</p>
-    {loading && !providers.length && <div className="settings-empty">正在读取提供方…</div>}
+    <h2>{t("模型")}</h2>
+    <p className="provider-settings-copy">{t("API 提供方使用 API Key；ChatGPT 订阅会自动读取本机 Codex 登录状态。")}</p>
+    {loading && !providers.length && <div className="settings-empty">{t("正在读取提供方…")}</div>}
     {error && <p className="form-error">{error}</p>}
     {reload && <ProviderReloadNotice report={reload} retrying={retrying} onRetry={() => void retry()} />}
     <div className="provider-list" role="list">
@@ -284,9 +281,9 @@ export function ProviderSettingsPanel({ onChanged }: { onChanged?: () => Promise
         <div className="provider-summary"><div className="provider-summary-copy"><div><strong>{provider.name}</strong>
           <span className={`provider-status ${provider.authStatus === "configured" ? "configured" : ""}`} role="img"
             aria-label={providerAuthSummary(provider)} /></div><small>{providerAuthSummary(provider)}</small></div>
-          <button type="button" className="provider-edit-button" aria-label={`编辑 ${provider.name} (${provider.id})`}
+          <button type="button" className="provider-edit-button" aria-label={t("编辑 {0} ({1})", provider.name, provider.id)}
             onClick={() => setEditor({ kind: "edit", draft: draftFromProvider(provider), advanced: false,
-              apiKeyConfigured: provider.apiKeyConfigured, provider })}>{provider.authType === "chatgpt-subscription" ? "查看" : "编辑"}</button></div>
+              apiKeyConfigured: provider.apiKeyConfigured, provider })}>{provider.authType === "chatgpt-subscription" ? t("查看") : t("编辑")}</button></div>
         {activeProvider === provider.id && editor && <ProviderEditor editor={editor} presets={presets}
           onEditor={setEditor} onSaved={saved} />}
       </div>)}
@@ -296,10 +293,9 @@ export function ProviderSettingsPanel({ onChanged }: { onChanged?: () => Promise
     {!editor && <div className="provider-add-actions">
       <button type="button" disabled={!firstPreset} onClick={() => firstPreset && setEditor({
         kind: "preset", draft: draftFromPreset(firstPreset), advanced: false,
-      })}><Icon name="plus" />添加提供方</button>
+      })}><Icon name="plus" />{t("添加提供方")}</button>
       <button type="button" onClick={() => setEditor({ kind: "custom", draft: customDraft(), advanced: true })}>
-        <Icon name="plus" />添加自定义提供方
-      </button>
+        <Icon name="plus" />{t("添加自定义提供方")}</button>
     </div>}
   </section>;
 }

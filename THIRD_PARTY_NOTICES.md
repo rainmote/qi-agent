@@ -7,6 +7,7 @@ The Web presentation adapts code and assets from [DeepSeek Harness](https://gith
 - `apps/web/src/MenuSurface.tsx`: plain Web menu material adapted from `packages/client/ui-primitives/src/MenuSurface.tsx` (MIT).
 - `apps/web/src/assets/harness/{design-platform,base,gradient-shadow-text,brand-font,corner-shape}.css` and `harness.css`: theme, typography, curvature, elevation and measured layout adaptations (MIT).
 - `apps/web/src/assets/harness/montserrat-*.woff2`: Montserrat 300/400/500 fonts, under the SIL Open Font License 1.1, reproduced in `Montserrat-OFL.txt`.
+- `apps/web/src/web-english.ts`: shared interface translations adapted from the client feature `locales.ts` dictionaries (MIT), with qi-specific copy and semantics.
 
 qi-agent keeps its own identifying brand mark and name, runtime, protocol, authorization and approval policy. DeepSeek's branding guidelines do not grant trademark rights; the interface must not imply that qi-agent is an official DeepSeek product. Shared non-brand UI artwork follows the MIT grant below. Built Web bundles include these notices under `licenses/` via Vite's public directory.
 

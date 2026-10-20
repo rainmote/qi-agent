@@ -1,3 +1,5 @@
+import { uiText as t } from "./i18n";
+import { useWebPreferences } from "./web-preferences";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Icon } from "./icons";
 import { MarkdownContent } from "./MarkdownContent";
@@ -101,19 +103,19 @@ export function toolBatchLabel(batch: ToolBatch): string {
   if (batch.calls.length === 1) return String(batch.calls[0].data.name || "tool");
   const counts = new Map<string, number>();
   for (const call of batch.calls) {
-    const name = String(call.data.name || "tool"), label = toolCategories[name] || name;
+    const name = String(call.data.name || "tool"), label = toolCategories[name] ? t(toolCategories[name]) : name;
     counts.set(label, (counts.get(label) || 0) + 1);
   }
   const categories = [...counts].slice(0, 3).map(([name, count]) => `${name} ×${count}`);
-  return `${categories.join(" · ")}${counts.size > 3 ? ` · 等 ${batch.calls.length} 项` : ""}`;
+  return `${categories.join(" · ")}${counts.size > 3 ? t(" · 等 {0} 项", batch.calls.length) : ""}`;
 }
 
 function ToolDetails({ call, result, pluginSlots }: {
   call: DurableEvent; result?: DurableEvent; pluginSlots: PluginSlot[];
 }) {
   return <div className="tool-details">
-    <div><span>参数</span><pre>{text(call.data.arguments) || "{}"}</pre></div>
-    {result && <div><span>结果</span>
+    <div><span>{t("参数")}</span><pre>{text(call.data.arguments) || "{}"}</pre></div>
+    {result && <div><span>{t("结果")}</span>
       <pre>{text(result.data.content || result.data.error)}</pre>
       <ToolResultImages images={result.data.images} />
       {result.data.ok !== false && <PluginSlots slots={pluginSlots} slot="tool-result"
@@ -142,27 +144,27 @@ function ToolBatchCard({ batch, results, active, open, onToggle, expanded, onToo
     {!ungrouped && <button className="tool-summary" type="button" onClick={onToggle}
       aria-expanded={open}>
       <span className="tool-icon"><Icon name="terminal" /></span>
-      <span className="tool-summary-copy"><span className="tool-name">{single && batch.calls[0].data.name === "bash" ? failed ? "命令执行失败" : running ? "正在执行命令" : missing ? "命令结果未确认" : "执行了命令" : label}</span>
+      <span className="tool-summary-copy"><span className="tool-name">{single && batch.calls[0].data.name === "bash" ? failed ? t("命令执行失败") : running ? t("正在执行命令") : missing ? t("命令结果未确认") : t("执行了命令") : label}</span>
         {single && <span className="tool-summary-target" title={operationTarget(batch.calls[0], 10_000)}>{operationTarget(batch.calls[0])}</span>}</span>
-      <span className="tool-status">{failed ? `${failed} 失败${missing ? ` · ${missing} ${running ? "等待" : "未确认"}` : ""}`
-        : running ? `${completed}/${batch.calls.length} 完成`
-        : missing ? `${missing} 项结果未确认` : `${completed} 项完成`}</span>
+      <span className="tool-status">{failed ? t("{0} 失败{1}", failed, missing ? ` · ${missing} ${running ? t("等待") : t("未确认")}` : "")
+        : running ? t("{0}/{1} 完成", completed, batch.calls.length)
+        : missing ? t("{0} 项结果未确认", missing) : t("{0} 项完成", completed)}</span>
       <Icon name="chevron" className={open ? "rotate" : ""} />
     </button>}
-    {!open && current && !single && <p className="tool-activity">正在调用 {String(current.data.name || "tool")} · {operationTarget(current)}</p>}
-    {!open && failure && <p className="tool-failure">{String(failedCall!.data.name || "tool")} · {truncated(oneLine(failure.data.error || failure.data.content) || "调用失败，展开查看参数", 140)}</p>}
+    {!open && current && !single && <p className="tool-activity">{t("正在调用") + " "}{String(current.data.name || "tool")} · {operationTarget(current)}</p>}
+    {!open && failure && <p className="tool-failure">{String(failedCall!.data.name || "tool")} · {truncated(oneLine(failure.data.error || failure.data.content) || t("调用失败，展开查看参数"), 140)}</p>}
     {open && single && batch.calls[0].data.name !== "bash" && !ungrouped && <ToolDetails call={batch.calls[0]} result={results.get(callId(batch.calls[0]))} pluginSlots={pluginSlots} />}
     {(ungrouped || (open && (!single || batch.calls[0].data.name === "bash"))) && <div className="tool-batch-items">
       {batch.calls.map((call) => {
         const result = results.get(callId(call));
         const detailId = `call:${call.id}`, detailOpen = expanded.has(detailId);
-        return <section key={call.id}>
+        return <section key={call.id} data-tool-call={String(call.data.name || "tool")}>
           <button type="button" className="tool-batch-row" aria-expanded={detailOpen}
             onClick={() => onToolToggle(detailId, !detailOpen)}>
-          <span className="tool-batch-name">{call.data.name === "bash" ? <><Icon name="terminal" />运行命令</> : String(call.data.name || "tool")}</span>
+          <span className="tool-batch-name">{call.data.name === "bash" ? <><Icon name="terminal" />{t("运行命令")}</> : String(call.data.name || "tool")}</span>
           <span className="tool-target" title={operationTarget(call, 10_000)}>{call.data.name === "bash" && call.data.arguments && typeof call.data.arguments === "object" && "description" in call.data.arguments ? String(call.data.arguments.description) : operationTarget(call)}</span>
           <span className={`tool-item-status ${result?.data.ok === false ? "failed" : result ? "completed" : ""}`}>
-            {result ? (result.data.ok === false ? "失败" : "完成") : active ? "等待" : "未确认"}
+            {result ? (result.data.ok === false ? t("失败") : t("完成")) : active ? t("等待") : t("未确认")}
           </span>
           {result?.data["duration-ms"] != null
             ? <span className="tool-duration">{String(result.data["duration-ms"])} ms</span>
@@ -195,9 +197,9 @@ export function UserMessageAttachments({ content }: { content: unknown }) {
   if (!Array.isArray(content)) return null;
   const candidates = content.filter((item) => item && typeof item === "object" && item.type === "attachment");
   if (!candidates.length) return null;
-  return <div className="message-attachments" aria-label="消息附件" style={{ display: "grid", gap: 10, maxWidth: "100%" }}>
+  return <div className="message-attachments" aria-label={t("消息附件")} style={{ display: "grid", gap: 10, maxWidth: "100%" }}>
     {candidates.slice(0, 8).map((item, index) => {
-      if (!validAttachment(item)) return <p key={index}>附件引用不可用。</p>;
+      if (!validAttachment(item)) return <p key={index}>{t("附件引用不可用。")}</p>;
       const path = `/api/workspaces/${encodeURIComponent(item.workspaceId)}/attachments/${encodeURIComponent(item.id)}`;
       return <figure key={`${item.id}-${index}`} style={{ margin: 0, minWidth: 0 }}>
         {/^(image\/(png|jpeg|gif|webp))$/.test(item.mime) && <img src={`${path}?download=0`} alt={item.name}
@@ -207,7 +209,7 @@ export function UserMessageAttachments({ content }: { content: unknown }) {
         </figcaption>
       </figure>;
     })}
-    {candidates.length > 8 && <p>{candidates.length - 8} 个附件未显示。</p>}
+    {candidates.length > 8 && <p>{candidates.length - 8}{" " + t("个附件未显示。")}</p>}
   </div>;
 }
 
@@ -231,20 +233,20 @@ function Message({ event, reasoningOpen, onReasoningToggle, hideReasoning = fals
           if (event.target !== event.currentTarget) return;
           onReasoningToggle(event.currentTarget.open);
           if (!event.currentTarget.open) setReasoningBodyOpen(false);
-        }}><summary><Icon name="think" /><span>已完成分析</span><Icon name="chevron" /></summary>
+        }}><summary><Icon name="think" /><span>{t("已完成分析")}</span><Icon name="chevron" /></summary>
         <div className="reasoning-group-body"><details className="reasoning-content" open={reasoningBodyOpen}
           onToggle={event => setReasoningBodyOpen(event.currentTarget.open)}>
-          <summary><Icon name={reasoningBodyOpen ? "chevron" : "think"} /><span>思考</span>{!reasoningBodyOpen && <span className="reasoning-first-line">{reasoning.split(/\r?\n/, 1)[0].replaceAll("**", "")}</span>}</summary>
+          <summary><Icon name={reasoningBodyOpen ? "chevron" : "think"} /><span>{t("思考")}</span>{!reasoningBodyOpen && <span className="reasoning-first-line">{reasoning.split(/\r?\n/, 1)[0].replaceAll("**", "")}</span>}</summary>
           <div><MarkdownContent content={reasoning} /></div>
         </details></div></details>}
       {content && (role === "assistant"
         ? <MarkdownContent content={content} />
         : <div className="message-content">{content}</div>)}
       {role === "user" && <UserMessageAttachments content={message.content} />}
-      {!content && calls > 0 && <div className="message-muted">准备调用 {calls} 个工具</div>}
-      {content && (role !== "assistant" || showActions) && <div className="message-actions"><button type="button" aria-label="复制"
+      {!content && calls > 0 && <div className="message-muted">{t("准备调用") + " "}{calls}{" " + t("个工具")}</div>}
+      {content && (role !== "assistant" || showActions) && <div className="message-actions"><button type="button" aria-label={t("复制")}
         onClick={() => void navigator.clipboard.writeText(content)}><Icon name="copy" /></button>
-        <time>{`${new Date(event.at).getMonth() + 1}月${new Date(event.at).getDate()}日 ${new Date(event.at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" })}`}</time></div>}
+        <time>{t("{0}月{1}日 {2}", new Date(event.at).getMonth() + 1, new Date(event.at).getDate(), new Date(event.at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }))}</time></div>}
     </div>
   </article>;
 }
@@ -278,6 +280,7 @@ export function Timeline({ projection, scrollRef, pluginSlots = [], view = "stan
   const [choices, setExpanded] = useState<ReadonlyMap<string, boolean>>(new Map());
   const [focusedRow, setFocusedRow] = useState<string | null>(null);
   const [focusedUngroupedRow, setFocusedUngroupedRow] = useState<string | null>(null);
+  const { locale } = useWebPreferences();
   const expanded = useMemo(() => new Set([...choices].filter(([,open]) => open).map(([id]) => id)), [choices]);
   const setExpandedRow = useCallback((id: string, open: boolean) => setExpanded((current) => {
     if (current.get(id) === open) return current;
@@ -288,7 +291,7 @@ export function Timeline({ projection, scrollRef, pluginSlots = [], view = "stan
   const partialAssistant = String(projection.state["partial-assistant"] || projection.state.partialAssistant || "");
   const partialReasoning = String(projection.state["partial-reasoning"] || projection.state.partialReasoning || "");
   const streaming = projection.state.phase !== "idle" && Boolean(partialAssistant || partialReasoning);
-  const transcript = useMemo(() => displayTranscript(projection.timeline, view, choices, focusedRow, collapseTiming), [projection.timeline, view, choices, focusedRow, collapseTiming]);
+  const transcript = useMemo(() => displayTranscript(projection.timeline, view, choices, focusedRow, collapseTiming), [projection.timeline, view, choices, focusedRow, collapseTiming, locale]);
   const rememberFocusedProcess = () => {
     const retained = transcript.rows.filter(row => row.kind === "turn-control" && row.open
       && focusedRow !== null && row.members.includes(focusedRow));
@@ -422,7 +425,7 @@ export function Timeline({ projection, scrollRef, pluginSlots = [], view = "stan
     }}
     data-window-start={range.start} data-window-end={range.end} data-scroll-top={Math.round(viewport.top)}>
     {!rows.length && projection.state.phase === "idle" &&
-      <div className="empty-conversation">描述任务，开始这段会话。</div>}
+      <div className="empty-conversation">{t("描述任务，开始这段会话。")}</div>}
     <div ref={rowContainer} className="timeline-rows">
       <div className="timeline-spacer" aria-hidden="true" style={{ height: layout.offsets[range.start] || 0 }} />
       {rows.slice(range.start, range.end).map((row) => <div className="timeline-row" key={row.id}
@@ -451,9 +454,9 @@ export function Timeline({ projection, scrollRef, pluginSlots = [], view = "stan
           open={choices.get(row.id) ?? false}
           onToggle={() => setExpandedRow(row.id, !(choices.get(row.id) ?? false))} />}
         {row.kind === "decision" && <div className={`decision-row ${row.event.data.decision === "allow" ? "allowed" : "denied"}`}>
-          <Icon name="shield" /><span>{String(row.event.data.tool || "工具")} {row.event.data.decision === "allow" ? "已获批准" : "被拒绝"}</span>
+          <Icon name="shield" /><span>{String(row.event.data.tool || t("工具"))} {row.event.data.decision === "allow" ? t("已获批准") : t("被拒绝")}</span>
         </div>}
-        {row.kind === "error" && <div className="inline-error">{String(row.event.data.message || "运行失败")}</div>}
+        {row.kind === "error" && <div className="inline-error">{String(row.event.data.message || t("运行失败"))}</div>}
         {row.kind === "outcome" && <div className={`run-outcome ${row.event.data.status}`}>
           {outcomeText(runOutcome(row.event.data)!)}
         </div>}
@@ -461,7 +464,7 @@ export function Timeline({ projection, scrollRef, pluginSlots = [], view = "stan
         {row.kind === "stream" && <article className="message message-assistant is-streaming">
           <div className="message-body">
             {partialReasoning && <details className="reasoning-row" open={choices.get("__reasoning__") ?? false}
-              onToggle={event => setExpandedRow("__reasoning__", event.currentTarget.open)}><summary>正在思考<Icon name="chevron" /></summary>
+              onToggle={event => setExpandedRow("__reasoning__", event.currentTarget.open)}><summary>{t("正在思考")}<Icon name="chevron" /></summary>
               <div><MarkdownContent content={partialReasoning} /></div></details>}
             <MarkdownContent content={partialAssistant} />
           </div>
@@ -469,6 +472,6 @@ export function Timeline({ projection, scrollRef, pluginSlots = [], view = "stan
       </div>)}
       <div className="timeline-spacer" aria-hidden="true" style={{ height: layout.total - (layout.offsets[range.end] || 0) }} />
     </div>
-    {!following && <div className="timeline-jump"><button type="button" onClick={jumpToLatest}>回到最新</button></div>}
+    {!following && <div className="timeline-jump"><button type="button" onClick={jumpToLatest}>{t("回到最新")}</button></div>}
   </div>;
 }

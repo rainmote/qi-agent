@@ -1,0 +1,27 @@
+{
+  "capturedAt": "2026-10-20T14:11:38.084Z",
+  "browser": "155.0.8059.85",
+  "viewport": {
+    "width": 320,
+    "height": 844
+  },
+  "state": {
+    "dpr": 1,
+    "locale": "en",
+    "theme": "light",
+    "bodyFont": "Arial, sans-serif",
+    "fontVariables": {
+      "text": "Arial, sans-serif",
+      "code": "Courier New, monospace",
+      "terminal": "Menlo, monospace"
+    },
+    "settingsScroll": [
+      {
+        "scrollTop": 1290,
+        "scrollWidth": 272,
+        "clientWidth": 272
+      }
+    ],
+    "exclusionMasks": []
+  }
+}

@@ -1,0 +1,27 @@
+
+> @rainmote/qi-agent-web@0.1.0 test:web-browser:ci
+> node apps/web/tests/production-browser.mjs
+
+  ➜  Local:   http://127.0.0.1:4179/
+{"draftFilesEntry":"passed","cases":["1440/390/320","real workspace listing","repeated open/close","double click","keyboard immediate Escape and return","mobile Tab boundary and inert cleanup","text source and static HTML preview keyboard access","reference preserves draft and returns composer focus","1440x300 settings navigation scroll","no session creation or submission"]}
+{"bootstrapHistoryRace":"passed","cases":["popstate before first route subscription","allowed session restoration","no submission"]}
+{"bootstrapLateOpen":"passed","target":"B","cases":["A open held","navigation before initial subscription","release A","URL and visible allowed session preserved","semantic hash order","zero pushes or submissions"]}
+{"bootstrapLateOpen":"passed","target":"A","cases":["A open held","navigation before initial subscription","release A","URL and visible allowed session preserved","semantic hash order","zero pushes or submissions"]}
+{"bootstrapInvalidRoute":"passed","cases":["same parsed route with missing id","canonical URL restored","unlisted id never requested"]}
+{"headerSessionActions":"passed","cases":["existing callbacks exposed","Escape restores focus","rename cancellation","no navigation or submission"]}
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+
+locator.click: Timeout 30000ms exceeded.
+Call log:
+  - waiting for getByRole('dialog', { name: '设置', exact: true }).getByRole('button', { name: '语言：中文', exact: true })
+
+    at /Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/tests/browser-regressions.mjs:156:88 {
+  log: [
+    "  - waiting for getByRole('dialog', { name: '设置', exact: true }).getByRole('button', { name: '语言：中文', exact: true })"
+  ],
+  name: 'TimeoutError'
+}
+
+Node.js v26.9.0

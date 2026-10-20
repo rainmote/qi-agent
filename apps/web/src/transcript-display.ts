@@ -1,3 +1,4 @@
+import { uiText as t } from "./i18n";
 import type { TimelineModel, TimelineRow } from "./timeline-model";
 
 // Presentation preferences never change model requests or permission policy.
@@ -62,18 +63,18 @@ export function displayTranscript(model: TimelineModel, mode: TranscriptView,
       const result = model.results.get(String(call.data["call-id"] || call.data.call_id || ""));
       if (!result) missing++; else if (result.data.ok === false) failed++;
     }
-    const summary = [failed ? `${failed} 失败` : "", missing ? `${missing} 项结果未确认` : ""].filter(Boolean);
+    const summary = [failed ? t("{0} 失败", failed) : "", missing ? t("{0} 项结果未确认", missing) : ""].filter(Boolean);
     const startedAt = segment.find(row => "event" in row)?.event.at;
     const endedAt = "event" in outcome ? outcome.event.at : undefined;
     const elapsed = startedAt && endedAt ? Date.parse(endedAt) - Date.parse(startedAt) : NaN;
-    const duration = Number.isFinite(elapsed) ? `，用时 ${Math.max(1, Math.round(elapsed / 1000))}秒` : "";
+    const duration = Number.isFinite(elapsed) ? t("，用时 {0}秒", Math.max(1, Math.round(elapsed / 1000))) : "";
     let inserted = false;
     for (const row of segment) {
       if (!inserted && (process.has(row.id) || row.id === finalId)) {
         rows.push({ id, kind: "turn-control", open,
-          caption: `已完成${duration}${summary.length ? ` · ${summary.join(" · ")}` : ""}`,
+          caption: t("已完成{0}{1}", duration, summary.length ? ` · ${summary.join(" · ")}` : ""),
           members: segment.flatMap(member => [member.id, ...(member.kind === "tools" ? member.batch.calls.map(call => `call:${call.id}`) : [])]),
-          label: `工作步骤 · ${count} 项${summary.length ? ` · ${summary.join(" · ")}` : ""}` });
+          label: t("工作步骤 · {0} 项{1}", count, summary.length ? ` · ${summary.join(" · ")}` : "") });
         inserted = true;
       }
       if (open || !process.has(row.id)) rows.push(row);

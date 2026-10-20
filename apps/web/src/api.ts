@@ -1,4 +1,5 @@
 import { mutation } from "../../shared/methods";
+import { uiText as t } from "./i18n";
 import type { AttachmentRef, ChangeSet, FileListing, FilePreview } from "../../web-host/workspace-files";
 import type { AgentPresetSummary, HostEvent, ProviderInput, ProviderModelSettings, ProviderPreset, ProviderSettings, ProviderReloadResult,
   SessionSnapshot, SessionSummary, Workspace } from "./types";
@@ -47,7 +48,7 @@ export function uncertainOperation(error: unknown): boolean {
   return (error as { data?: { status?: string } } | null)?.data?.status === "uncertain";
 }
 function unknownOutcome(operation: PendingOperation): Error {
-  return Object.assign(new Error("操作结果尚未确认，请先核对结果，避免重复执行。"), {
+  return Object.assign(new Error(t("操作结果尚未确认，请先核对结果，避免重复执行。")), {
     data: { status: "uncertain", command_id: operation.commandId },
   });
 }
@@ -69,7 +70,7 @@ async function submitOperation<T>(operation: PendingOperation): Promise<T> {
 }
 async function operationStatus(id: string): Promise<OperationStatus> {
   const operation = pendingOperation(id);
-  if (!operation) throw new Error("没有需要核对的操作");
+  if (!operation) throw new Error(t("没有需要核对的操作"));
   const result = await request<OperationStatus>(
     `/api/sessions/${encodeURIComponent(id)}/operations/${encodeURIComponent(operation.commandId)}`);
   if (result.status === "completed" || result.status === "failed") sessionStorage.removeItem(storageKey(id));
@@ -132,11 +133,11 @@ export const api = {
   operationStatus,
   retryOperation: async (id: string) => {
     const operation = pendingOperation(id);
-    if (!operation) throw new Error("没有需要核对的操作");
+    if (!operation) throw new Error(t("没有需要核对的操作"));
     const status = await operationStatus(id);
     if (status.status === "not_found") return submitOperation(operation);
     if (status.status === "completed") return status.result;
-    if (status.status === "failed") throw new Error(status.error?.message || "原操作失败");
+    if (status.status === "failed") throw new Error(status.error?.message || t("原操作失败"));
     throw unknownOutcome(operation);
   },
   rpc: <T>(id: string, method: string, params: Record<string, unknown> = {}): Promise<T> => {

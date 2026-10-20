@@ -1,3 +1,4 @@
+import { uiText as t } from "./i18n";
 import { useDeferredValue, useLayoutEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { captureAnchor, restoreAnchor, timelineLayout, visibleRange } from "./virtual-timeline";
 import { Icon } from "./icons";
@@ -354,7 +355,7 @@ export function Trajectory({ events }: { events: readonly DurableEvent[] }) {
   };
 
   return <div className="trajectory-view">
-    <div className="trajectory-toolbar" role="toolbar" aria-label="轨迹工具栏">
+    <div className="trajectory-toolbar" role="toolbar" aria-label={t("轨迹工具栏")}>
       <div className="trajectory-toolbar-actions">
         <button type="button" aria-label={actualDuration ? "Use equal width" : "Use actual duration"}
           aria-pressed={actualDuration} onClick={() => setActualDuration((value) => !value)}>
@@ -370,7 +371,7 @@ export function Trajectory({ events }: { events: readonly DurableEvent[] }) {
         </button>
       </div>
       <label className="trajectory-search"><Icon name="search" />
-        <input type="search" aria-label="搜索轨迹" placeholder="搜索" value={query}
+        <input type="search" aria-label={t("搜索轨迹")} placeholder={t("搜索")} value={query}
           onChange={(event) => setQuery(event.currentTarget.value)} />
       </label>
     </div>
@@ -384,7 +385,7 @@ export function Trajectory({ events }: { events: readonly DurableEvent[] }) {
           className={`trajectory-span lane-${laneFor(record.kind)} kind-${record.kind}`}
           style={{ left: `${left * 100}%`, width: `${width * 100}%` }}
           data-match={matched || undefined}
-          aria-label={`${record.label}: ${record.text}${count > 1 ? `（${count} 条记录）` : ""}`}
+          aria-label={`${record.label}: ${record.text}${count > 1 ? t("（{0} 条记录）", count) : ""}`}
           onPointerDown={(event) => event.stopPropagation()}
           onClick={() => focusRecord(record)} />)}
         {range && <span className="trajectory-range" style={{ left: `${range.start * 100}%`, width: `${Math.max(.2, (range.end - range.start) * 100)}%` }} />}
@@ -420,7 +421,7 @@ export function Trajectory({ events }: { events: readonly DurableEvent[] }) {
           })}
           <tr className="trajectory-spacer" aria-hidden="true"><td colSpan={2} style={{ height: layout.total - layout.offsets[window.end] }} /></tr>
         </tbody>
-      </table> : <div className="trajectory-empty">暂无轨迹记录</div>}
+      </table> : <div className="trajectory-empty">{t("暂无轨迹记录")}</div>}
     </div>
   </div>;
 }

@@ -1,0 +1,21 @@
+{
+  "capturedAt": "2026-10-20T14:11:36.821Z",
+  "browser": "155.0.8059.85",
+  "viewport": {
+    "width": 1440,
+    "height": 1000
+  },
+  "state": {
+    "dpr": 1,
+    "locale": "zh-CN",
+    "theme": "light",
+    "bodyFont": "Arial, sans-serif",
+    "fontVariables": {
+      "text": "Arial, sans-serif",
+      "code": "Courier New, monospace",
+      "terminal": "Menlo, monospace"
+    },
+    "settingsScroll": [],
+    "exclusionMasks": []
+  }
+}

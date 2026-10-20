@@ -1,3 +1,4 @@
+import { uiText as t } from "./i18n";
 import type { ReactNode } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -35,13 +36,13 @@ export function validPluginData(type: PluginSlot["type"], value: unknown): boole
 }
 
 function SlotContent({ slot, data }: { slot: PluginSlot; data: unknown }): ReactNode {
-  if (!validPluginData(slot.type, data) || !object(data)) return <p role="status">扩展数据格式不匹配，已停止显示。</p>;
+  if (!validPluginData(slot.type, data) || !object(data)) return <p role="status">{t("扩展数据格式不匹配，已停止显示。")}</p>;
   switch (slot.type) {
     case "text": return <p style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{data.text as string}</p>;
     case "markdown": return <div className="markdown-content"><Markdown remarkPlugins={[remarkGfm]} skipHtml
       components={{
         // Package content cannot silently contact external servers by loading images.
-        img: ({ alt }) => <span>{alt || "图片"}</span>,
+        img: ({ alt }) => <span>{alt || t("图片")}</span>,
         a: ({ href, children }) => href && /^https?:\/\//i.test(href)
           ? <a href={href} rel="noreferrer noopener" target="_blank">{children}</a> : <span>{children}</span>,
       }}>{data.text as string}</Markdown></div>;

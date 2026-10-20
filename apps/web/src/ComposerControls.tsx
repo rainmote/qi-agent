@@ -1,9 +1,11 @@
+import { uiText as t } from "./i18n";
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { Icon, type IconName } from "./icons";
 import { MenuSurface } from "./MenuSurface";
 import { rankByName } from "./vendor/harness-rank-by-name";
 import type { ContextStatus, ModelEntry, PolicyStatus } from "./types";
 import { contextBudgetExplanation, contextTokenCount } from "./context-budget";
+import { updateWebPreferences, useWebPreferences } from "./web-preferences";
 
 const permissionMeta: Record<PolicyStatus["mode"], {
   label: string; displayLabel: string; description: string; icon: IconName;
@@ -120,13 +122,13 @@ export function SidebarMenu({ collapsed, onSettings, onWorkspace }: {
   const popover = useComposerPopover(open, () => setOpen(false));
   const id = useId();
   return <div className="sidebar-menu-root" ref={popover.root} onKeyDown={popover.onKeyDown}>
-    <button ref={popover.trigger} className="sidebar-settings" type="button" aria-label="设置" aria-haspopup="menu" aria-expanded={open}
-      aria-controls={open ? id : undefined} onClick={() => setOpen(value => !value)}><Icon name="more" />{!collapsed && <span>更多</span>}</button>
-    {open && <MenuSurface ref={popover.panel} id={id} className="composer-popover sidebar-global-menu" role="menu" aria-label="更多">
+    <button ref={popover.trigger} className="sidebar-settings" type="button" aria-label={t("设置")} aria-haspopup="menu" aria-expanded={open}
+      aria-controls={open ? id : undefined} onClick={() => setOpen(value => !value)}><Icon name="more" />{!collapsed && <span>{t("更多")}</span>}</button>
+    {open && <MenuSurface ref={popover.panel} id={id} className="composer-popover sidebar-global-menu" role="menu" aria-label={t("更多")}>
       <div className="menu-viewport">
-      <button type="button" role="menuitem" onClick={() => { popover.dismiss(); onSettings(); }}><Icon name="settingsGeneral" /><span>设置</span></button>
-      <a role="menuitem" href="https://github.com/rainmote/qi-agent/issues" target="_blank" rel="noreferrer"><Icon name="feedback" /><span>意见反馈</span></a>
-      <button type="button" role="menuitem" onClick={() => { popover.dismiss(); onWorkspace(); }}><Icon name="folder" /><span>工作区</span></button>
+      <button type="button" role="menuitem" onClick={() => { popover.dismiss(); onSettings(); }}><Icon name="settingsGeneral" /><span>{t("设置")}</span></button>
+      <a role="menuitem" href="https://github.com/rainmote/qi-agent/issues" target="_blank" rel="noreferrer"><Icon name="feedback" /><span>{t("意见反馈")}</span></a>
+      <button type="button" role="menuitem" onClick={() => { popover.dismiss(); onWorkspace(); }}><Icon name="folder" /><span>{t("工作区")}</span></button>
       </div>
     </MenuSurface>}
   </div>;
@@ -139,9 +141,9 @@ export function ComposerTools({ actions }: {
   const popover = useComposerPopover(open, () => setOpen(false));
   const id = useId();
   return <div className="composer-control composer-tools" ref={popover.root} onKeyDown={popover.onKeyDown}>
-    <button ref={popover.trigger} type="button" className="toolbar-button" aria-label="添加附件与工具" title="附件、引用与工作台"
+    <button ref={popover.trigger} type="button" className="toolbar-button" aria-label={t("添加附件与工具")} title={t("附件、引用与工作台")}
       aria-haspopup="menu" aria-expanded={open} aria-controls={open ? id : undefined} onClick={() => setOpen(!open)}><Icon name="composerAdd" /></button>
-    {open && <MenuSurface ref={popover.panel} id={id} className="composer-popover composer-tools-menu" role="menu" aria-label="附件与工具">
+    {open && <MenuSurface ref={popover.panel} id={id} className="composer-popover composer-tools-menu" role="menu" aria-label={t("附件与工具")}>
       {actions.map(action => <button type="button" role="menuitem" key={action.label} disabled={action.disabled}
         onClick={() => { popover.dismiss(); action.run(); }}><Icon name={action.icon} /><span>{action.label}</span></button>)}
     </MenuSurface>}
@@ -156,14 +158,14 @@ export function SessionActions({ onRename, onFork, onArchive }: {
   const popover = useComposerPopover(open, () => setOpen(false), true, "below", true);
   const id = useId();
   const actions: Array<{ label: string; icon: IconName; run: () => void }> = [
-    { label: "重命名", icon: "edit", run: onRename },
-    { label: "创建分支", icon: "branch", run: onFork },
-    { label: "归档", icon: "archive", run: onArchive },
+    { label: t("重命名"), icon: "edit", run: onRename },
+    { label: t("创建分支"), icon: "branch", run: onFork },
+    { label: t("归档"), icon: "archive", run: onArchive },
   ];
   return <div className="session-actions-menu-root" ref={popover.root} onKeyDown={popover.onKeyDown}>
-    <button type="button" ref={popover.trigger} className="session-actions-trigger" aria-label="更多操作" aria-haspopup="menu"
+    <button type="button" ref={popover.trigger} className="session-actions-trigger" aria-label={t("更多操作")} aria-haspopup="menu"
       aria-expanded={open} aria-controls={open ? id : undefined} onClick={() => setOpen(value => !value)}><Icon name="more" /></button>
-    {open && <MenuSurface ref={popover.panel} id={id} className="composer-popover session-action-menu" role="menu" aria-label="会话操作">
+    {open && <MenuSurface ref={popover.panel} id={id} className="composer-popover session-action-menu" role="menu" aria-label={t("会话操作")}>
       <div className="menu-viewport">
       {actions.map(action => <button key={action.label} type="button" role="menuitem"
         onClick={() => { popover.dismiss(); action.run(); }}><Icon name={action.icon} /><span>{action.label}</span></button>)}
@@ -184,21 +186,21 @@ export function PermissionControl({ policy, onChange }: {
   const modes = policy.modes.length ? policy.modes : [{ id: "deny" as const, label: "Read Only" }];
   return <div className="composer-control permission-control" ref={popover.root} onKeyDown={popover.onKeyDown}>
     <button ref={popover.trigger} type="button" className="composer-control-trigger permission-trigger"
-      aria-label={`访问权限：${current.label}`} aria-haspopup="menu" aria-expanded={open}
+      aria-label={t("访问权限：{0}", current.label)} aria-haspopup="menu" aria-expanded={open}
       aria-controls={open ? menuId : undefined} onClick={() => setOpen((value) => !value)}>
-      <Icon name={current.icon} /><span>{current.displayLabel}</span><Icon name="chevron" />
+      <Icon name={current.icon} /><span>{t(current.displayLabel)}</span><Icon name="chevron" />
     </button>
-    {open && <MenuSurface ref={popover.panel} id={menuId} className="composer-popover permission-menu" role="menu" aria-label="访问权限">
+    {open && <MenuSurface ref={popover.panel} id={menuId} className="composer-popover permission-menu" role="menu" aria-label={t("访问权限")}>
       <div className="menu-viewport">
-      <div className="composer-popover-title">访问权限</div>
+      <div className="composer-popover-title">{t("访问权限")}</div>
       {modes.map((mode) => {
         const meta = permissionMeta[mode.id];
         const selected = policy.mode === mode.id;
         return <div className="menu-item-wrap" key={mode.id}><button type="button" role="menuitemradio" aria-checked={selected}
-          title={meta.description} aria-label={`${meta.displayLabel}，${meta.description}`} className={`permission-option ${mode.id === "allow" ? "dangerous" : ""}`}
+          title={t(meta.description)} aria-label={`${t(meta.displayLabel)}，${t(meta.description)}`} className={`permission-option ${mode.id === "allow" ? "dangerous" : ""}`}
           onClick={() => { popover.dismiss(); if (!selected) onChange(mode.id); }}>
           <span className="permission-option-icon"><Icon name={meta.icon} /></span>
-          <span className="permission-option-copy">{meta.displayLabel}</span>
+          <span className="permission-option-copy">{t(meta.displayLabel)}</span>
           {selected && <span className="permission-option-check"><Icon name="check" /></span>}
         </button></div>;
       })}
@@ -207,15 +209,16 @@ export function PermissionControl({ policy, onChange }: {
   </div>;
 }
 
-/** The current Web client has one locale; expose only the supported choice. */
 export function SettingsLanguageControl() {
+  const prefs = useWebPreferences();
   const [open, setOpen] = useState(false);
   const popover = useComposerPopover(open, () => setOpen(false));
   return <div className="settings-language-control" ref={popover.root} onKeyDown={popover.onKeyDown}>
-    <button ref={popover.trigger} type="button" className="settings-language-trigger" aria-label="语言：中文" aria-haspopup="menu" aria-expanded={open}
-      onClick={() => setOpen(value => !value)}><span>中文</span><Icon name="chevron" /></button>
-    {open && <MenuSurface ref={popover.panel} className="composer-popover settings-language-menu" role="menu" aria-label="语言">
-      <button type="button" role="menuitemradio" aria-checked="true" onClick={popover.dismiss}>中文<Icon name="check" /></button>
+    <button ref={popover.trigger} type="button" className="settings-language-trigger" aria-label={t("语言：{0}", prefs.locale === "en" ? "English" : "中文")} aria-haspopup="menu" aria-expanded={open}
+      onClick={() => setOpen(value => !value)}><span>{prefs.locale === "en" ? "English" : t("中文")}</span><Icon name="chevron" /></button>
+    {open && <MenuSurface ref={popover.panel} className="composer-popover settings-language-menu" role="menu" aria-label={t("语言")}>
+      {(["zh", "en"] as const).map(locale => <button type="button" role="menuitemradio" key={locale} aria-checked={prefs.locale === locale}
+        onClick={() => { popover.dismiss(); updateWebPreferences({ locale }); }}>{locale === "zh" ? "中文" : "English"}{prefs.locale === locale && <Icon name="check" />}</button>)}
     </MenuSurface>}
   </div>;
 }
@@ -298,24 +301,24 @@ export function ModelControl({ models, selectedId, thinkingLevel, onSelectModel,
   const filtered = matchingModels(models, query);
   return <div className="composer-control model-control" ref={popover.root} onKeyDown={onKeyDown}>
     <button ref={popover.trigger} type="button" className="composer-control-trigger model-trigger"
-      aria-label={`模型：${name}${level ? `，推力 ${effortLabel(level)}` : ""}`}
+      aria-label={t("模型：{0}{1}", name, level ? t("，推力 {0}", effortLabel(level)) : "")}
       aria-haspopup="menu" aria-expanded={open} aria-controls={open ? menuId : undefined}
       onClick={() => open ? close() : setOpen(true)}>
       <Icon name="model" className="model-trigger-icon" /><span className="model-trigger-name">{name}</span>
       {level && <span className="model-trigger-effort">{effortLabel(level)}</span>}
       <Icon name="chevron" />
     </button>
-    {open && <MenuSurface ref={popover.panel} id={menuId} className="composer-popover model-menu harness-model-menu" role={pane === "model" ? "group" : "menu"} aria-label="模型与推力强度">
+    {open && <MenuSurface ref={popover.panel} id={menuId} className="composer-popover model-menu harness-model-menu" role={pane === "model" ? "group" : "menu"} aria-label={t("模型与推力强度")}>
       {pane === "root" ? <>
         <button type="button" role="menuitem" data-pane="model" className="model-root-cell" aria-haspopup="menu"
-          onClick={() => drill("model")}><span>模型</span><span>{name}</span><Icon name="chevron" /></button>
+          onClick={() => drill("model")}><span>{t("模型")}</span><span>{name}</span><Icon name="chevron" /></button>
         {!!levels.length && <button type="button" role="menuitem" data-pane="effort" className="model-root-cell" aria-haspopup="menu"
-          onClick={() => drill("effort")}><span>推理等级</span><span>{effortLabel(level)}</span><Icon name="chevron" /></button>}
+          onClick={() => drill("effort")}><span>{t("推理等级")}</span><span>{effortLabel(level)}</span><Icon name="chevron" /></button>}
       </> : pane === "model" ? <>
       {models.length > 4 && <div className="model-search"><Icon name="search" /><input type="search" value={query}
-        aria-label="搜索模型" aria-controls={`${menuId}-models`} aria-activedescendant={filtered.length ? `${menuId}-model-${filtered[Math.min(highlightedIndex,filtered.length - 1)].id}` : undefined}
-        placeholder="搜索模型…" onChange={event => { setQuery(event.target.value); setHighlightedIndex(0); }} /></div>}
-      <div className="model-options" id={`${menuId}-models`} role="menu" aria-label="选择模型">
+        aria-label={t("搜索模型")} aria-controls={`${menuId}-models`} aria-activedescendant={filtered.length ? `${menuId}-model-${filtered[Math.min(highlightedIndex,filtered.length - 1)].id}` : undefined}
+        placeholder={t("搜索模型…")} onChange={event => { setQuery(event.target.value); setHighlightedIndex(0); }} /></div>}
+      <div className="model-options" id={`${menuId}-models`} role="menu" aria-label={t("选择模型")}>
         {filtered.map((model, index) => {
           const selected = model.id === current.id;
           return <div key={model.id}>
@@ -327,9 +330,9 @@ export function ModelControl({ models, selectedId, thinkingLevel, onSelectModel,
           </button></div>;
         })}
       </div>
-      {!filtered.length && <p className="model-empty" role="status">没有匹配的模型</p>}
+      {!filtered.length && <p className="model-empty" role="status">{t("没有匹配的模型")}</p>}
       </> : <div className="effort-section">
-        <div className="effort-options" role="radiogroup" aria-label="推力强度">
+        <div className="effort-options" role="radiogroup" aria-label={t("推力强度")}>
           {levels.map((entry) => <button type="button" role="radio" aria-checked={entry === level}
             className={entry === level ? "selected" : ""} key={entry}
             onClick={() => { popover.dismiss(); if (entry !== level) onSelectThinking(entry); }}>
@@ -356,9 +359,9 @@ export function ContextMeter({ status }: { status: ContextStatus }) {
   const usageDescription = Number.isFinite(status.used_tokens) && status.used_tokens >= 0
     && Number.isFinite(status.context_window) && status.context_window > 0
     ? `${status.used_tokens.toLocaleString("zh-CN", { maximumFractionDigits: 0 })} / ${status.context_window.toLocaleString("zh-CN", { maximumFractionDigits: 0 })} tokens`
-    : "上下文用量未知";
+    : t("上下文用量未知");
   return <div className="composer-control context-control" ref={popover.root} onKeyDown={popover.onKeyDown}>
-    <button ref={popover.trigger} type="button" className="context-trigger" aria-label={`上下文已用 ${percent}%`}
+    <button ref={popover.trigger} type="button" className="context-trigger" aria-label={t("上下文已用 {0}%", percent)}
       aria-description={usageDescription}
       aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? panelId : undefined}
       onClick={() => setOpen((value) => !value)}>
@@ -368,15 +371,15 @@ export function ContextMeter({ status }: { status: ContextStatus }) {
           strokeDasharray={`${percent} 100`} />
       </svg>
     </button>
-    {open && <MenuSurface ref={popover.panel} id={panelId} className="composer-popover context-popover" role="dialog" aria-label="上下文占用">
-      <div className="context-popover-head"><div><strong>上下文</strong><span>已用 {percent}%</span></div>
+    {open && <MenuSurface ref={popover.panel} id={panelId} className="composer-popover context-popover" role="dialog" aria-label={t("上下文占用")}>
+      <div className="context-popover-head"><div><strong>{t("上下文")}</strong><span>{t("已用") + " "}{percent}%</span></div>
         <b>{formatTokenCount(status.used_tokens)} <small>/ {formatTokenCount(status.context_window)}</small></b></div>
       <div className="context-progress"><span style={{ width: `${percent}%` }} /></div>
       <div className="context-breakdown">
-        <span><i className="system" />系统指令<strong>{formatTokenCount(status.system_tokens)}</strong></span>
-        <span><i className="tools" />工具定义<strong>{formatTokenCount(status.tool_tokens)}</strong></span>
-        <span><i className="messages" />会话消息<strong>{formatTokenCount(status.message_tokens)}</strong></span>
-        <span>请求选项<strong>{contextTokenCount(status.option_tokens)}</strong></span>
+        <span><i className="system" />{t("系统指令")}<strong>{formatTokenCount(status.system_tokens)}</strong></span>
+        <span><i className="tools" />{t("工具定义")}<strong>{formatTokenCount(status.tool_tokens)}</strong></span>
+        <span><i className="messages" />{t("会话消息")}<strong>{formatTokenCount(status.message_tokens)}</strong></span>
+        <span>{t("请求选项")}<strong>{contextTokenCount(status.option_tokens)}</strong></span>
       </div>
       <p>{contextBudgetExplanation(status)}</p>
     </MenuSurface>}

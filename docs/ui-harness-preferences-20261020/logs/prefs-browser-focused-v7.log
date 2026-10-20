@@ -1,0 +1,6 @@
+  ➜  Local:   http://127.0.0.1:4193/
+{"webPreferences":"passed","cases":["code view controls actual trajectory/diffs","fonts validated and applied","shortcuts duplicate/reserved/IME/Escape/remap/clear/reset","English actual interface","raw message/file unchanged","reload persistence","320px controls","no backend mutations"]}
+{"preferencePersistenceFailure":"passed","cases":["memory updates with visible failure","error switches language","successful save clears warning and persists all current values"]}
+{"busyPreference":"passed","preferred":"queue","cases":["Enter preference","Ctrl+Enter complementary","idle Cmd+Enter submits","visible send button double click once","IME/Shift+Enter","approval/stopping/unknown-result guards","reconcile without resend","command_id","1440/320 no page overflow"]}
+{"busyPreference":"passed","preferred":"steer","cases":["Enter preference","Ctrl+Enter complementary","idle Cmd+Enter submits","visible send button double click once","IME/Shift+Enter","approval/stopping/unknown-result guards","reconcile without resend","command_id","1440/320 no page overflow"]}
+{"preferencePageErrors":[]}

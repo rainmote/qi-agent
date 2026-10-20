@@ -1,0 +1,17 @@
+  ➜  Local:   http://127.0.0.1:4193/
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+
+locator.waitFor: Timeout 30000ms exceeded.
+Call log:
+  - waiting for locator('.tool-details > div:nth-child(2) > pre') to be visible
+
+    at /Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/tests/preferences-browser.mjs:34:128 {
+  log: [
+    "  - waiting for locator('.tool-details > div:nth-child(2) > pre') to be visible"
+  ],
+  name: 'TimeoutError'
+}
+
+Node.js v26.9.0

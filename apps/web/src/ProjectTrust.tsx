@@ -1,3 +1,4 @@
+import { uiText as t } from "./i18n";
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { ProjectTrustDialog } from "./Dialogs";
@@ -28,7 +29,7 @@ export function useProjectTrust() {
   const check = async (sessionId: string, current: () => boolean, force = false) => {
     const trust = await api.rpc<ProjectTrust>(sessionId, "trust.status");
     if (!current()) return false;
-    if (typeof trust?.configured !== "boolean") throw new Error("无法确认项目的信任状态，请更新运行服务后重试。");
+    if (typeof trust?.configured !== "boolean") throw new Error(t("无法确认项目的信任状态，请更新运行服务后重试。"));
     setStatus(trust);
     if (!trust.configured || trust.decision === "allow" || (!force && trust["explicit?"])) return true;
     return new Promise<boolean>(resolve => {
@@ -52,7 +53,7 @@ export function useProjectTrust() {
       if (api.pendingOperation(active.sessionId)) {
         const outcome = await api.operationStatus(active.sessionId);
         if (!["completed", "failed"].includes(outcome.status)) {
-          throw new Error("上次确认的结果尚不明确，请稍后重新核对。");
+          throw new Error(t("上次确认的结果尚不明确，请稍后重新核对。"));
         }
       }
       if (!active.current() || pending.current !== active) return;
@@ -63,10 +64,10 @@ export function useProjectTrust() {
         trust = await api.rpc<ProjectTrust>(active.sessionId, "trust.status");
       }
       if (!active.current() || pending.current !== active) return;
-      if (trust.decision !== decision) throw new Error("项目的信任状态未生效，请重试或取消。");
+      if (trust.decision !== decision) throw new Error(t("项目的信任状态未生效，请重试或取消。"));
       setStatus(trust); finish(true);
     } catch (failure) {
-      if (active.current() && pending.current === active) setError(failure instanceof Error ? failure.message : "无法保存信任选择，请重试。");
+      if (active.current() && pending.current === active) setError(failure instanceof Error ? failure.message : t("无法保存信任选择，请重试。"));
     } finally {
       if (pending.current === active || pending.current === null) { saving.current = false; setBusy(false); }
     }

@@ -20,7 +20,7 @@ try {
     await new Promise(resolve => setTimeout(resolve, 100));
   }
   if (!ready) throw new Error("Production preview did not become ready");
-  for (const script of ["browser-regressions.mjs", "orchestration-browser.mjs"]) {
+  for (const script of ["browser-regressions.mjs", "orchestration-browser.mjs", "preferences-browser.mjs"]) {
     const tests = spawn(process.execPath, [`apps/web/tests/${script}`], {
       stdio: "inherit", env: { ...process.env, QI_AGENT_WEB_TEST_URL: url },
     });

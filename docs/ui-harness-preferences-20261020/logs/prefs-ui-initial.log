@@ -1,0 +1,177 @@
+
+> @rainmote/qi-agent-web@0.1.0 test:web-ui
+> tsx --test apps/web/src/*.test.tsx
+
+(node:7645) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ new-session preset selector filters broken modes and exposes the selected mode (4.203458ms)
+✔ compact preset selector preserves mode descriptions and selected value (0.238167ms)
+✔ creator draft entry is hidden when the creator preset is unavailable (0.034084ms)
+✔ workspace selector exposes the selected workspace and an accessible menu (0.246584ms)
+✔ slash suggestions open while typing and close after command selection (0.076167ms)
+✔ large command results are summarized for the toast (0.093292ms)
+✔ composer permission control uses a distinct icon for every access mode (0.24675ms)
+✔ model control shows reasoning effort without a leading model icon (0.300292ms)
+✔ context meter exposes usage and compact token formatting (8.496709ms)
+✔ model search uses reference subsequence ranking and retains configured identifier lookup (0.888834ms)
+✔ inline approval retains explicit choices and exposes failures without a modal barrier (0.4205ms)
+✔ full access confirmation requires explicit risk acknowledgement (0.465958ms)
+(node:7646) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ automation forms preserve explicit timezone and convert minutes to daemon milliseconds (10.195792ms)
+✔ read-only automation panel exposes controls but disables every mutation (6.854125ms)
+✔ renders assistant Markdown and GFM content (7.220834ms)
+✔ does not execute raw HTML and protects links (8.265292ms)
+✔ repairs a legacy compact heading attached to a GFM table (1.3665ms)
+✔ does not normalize compact Markdown inside code fences (0.07075ms)
+(node:7648) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ plugin markdown never executes HTML or silently loads remote images (9.086416ms)
+✔ tool result slots are scoped to their named tool and validate runtime data (0.353042ms)
+✔ declarative renderers reject unsupported or unbounded data (0.153541ms)
+✔ read-only package management disables all install controls (0.478125ms)
+(node:7649) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ provider auth copy distinguishes API keys from ChatGPT subscription login (1.14475ms)
+✔ provider reload notice distinguishes saved configuration from effective sessions (4.130125ms)
+(node:7650) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ groups all tool calls from the same runtime step (5.495375ms)
+✔ describes and truncates tool operation targets (0.173083ms)
+✔ long histories mount a bounded window rather than every Markdown message (41.77275ms)
+✔ completed tool groups are summarized while failures and unconfirmed results remain visible (6.812292ms)
+✔ a stopped call with no result is unconfirmed, and only an active group may be running (0.105625ms)
+✔ reasoning-only assistant messages remain readable instead of disappearing (0.626917ms)
+(node:7651) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ typed user attachments show controlled previews and downloads (2.834541ms)
+✔ attachment names are escaped and malformed references never become URLs (0.236667ms)
+✔ tool result slots restore their canonical data from persisted JSON (0.248792ms)
+(node:7652) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✖ tool screenshots render as bounded accessible previews, never as text (7.351334ms)
+✖ tool previews reject remote, active, malformed and oversized image sources (0.38075ms)
+✖ one tool result cannot mount an unbounded screenshot gallery (0.488333ms)
+(node:7653) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ projects durable events into a turn-aware semantic ledger (0.890958ms)
+✔ renders the DeepSeek-style trajectory controls and three-lane overview (4.387917ms)
+✔ long trajectories mount a bounded window and bounded overview (25.551958ms)
+✔ trajectory detail serialization is deferred and cached until requested (0.114417ms)
+✔ screenshot payloads stay out of trajectory text and searchable JSON details (0.112542ms)
+(node:7654) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ workspace panel exposes accessible navigation and attachment controls inherit disabled state (8.884ms)
+✔ HTML preview starts with a restrictive policy even when uploaded HTML supplies its own policy (0.104417ms)
+✔ verification summary distinguishes independent PASS from absent and unconfirmed evidence (0.713708ms)
+✔ verification states keep execution separate and expose only authenticated check links (0.70925ms)
+✔ lost response keeps the original operation through reload and blocks blind replay (13.749584ms)
+✔ manual retry after not_found reuses identity and payload; pending outcomes never resend (2.054208ms)
+✔ structured uncertain responses survive the API boundary and definitive errors allow a new action (0.298125ms)
+✔ planning approvals can resolve while the original blocking command remains journaled (0.258375ms)
+(node:7660) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ input budget accounts for the answer reserve before the whole window fills (11.661375ms)
+✔ missing legacy budget fields and invalid tokens remain unknown (0.298708ms)
+(node:7666) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ snapshot IDs are unique and ordered; event indexes remain immutable across branches (0.817375ms)
+✔ ordered append and late insert keep stable sequence order without sorting existing history (0.207167ms)
+✔ incremental timeline matches a snapshot for tool results, multiple steps and clearing (0.333875ms)
+✔ partial updates reuse event, timeline and summary projections (0.060416ms)
+✔ screenshot outputs survive both snapshot reload and streamed tool results (0.45275ms)
+✔ snapshot revision watermarks reject late state and interaction notifications (0.255ms)
+✔ a delayed response cannot replace the view after leaving and returning to the same session (0.276375ms)
+✔ rapid session opens honor the latest selection despite reversed response order (0.062167ms)
+(node:7668) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ completed is visible once after snapshot, live notification, durable replay and refresh (4.328833ms)
+✔ failed is visible once after snapshot, live notification, durable replay and refresh (0.449375ms)
+✔ cancelled is visible once after snapshot, live notification, durable replay and refresh (0.4015ms)
+✔ uncertain is visible once after snapshot, live notification, durable replay and refresh (0.332042ms)
+✔ last-outcome is retained in a coherent snapshot without a duplicate durable row (0.109333ms)
+✔ a completed execution with failed verification cannot look accepted (0.139416ms)
+✔ late conflicting outcomes cannot downgrade a known uncertain result (6.137958ms)
+✔ refreshing a cleared conversation cannot resurrect the old outcome (0.112333ms)
+(node:7669) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ settled turns fold process while retaining final answer, decisions and unverified outcome (0.918541ms)
+✔ interleaved user input and active turns keep every step in original order (0.123584ms)
+✔ next-input folding retains the latest process, respects manual choices and folds on a later user message (0.1155ms)
+✔ failed, cancelled and uncertain turns retain their process without a whole-turn fold (0.06225ms)
+✔ display preferences fail back to standard and subtask results remain disclosure content (4.834875ms)
+✔ ten thousand rows keep a bounded viewport window at the start, middle and end (2.055584ms)
+✔ history scroll anchors survive late insertion and height changes above the viewport (2.303541ms)
+✔ new output does not move a history anchor; resized narrow rows invalidate stale measurements (1.792166ms)
+✔ empty layouts and removed anchors recover without invalid offsets (0.059333ms)
+ℹ tests 76
+ℹ suites 0
+ℹ pass 73
+ℹ fail 3
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 515.7035
+
+✖ failing tests:
+
+test at apps/web/src/ToolResultImages.test.tsx:8:1
+✖ tool screenshots render as bounded accessible previews, never as text (7.351334ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /放大截图 1/. Input:
+  
+  '<div class="tool-result-images" aria-label="工具截图"><figure class="tool-image"><figcaption><span>屏幕截图1</span><button type="button" aria-expanded="false" aria-controls="_R_5_">放大截图1</button></figcaption><div id="_R_5_" class="tool-image-viewport"><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aDfcAAAAASUVORK5CYII=" alt="工具返回的屏幕截图 1" decoding="async"/></div></figure></div>'
+  
+      at TestContext.<anonymous> (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/src/ToolResultImages.test.tsx:14:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: '<div class="tool-result-images" aria-label="工具截图"><figure class="tool-image"><figcaption><span>屏幕截图1</span><button type="button" aria-expanded="false" aria-controls="_R_5_">放大截图1</button></figcaption><div id="_R_5_" class="tool-image-viewport"><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aDfcAAAAASUVORK5CYII=" alt="工具返回的屏幕截图 1" decoding="async"/></div></figure></div>',
+    expected: /放大截图 1/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at apps/web/src/ToolResultImages.test.tsx:19:1
+✖ tool previews reject remote, active, malformed and oversized image sources (0.38075ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /7 张图片未预览/. Input:
+  
+  '<div class="tool-result-images" aria-label="工具截图"><p class="tool-image-note">7张图片未预览：格式不支持或超出大小、数量限制。</p></div>'
+  
+      at TestContext.<anonymous> (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/src/ToolResultImages.test.tsx:31:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: '<div class="tool-result-images" aria-label="工具截图"><p class="tool-image-note">7张图片未预览：格式不支持或超出大小、数量限制。</p></div>',
+    expected: /7 张图片未预览/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at apps/web/src/ToolResultImages.test.tsx:35:1
+✖ one tool result cannot mount an unbounded screenshot gallery (0.488333ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /16 张图片未预览/. Input:
+  
+  '<div class="tool-result-images" aria-label="工具截图"><figure class="tool-image"><figcaption><span>屏幕截图1</span><button type="button" aria-expanded="false" aria-controls="_R_5_">放大截图1</button></figcaption><div id="_R_5_" class="tool-image-viewport"><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aDfcAAAAASUVORK5CYII=" alt="工具返回的屏幕截图 1" decoding="async"/></div></figure><figure class="tool-image"><figcaption><span>屏幕截图2</span><button type="button" aria-expanded="false" aria-controls="_R_9_">放大截图2</button></figcaption><div id="_R_9_" class="tool-image-viewport"><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aDfcAAAAASUVORK5CYII=" alt="工具返回的屏幕截图 2" decoding="async"/></div></figure><figure class="tool-image"><figcaption><span>屏幕截图3</span><button type="button" aria-expanded="false" aria-controls="_R_d_">放大截图3</button></figcaption><div id="_R_d_" class="tool-image-viewport"><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aDfcAAAAASUVORK5CYII=" alt="工具返回的屏幕截图 3" decoding="async"/></div></figure><figure class="tool-image"><figcaption><span>屏幕截图4</span><button type="button" aria-expanded="false" aria-controls="_R_h_">放大截图4</button></figcaption><div id="_R_h_" class="tool-image-viewport"><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aDfcAAAAASUVORK5CYII=" alt="工具返回的屏幕截图 4" decoding="async"/></div></figure><p class="tool-image-note">16张图片未预览：格式不支持或超出大小、数量限制。</p></div>'
+  
+      at TestContext.<anonymous> (/Users/geb/Documents/Codex/2026-10-19/task-2/qi-agent/apps/web/src/ToolResultImages.test.tsx:38:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: '<div class="tool-result-images" aria-label="工具截图"><figure class="tool-image"><figcaption><span>屏幕截图1</span><button type="button" aria-expanded="false" aria-controls="_R_5_">放大截图1</button></figcaption><div id="_R_5_" class="tool-image-viewport"><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aDfcAAAAASUVORK5CYII=" alt="工具返回的屏幕截图 1" decoding="async"/></div></figure><figure class="tool-image"><figcaption><span>屏幕截图2</span><button type="button" aria-expanded="false" aria-controls="_R_9_">放大截图2</button></figcaption><div id="_R_9_" class="tool-image-viewport"><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aDfcAAAAASUVORK5CYII=" alt="工具返回的屏幕截图 2" decoding="async"/></div></figure><figure class="tool-image"><figcaption><span>屏幕截图3</span><button type="button" aria-expanded="false" aria-controls="_R_d_">放大截图3</button></figcaption><div id="_R_d_" class="tool-image-viewport"><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aDfcAAAAASUVORK5CYII=" alt="工具返回的屏幕截图 3" decoding="async"/></div></figure><figure class="tool-image"><figcaption><span>屏幕截图4</span><button type="button" aria-expanded="false" aria-controls="_R_h_">放大截图4</button></figcaption><div id="_R_h_" class="tool-image-viewport"><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aDfcAAAAASUVORK5CYII=" alt="工具返回的屏幕截图 4" decoding="async"/></div></figure><p class="tool-image-note">16张图片未预览：格式不支持或超出大小、数量限制。</p></div>',
+    expected: /16 张图片未预览/,
+    operator: 'match',
+    diff: 'simple'
+  }
