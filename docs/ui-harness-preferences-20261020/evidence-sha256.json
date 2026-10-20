@@ -1,5 +1,5 @@
 {
-  "README.md": "f12f60390c430941c7f4576d99fd0fbed33cbdaf06213ec251ba7694e3bfa7e5",
+  "README.md": "4b48299600e396098d1bf33534809626e22f47b43206a0549fad58c8d218ff18",
   "before-after-mobile.png": "b7eb66c632eb6393d327164e76b78b284c678f66ed3bd4f56bb5e4c037473608",
   "candidate/prefs-approval-queue-320.json": "68179547671a291a95be337ef734f0ba07cbf4e1e514941d69b98185d5370c48",
   "candidate/prefs-approval-queue-320.png": "6eec4635685de08c15de896084fe6e73b90cd9797f7915878ccdf6bc8084241e",
@@ -67,6 +67,8 @@
   "logs/prefs-final-build.log": "e8875955b0b6e2e480f4fd7088235604b61f964786dd9dbec48dff7d78fd639c",
   "logs/prefs-final-capture.json": "c83a858becb3c7d53ad0afecf09016f2dfc57e362dbfd347a3fda09f2ff38a72",
   "logs/prefs-final-capture.log": "555fc309ac41cc9b639a4e5a35a9f1b3d232229df9756b4492a1ecbc2cf5726e",
+  "logs/prefs-final-format-build.json": "8ac469475f9de260fc52c078b581cee5a8dcdb4649c73ebe16813144238ad098",
+  "logs/prefs-final-format-build.log": "c05cad95358ab792d4cd1b10cea8675aff608d20178cc97abdee42cf9b156888",
   "logs/prefs-final-real.json": "ad49e0ddd14df9bf426c8df7f6489f501c42bff920a84264e51d2d478c797a77",
   "logs/prefs-final-real.log": "99d3a0f47626991bb66fcce0fc35eb5e49431d01d660eafc75e66fa25b6ede23",
   "logs/prefs-final-type-v2.json": "cc671da4faad761a6d9d181aa44df7060f0486ea4dbf4eb1e0ab96cfea1a13cb",
@@ -93,7 +95,7 @@
   "logs/prefs-ui-spacing-green.log": "318f4e3960478782148c7886a704c148abfcaeddc162e747305b44f355fd686c",
   "logs/prefs-ui-v3.json": "5114d9c8428e6e6307c13fbfe2f312f3e86c3db35e0c3c7aadbf0b7413249506",
   "logs/prefs-ui-v3.log": "96804fb776864a0a87af619a733c372a55d83eaf31e5f6b9952a71cc51205d95",
-  "readonly-review.md": "82bcec32065647c40693477c9a718b9bd382adfc6588ac94fb19198a36ad6e1b",
+  "readonly-review.md": "e1c7f118e2092db93518beb58a63ecbe15d1dc5e5f31928aa9253cb6b5062793",
   "red/second-prefs-busy-queue-1440.png": "4b571a214c251fa1714673e6a51375b2e4626bc434d420183b803041cfa6544e",
   "red/second-prefs-busy-queue-320.png": "d3d4c06d5b4c3ef5f5e9a09d59d7f9a39beb194e3d0ffc0f74cc9f373b4ba5f6",
   "red/second-prefs-failure.png": "ab20de7ca185ae3a2fceb50dff9c7cbd004bf9b77a6f92b188b02f18ce447788",
@@ -104,6 +106,6 @@
   "red/second-prefs-shortcut-editor-en-320.png": "7a4b408ebf519befa54e48ebfff2d542eec3ff76d0b32d48723f8609c040d1d3",
   "red/second-prefs-shortcut-editor-zh-1440.png": "ed5c0f99d2cdc02de52f2ccf264206f1ffa67003dceba270b10a16524a25ecc8",
   "red/v6-fixture-idle-after-reconcile.png": "f6580b0ea87928efbedb3d18b4ebe8d838111240c822ad07bf7aab55f35b9e14",
-  "tested-source.json": "559c209269dbfa9538ce6b6b0e083e7d1b2d2ae05aea5da653ea3986a7b5dacd",
+  "tested-source.json": "3fca38b1a3b2c6edcbadc5619f28aeeb0cb349d5acfe4392588ae0092c497701",
   "translation-sources.json": "173485cfaf51e4fbb8685a3d39a6b6a32c7a9ba72a5789f5c2d5a5be5438b0b0"
 }

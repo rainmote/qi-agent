@@ -119,4 +119,3 @@ export function WebPreferenceRows() {
     {failed && <p role="alert">{t("当前浏览器未能保存偏好；刷新后可能恢复原值")}</p>}
   </>;
 }
-

@@ -1,5 +1,5 @@
 {
-  "created_at": "2026-10-20T14:11:16.701188+00:00",
+  "created_at": "2026-10-20T14:18:57.806627+00:00",
   "branch": "codex/web-deepseek-harness-20261019",
   "base_sha": "08dd55c083fe91ad789c9c7fc51fbd3c3d057fc1",
   "reference_sha": "687f282e8625c6b8d11ff58211a90524be2e4317",
@@ -26,7 +26,7 @@
     "apps/web/src/PluginPanel.tsx": "132be4b5f4ae9cf21d65aed6cdb0cb145757739391bdeae695428dcf60993e82",
     "apps/web/src/PluginSlots.test.tsx": "9e5baa12e54ed5469704b13c16f5cfc5baf9f7ffafe569723fb586531768ccd1",
     "apps/web/src/PluginSlots.tsx": "d56a4df8ddb3572cd118b310e687240b286285581d533c01cec0011bb649c3c9",
-    "apps/web/src/PreferenceSettings.tsx": "6f2c686d804d4267861dcebc551cf975dea09694da6a6bc8f81b0f997d7aeebf",
+    "apps/web/src/PreferenceSettings.tsx": "eb7fab90b9fb753cdd89922e69f698d3ee827656f244078a64e4b929d92221ed",
     "apps/web/src/ProjectTrust.tsx": "44c975925ea2fb25cc22bb7f53e7ffdacfe799c99dcd18705cc46f74632da69b",
     "apps/web/src/ProviderSettingsPanel.test.tsx": "c57a1ae8c5336e1ca50bfd65bf9788aa1914c9d46645da021e1e23b669220be9",
     "apps/web/src/ProviderSettingsPanel.tsx": "51a8d7b0fdc3011480b12737a886560ac380703ee284ddd30b890f7235216637",
@@ -99,7 +99,7 @@
   "built_artifacts": {
     "apps/web/dist/assets/index-C99jAW6Z.css": "65decd05d81b1be1b5f2faa3a29debbff400d8b67e1774f270e66085dcf18f55",
     "apps/web/dist/assets/index-D2epVkn-.js": "7abe26624dbef94cd6046e80a6ac5a313f5830f79363c8361cd8d312091dabd4",
-    "apps/web/dist/assets/index-D2epVkn-.js.map": "3bdf25c0d8188c2111ab29853fcca12062c67ce50ff8eebec505515e3ddbe1f5",
+    "apps/web/dist/assets/index-D2epVkn-.js.map": "62adad8c5173e6aa86d6cae6621232bfabf30837487752e0ad492ad14c233b96",
     "apps/web/dist/assets/montserrat-light-Cvd2VjE_.woff2": "da25f1327eb1dcc70c193897b5d7e00d31821d9518c0a49e073ff50d97a3f10a",
     "apps/web/dist/assets/montserrat-medium-B4OyO9CN.woff2": "8a81ca6f05cb6831d5487e4b287ce5a625a718c39226b736f155900adc394166",
     "apps/web/dist/assets/montserrat-regular-DYep38cA.woff2": "0f4a15e29a9535af580a64db967929a8d6b202fad9a467be390619a591d2c4c5",
@@ -123,5 +123,6 @@
   },
   "image_fingerprint": "Not applicable: native macOS; no container image",
   "strict_pixel_acceptance": "blocked",
-  "scope": "Functional frontend preferences only; previous raster results are historical, not revalidated or waived."
+  "scope": "Functional frontend preferences only; previous raster results are historical, not revalidated or waived.",
+  "format_followup": "Removed one trailing blank line in PreferenceSettings.tsx after the source whitespace gate; rebuilt. Executable JS and CSS are unchanged."
 }
