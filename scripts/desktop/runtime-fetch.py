@@ -30,7 +30,7 @@ GITHUB = {"github.com", "release-assets.githubusercontent.com", "objects.githubu
 TUNA = {"pypi.tuna.tsinghua.edu.cn", "mirrors.tuna.tsinghua.edu.cn"}
 HEADERS = {"User-Agent": "qi-agent-pinned-runtime/1", "Accept": "*/*"}
 MAX_TOTAL = 1_000_000_000
-MAX_METADATA = 1_000_000
+MAX_METADATA = 2_000_000
 SOFT_SECONDS = 600
 
 

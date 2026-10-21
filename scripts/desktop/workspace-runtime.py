@@ -19,6 +19,7 @@ import zipfile
 MAX_BYTES = 2_000_000_000
 MAX_FILES = 100_000
 MAX_FILE = 500_000_000
+NOTICES = Path(__file__).resolve().parents[2] / "apps/desktop/notices"
 
 
 def relative(name):
@@ -26,6 +27,65 @@ def relative(name):
     if not name or path.is_absolute() or ".." in path.parts or "\\" in name or "\0" in name:
         raise ValueError("unsafe archive path")
     return str(path)
+
+
+def supplemental_notice(package, metadata, writer, npm):
+    catalog = NOTICES / "sources.json"
+    if catalog.is_symlink() or not catalog.is_file() or catalog.stat().st_size > 1_000_000:
+        raise ValueError("missing or invalid supplemental notice catalog")
+    entries = json.loads(catalog.read_text())["notices"]
+    matching = [entry for entry in entries if entry.get("package") == package + "@" + metadata["version"]]
+    if len(matching) != 1:
+        raise ValueError("missing or ambiguous exact-version supplemental notice")
+    notice = matching[0]
+    digest = notice.get("sha256", "")
+    if (not isinstance(metadata.get("license"), str) or not metadata["license"].strip()
+            or not isinstance(digest, str) or not re.fullmatch(r"[a-f0-9]{64}", digest)
+            or notice.get("file") != digest + ".txt"
+            or notice.get("license_identifier") != metadata.get("license")):
+        raise ValueError("supplemental notice identity or license mismatch")
+    source = NOTICES / notice["file"]
+    if source.is_symlink() or not source.is_file() or not 0 < source.stat().st_size <= 1_000_000:
+        raise ValueError("missing or invalid supplemental notice text")
+    raw = source.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != digest:
+        raise ValueError("supplemental notice checksum mismatch")
+    kind = notice.get("source_kind")
+    if kind == "frozen_repository_license":
+        commit, url = notice.get("source_commit"), notice.get("source")
+        if (not isinstance(commit, str) or not re.fullmatch(r"[a-f0-9]{40}", commit)
+                or not isinstance(url, str)
+                or not re.fullmatch(r"https://raw\.githubusercontent\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/" + commit + r"/[^?#\s\\]+", url)
+                or ".." in url.split("/")
+                or hashlib.sha1(b"blob " + str(len(raw)).encode() + b"\0" + raw).hexdigest() != notice.get("git_blob_sha1")):
+            raise ValueError("unbound frozen publisher notice")
+    elif kind == "same_version_parent_archive_notice":
+        parent_identity = notice.get("source_package", "")
+        if not isinstance(parent_identity, str) or "@" not in parent_identity:
+            raise ValueError("missing parent notice identity")
+        parent_name, version = parent_identity.rsplit("@", 1)
+        parent = npm.get(parent_name)
+        if parent is None:
+            raise ValueError("unlocked parent notice archive")
+        locked, parent_metadata = parent
+        declared = {**parent_metadata.get("dependencies", {}), **parent_metadata.get("optionalDependencies", {})}
+        if (version != metadata["version"] or version != parent_metadata["version"]
+                or declared.get(package) != metadata["version"] or parent_metadata.get("license") != metadata["license"]
+                or notice.get("source_archive_pin") != locked.get("integrity", locked.get("sha256"))
+                or notice.get("source") != locked.get("url")):
+            raise ValueError("parent notice version, dependency or archive mismatch")
+        entry = relative(notice.get("source_archive_entry", ""))
+        if not entry.startswith("package/") or not re.match(r"(?i)^(license|licence|copying|notice|copyright)([.-]|$)", Path(entry).name):
+            raise ValueError("invalid parent notice path")
+        original = writer.root / "node_modules" / parent_name / entry.removeprefix("package/")
+        if (original.is_symlink() or not original.is_file() or original.stat().st_size > 1_000_000
+                or original.read_bytes() != raw):
+            raise ValueError("parent notice differs from verified archive bytes")
+    else:
+        raise ValueError("assembled or unreviewed notice origin cannot satisfy publisher-text gate")
+    path = "node_modules/" + package + "/licenses/qi-supplemental-" + notice["file"]
+    writer.put(path, raw)
+    return {**notice, "path": path}
 
 
 class Writer:
@@ -164,15 +224,22 @@ def wheel_entries(path, writer):
             parts = PurePosixPath(name).parts
             if parts[0].endswith(".dist-info") and parts[0] != identity:
                 raise ValueError("foreign distribution metadata in wheel")
+            destination = "python/lib/python3.12/site-packages/"
             if parts[0].endswith(".data"):
-                if len(parts) < 3 or parts[1] not in ("purelib", "platlib"):
+                if parts[0] != identity.removesuffix(".dist-info") + ".data":
+                    raise ValueError("foreign distribution data in wheel")
+                if len(parts) < 3 or parts[1] not in ("purelib", "platlib", "scripts"):
                     raise ValueError("unsupported wheel data installation")
+                if parts[1] == "scripts":
+                    # Preserve auxiliary wheel scripts as inert source data.
+                    # No shebang rewriting, executable bit or PATH entry.
+                    destination = "python/share/qi-wheel-data/" + parts[0].removesuffix(".data") + "/scripts/"
                 name = "/".join(parts[2:])
             with archive.open(member) as stream:
                 data = stream.read(MAX_FILE + 1)
             if len(data) != member.file_size:
                 raise ValueError("truncated wheel file")
-            writer.put("python/lib/python3.12/site-packages/" + name, data)
+            writer.put(destination + name, data)
         return {"name": metadata["Name"], "version": metadata["Version"], "directory": identity}
 
 
@@ -232,10 +299,13 @@ def prepare(lock, cache, target):
         if path.is_file() and (re.match(r"(?i)^(license|licence|copying|notice|copyright)([.-]|$)", path.name) or "licenses" in path.parts):
             notices.append(str(path.relative_to(target)))
     # Package metadata without an actual license/notice file is insufficient.
-    for package in npm:
+    supplemental = []
+    for package, (_, metadata) in npm.items():
         prefix = "node_modules/" + package + "/"
         if not any(name.startswith(prefix) for name in notices):
-            raise ValueError("missing npm runtime license text: " + package)
+            notice = supplemental_notice(package, metadata, writer, npm)
+            supplemental.append(notice)
+            notices.append(notice["path"])
     if not any(name.startswith("python/") and "site-packages" not in name for name in notices):
         raise ValueError("missing standalone Python license text")
     if set(wheels) != set(python_locked):
@@ -246,7 +316,8 @@ def prepare(lock, cache, target):
         if not any(name.startswith(prefix) for name in notices):
             raise ValueError("missing Python package license text: " + package)
     writer.put("runtime-inputs.json", (json.dumps(lock, indent=2) + "\n").encode())
-    writer.put("licenses.json", (json.dumps({"notice_paths_relative_to": "workspace", "notices": notices}, indent=2) + "\n").encode())
+    writer.put("licenses.json", (json.dumps({"notice_paths_relative_to": "workspace", "notices": notices,
+                                            "supplemental_notices": supplemental}, indent=2) + "\n").encode())
     hashes = {str(path.relative_to(target)): hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(target.rglob("*")) if path.is_file()}
     writer.put("workspace-manifest.json", (json.dumps({"schema": 1, "target": lock["target"], "python_version": lock["python_version"], "files": hashes}, indent=2) + "\n").encode())
 

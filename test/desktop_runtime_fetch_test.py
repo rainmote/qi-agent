@@ -183,6 +183,38 @@ class DownloadTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertIn("/simple/some-pkg/", calls[0]); self.assertTrue(calls[1].endswith(item["name"]))
 
+    def test_realistic_tuna_index_above_1mb_accepts_only_the_exact_pinned_wheel(self):
+        item = source("wheel"); calls = []; fixture = self
+        body = b"<!--" + b"x" * 1_700_000 + b"-->" + self.index(item)
+        class Opener:
+            def open(self, request, timeout):
+                calls.append(request.full_url)
+                return Response(request.full_url, body if len(calls) == 1 else DATA)
+        with tempfile.TemporaryDirectory() as temporary:
+            outcome = None
+            try:
+                result, _ = self.download(Path(temporary).resolve(), item, factory=lambda handler: Opener())
+                outcome = result["status"]
+            except fetch.PolicyError as error:
+                outcome = str(error)
+            self.assertEqual(outcome, "DOWNLOADED_VERIFIED",
+                             "TUNA's measured Pillow/lxml indexes exceed1MB but remain below2MB")
+            self.assertEqual(len(calls), 2)
+
+    def test_index_above_2mb_refuses_before_archive_request_or_cache_publication(self):
+        item = source("wheel"); calls = []
+        class Opener:
+            def open(self, request, timeout):
+                calls.append(request.full_url)
+                return Response(request.full_url, b"x" * 2_000_001)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            with self.assertRaisesRegex(fetch.PolicyError, "index too large"):
+                self.download(root, item, factory=lambda handler: Opener())
+            self.assertFalse((root / item["name"]).exists())
+            self.assertFalse((root / (item["name"] + ".partial")).exists())
+            self.assertEqual(len(calls), 1)
+
     def test_permission_denial_differs_from_dns_ssl_and_unknown_io(self):
         for error, phase, status, scope in [
             (urllib.error.URLError(socket.gaierror(8, "fixture")), "HTTPS-connect", "TRANSPORT_ERROR_STOPPED", "origin"),

@@ -22,6 +22,19 @@ XlsxWriter 及其锁定依赖。未包含 JVM、系统 PATH 注册、扩展或�
 普通文件并物化成文件；拒绝路径越界、设备、外链、重复身份和解压超限。Wheel 按
 METADATA 的 Name/Version、dist-info 目录及锁定版本精确比对，并要求闭包完整。
 保留实际许可证/通知文件；许可证缺失不能用包元数据声明代替。
+Wheel 的 `.data` 根也须严格匹配同一发行身份。`purelib`/`platlib` 进入包目录；
+XlsxWriter 的 `vba_extract.py` 等辅助 `scripts` 仅保留在
+`python/share/qi-wheel-data/<发行名-版本>/scripts/`，普通文件模式 0644，不进入
+PATH 或 Python 导入目录，不改 shebang、不执行安装。未知安装 scheme 仍拒绝。
+
+npm 归档未附许可证正文时，只接受固定 `apps/desktop/notices` 中精确包版本绑定的
+补充正文：文件名和 SHA256 一致、许可证标识匹配，并提供冻结 Git commit/原文
+blob 绑定，或同版本已锁定父包的精确依赖关系、归档 pin、路径及原文字节证明。
+组装说明、README 的单个 SPDX 声明和标准模板不能代替发布者正文。
+实际已取得 saxes 6.0.0 的冻结 ISC 正文及 Koffi 3.1.1 父包的原 MIT 正文。
+fontkit 2.0.4、dfa 1.2.0、brotli 1.3.3 的锁定包及冻结源码仍缺库级正文；brotli
+另有 Google 2013 的 Apache-2.0 文件头，不能被单一 MIT 声明覆盖。它们继续阻塞
+完整准备；未将标准 Apache 文本或字体测试资料的许可证冒充这些库的授权正文。
 
 桌面 prepare 必须完成整个闭包，之后才编译 Rust/Web 并组装 runtime。普通 Web
 构建不包含 xterm，明确显示不可用。桌面构建把锁定 xterm 静态打进前端；无 CDN、
@@ -77,11 +90,15 @@ RAM 中独立一次性 UUID，不把 capability 放进可继承环境；注册�
 
 ## 本轮验收状态
 
-归档/协议、策略/审批和链接器测试均是纯 fixture 或 mock。Office 仅语法及源码
-核对，37 项真实依赖归档缺失；一次 Python 归档下载失败、一项 npm xterm 请求
-DNS 失败后均已停止，没有换源、重试或执行第三方包。
+归档/协议、策略/审批和链接器测试均是纯 fixture 或 mock。用户授权正式本机开发
+入口后，37 项真实依赖已下载并按原 hash 全量重算；旧网络失败、截断文件和预算
+中断材料保留。首次完整准备因 XlsxWriter 辅助脚本的 wheel scheme 被拒，修复仅
+保留惰性辅助资料并加强身份边界；随后准备被真实 npm 许可证缺口阻断。
+辅助脚本与许可证来源回归均有目标失败/通过对照；实际 Office/Python/pnpm 与
+原生 E2E 仍待验证，未以模板通过许可证门禁。
 
 真实 App 首次在原执行器启动于 AppKit 注册阶段 SIGABRT，未进入 qi setup；随后
-限定同一 PID/时间段的只读系统日志查询也被 sandbox 拒绝。没有再次启动或换入口。
+限定同一 PID/时间段的只读系统日志查询也被 sandbox 拒绝。该历史日志查询未重试；
+新本机执行授权与原产品工具隔离分别记录，不能据此把所有失败关闭。
 LCU、DMG、TSX 及完整后端既有失败也保留，详见外部验收收据与功能对照。构建存在、
 绿色子集或 mock 不能关闭真实 E2E 门槛。

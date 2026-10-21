@@ -173,6 +173,30 @@
       "download_url": "https://raw.githubusercontent.com/spdx/license-list-data/main/text/MIT.txt",
       "license_identifier": "MIT",
       "note": "standard license text"
+    },
+    {
+      "package": "saxes@6.0.0",
+      "license_identifier": "ISC",
+      "source_commit": "211fa0ebec9b628affc09219199639887174bfc3",
+      "source": "https://raw.githubusercontent.com/lddubeau/saxes/211fa0ebec9b628affc09219199639887174bfc3/LICENSE",
+      "sha256": "0fac2374380621b22e6b50451057721a9c52935b02d16d106a9f04897f061d0e",
+      "file": "0fac2374380621b22e6b50451057721a9c52935b02d16d106a9f04897f061d0e.txt",
+      "source_kind": "frozen_repository_license",
+      "git_blob_sha1": "187f3ba399862022f4e670b2a3a1dbc6d7e6a800"
+    },
+    {
+      "package": "@koromix/koffi-darwin-arm64@3.1.1",
+      "license_identifier": "MIT",
+      "source": "https://registry.npmjs.org/koffi/-/koffi-3.1.1.tgz",
+      "source_package": "koffi@3.1.1",
+      "source_archive_integrity": "sha512-mRX6AMeeKCxSOeOopqAcLAl5jcNvge7NAG8l7rF/8gGJATI0tdHFYjteIdE0mGOtWdsrJOij+PjnP8Q9c1gwgA==",
+      "source_archive_entry": "package/LICENSE.txt",
+      "note": "same-version parent Koffi publisher notice, kept verbatim",
+      "sha256": "22bcbbbacd739b026a8dc484f62a31484ce4c4e31f3408b60b29b4e41d62b290",
+      "file": "22bcbbbacd739b026a8dc484f62a31484ce4c4e31f3408b60b29b4e41d62b290.txt",
+      "source_kind": "same_version_parent_archive_notice",
+      "source_archive_pin": "sha512-mRX6AMeeKCxSOeOopqAcLAl5jcNvge7NAG8l7rF/8gGJATI0tdHFYjteIdE0mGOtWdsrJOij+PjnP8Q9c1gwgA=="
     }
-  ]
+  ],
+  "additional_workspace_notices_recorded_at": "2026-10-21T13:42:13.602182+00:00"
 }

@@ -77,6 +77,129 @@ class ProtocolTests(unittest.TestCase):
 
 
 class ArchiveTests(unittest.TestCase):
+    def missing_notice_fixture(self, root, mutation=None, origin="repository"):
+        sources = []
+        def tar_source(name, kind, entries, **metadata):
+            path = root / name
+            with tarfile.open(path, "w:gz") as archive:
+                for entry, data in entries.items():
+                    info = tarfile.TarInfo(("python" if kind == "python" else "package") + "/" + entry)
+                    info.size = len(data); archive.addfile(info, io.BytesIO(data))
+            sources.append({"name": name, "kind": kind, "limit": 100000,
+                            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), **metadata})
+            if kind == "npm": sources[-1]["url"] = "https://registry.npmjs.org/" + metadata["package"] + "/-/fixture.tgz"
+        tar_source("python.tgz", "python", {"bin/python3.12": b"inert", "LICENSE": b"fixture"})
+        for index, package in enumerate(["pnpm", "@deepseek-ai/libreoffice-kit", "@deepseek-ai/libreoffice-kit-darwin-arm64", "@koromix/koffi-darwin-arm64"]):
+            metadata = {"name": package, "version": "1.0.0", "license": "MIT"}
+            if origin == "parent" and package == "@deepseek-ai/libreoffice-kit":
+                metadata["optionalDependencies"] = {"pnpm": "1.0.0"}
+            entries = {"package.json": json.dumps(metadata).encode()}
+            if package == "pnpm": entries["bin/pnpm.cjs"] = b"inert"
+            else: entries["LICENSE"] = b"fixture"
+            tar_source(f"npm-{index}.tgz", "npm", entries, package=package, version="1.0.0", dependencies=[])
+        notice = b"fixture" if origin == "parent" else b"publisher fixture copyright and permission text"
+        digest = hashlib.sha256(notice).hexdigest(); notice_root = root / "notices"; notice_root.mkdir()
+        (notice_root / (digest + ".txt")).write_bytes(notice)
+        item = {"package": "pnpm@1.0.0", "file": digest + ".txt", "sha256": digest,
+                "license_identifier": "MIT", "source_kind": "frozen_repository_license",
+                "source_commit": "1" * 40,
+                "git_blob_sha1": hashlib.sha1(b"blob " + str(len(notice)).encode() + b"\0" + notice).hexdigest(),
+                "source": "https://raw.githubusercontent.com/fixture/runtime/" + "1" * 40 + "/LICENSE"}
+        if origin == "parent":
+            parent = next(source for source in sources if source.get("package") == "@deepseek-ai/libreoffice-kit")
+            item = {key: value for key, value in item.items() if key not in ("source_commit", "git_blob_sha1")}
+            item.update(source_kind="same_version_parent_archive_notice", source=parent["url"],
+                        source_package="@deepseek-ai/libreoffice-kit@1.0.0", source_archive_pin=parent["sha256"],
+                        source_archive_entry="package/LICENSE")
+        if mutation: item.update(mutation)
+        (notice_root / "sources.json").write_text(json.dumps({"notices": [item]}))
+        lock = {"sources": sources, "python_packages": {}, "target": "fixture", "python_version": "fixture"}
+        target = root / "output"; outcome = "ACCEPTED"
+        with patch.object(runtime, "NOTICES", notice_root, create=True):
+            try: runtime.prepare(lock, root, target)
+            except ValueError: outcome = "REJECTED"
+        return outcome, target, notice, digest
+
+    def test_missing_package_notice_requires_exact_version_hash_and_copies_real_text(self):
+        with tempfile.TemporaryDirectory(prefix="qi-notice-unit-") as temporary:
+            outcome, target, notice, digest = self.missing_notice_fixture(Path(temporary))
+            self.assertEqual(outcome, "ACCEPTED", "a package-bound original notice must satisfy the mandatory text gate")
+            record = json.loads((target / "licenses.json").read_text())
+            supplied = record["supplemental_notices"]
+            self.assertEqual(len(supplied), 1)
+            self.assertEqual(supplied[0]["package"], "pnpm@1.0.0")
+            copied = target / supplied[0]["path"]
+            self.assertEqual(copied.read_bytes(), notice)
+            self.assertEqual(hashlib.sha256(copied.read_bytes()).hexdigest(), digest)
+            self.assertEqual(copied.stat().st_mode & 0o111, 0)
+            self.assertIn(supplied[0]["path"], record["notices"])
+
+    def test_missing_package_notice_rejects_wrong_version_hash_license_or_unsafe_name(self):
+        for mutation in [{"package": "pnpm@9.9.9"}, {"sha256": "0" * 64},
+                         {"license_identifier": "ISC"}, {"file": "../../outside.txt"}]:
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory(prefix="qi-notice-unit-") as temporary:
+                outcome, target, _, _ = self.missing_notice_fixture(Path(temporary), mutation)
+                self.assertEqual(outcome, "REJECTED")
+                self.assertFalse((target / "workspace-manifest.json").exists())
+
+    def test_supplemental_notice_rejects_assembled_templates_and_unbound_repository_bytes(self):
+        for mutation in [{"source_kind": "assembled-attribution"}, {"source_commit": None},
+                         {"source": "https://example.invalid/LICENSE"}, {"git_blob_sha1": "0" * 40}]:
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory(prefix="qi-notice-unit-") as temporary:
+                outcome, target, _, _ = self.missing_notice_fixture(Path(temporary), mutation)
+                self.assertEqual(outcome, "REJECTED", "template or unbound bytes cannot satisfy publisher-text gate")
+                self.assertFalse((target / "workspace-manifest.json").exists())
+
+    def test_parent_notice_requires_same_version_exact_archive_and_original_text_path(self):
+        with tempfile.TemporaryDirectory(prefix="qi-notice-unit-") as temporary:
+            outcome, target, notice, _ = self.missing_notice_fixture(Path(temporary), origin="parent")
+            self.assertEqual(outcome, "ACCEPTED")
+            supplied = json.loads((target / "licenses.json").read_text())["supplemental_notices"][0]
+            self.assertEqual((target / supplied["path"]).read_bytes(), notice)
+        for mutation in [{"source_package": "@deepseek-ai/libreoffice-kit@9.9.9"},
+                         {"source_archive_pin": "0" * 64}, {"source_archive_entry": "package/../../outside"}]:
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory(prefix="qi-notice-unit-") as temporary:
+                outcome, target, _, _ = self.missing_notice_fixture(Path(temporary), mutation, origin="parent")
+                self.assertEqual(outcome, "REJECTED")
+                self.assertFalse((target / "workspace-manifest.json").exists())
+
+    def wheel_data_fixture(self, root, data_path, data=b"inert-auxiliary-script"):
+        wheel = root / "xlsxwriter.whl"
+        with zipfile.ZipFile(wheel, "w") as archive:
+            archive.writestr("xlsxwriter-3.2.9.dist-info/METADATA", "Metadata-Version: 2.4\nName: XlsxWriter\nVersion: 3.2.9\n")
+            archive.writestr("xlsxwriter-3.2.9.dist-info/licenses/LICENSE.txt", "fixture")
+            archive.writestr(data_path, data)
+        target = root / "output"; target.mkdir()
+        outcome = "ACCEPTED"
+        try:
+            runtime.wheel_entries(wheel, runtime.Writer(target))
+        except ValueError:
+            outcome = "REJECTED"
+        return outcome, target
+
+    def test_wheel_auxiliary_script_is_retained_as_inert_data_outside_python_bin_and_imports(self):
+        with tempfile.TemporaryDirectory(prefix="qi-wheel-data-unit-") as temporary:
+            outcome, target = self.wheel_data_fixture(Path(temporary), "xlsxwriter-3.2.9.data/scripts/vba_extract.py")
+            self.assertEqual(outcome, "ACCEPTED", "locked XlsxWriter auxiliary script must be retained without executing or installing it")
+            auxiliary = target / "python/share/qi-wheel-data/xlsxwriter-3.2.9/scripts/vba_extract.py"
+            self.assertEqual(auxiliary.read_bytes(), b"inert-auxiliary-script")
+            self.assertEqual(auxiliary.stat().st_mode & 0o111, 0)
+            self.assertFalse((target / "python/bin/vba_extract.py").exists())
+            self.assertFalse((target / "python/lib/python3.12/site-packages/vba_extract.py").exists())
+
+    def test_wheel_data_root_must_match_its_distribution_identity(self):
+        with tempfile.TemporaryDirectory(prefix="qi-wheel-data-unit-") as temporary:
+            outcome, target = self.wheel_data_fixture(Path(temporary), "foreign-9.9.data/purelib/injected.py")
+            self.assertEqual(outcome, "REJECTED", "foreign distribution data must not be installed as this wheel's code")
+            self.assertFalse((target / "python/lib/python3.12/site-packages/injected.py").exists())
+
+    def test_wheel_auxiliary_script_escape_and_unknown_scheme_are_rejected(self):
+        for data_path in ["xlsxwriter-3.2.9.data/scripts/../../outside.py", "xlsxwriter-3.2.9.data/headers/injected.h"]:
+            with self.subTest(data_path=data_path), tempfile.TemporaryDirectory(prefix="qi-wheel-data-unit-") as temporary:
+                outcome, target = self.wheel_data_fixture(Path(temporary), data_path)
+                self.assertEqual(outcome, "REJECTED")
+                self.assertFalse((target.parent / "outside.py").exists())
+
     def test_locked_wheel_identity_and_license_are_accepted_without_install_or_execution(self):
         with tempfile.TemporaryDirectory(prefix="qi-runtime-unit-") as temporary:
             root = Path(temporary)
