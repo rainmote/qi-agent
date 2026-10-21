@@ -1,4 +1,6 @@
 //! Native-only supervisor. No operation in this crate is exposed as renderer IPC.
+pub mod acceptance;
+pub mod browser;
 use anyhow::{Context, Result, ensure};
 use fs2::FileExt;
 use reqwest::blocking::Client;

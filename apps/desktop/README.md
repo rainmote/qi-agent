@@ -130,7 +130,21 @@ isolated fixture and no real project trust or existing service mutation:
   attributed by valid baseline evidence. A green subset cannot close this gate.
 
 The existing original-isolation `true` probe failed with `sandbox_apply: EPERM`.
-Its one authorization was consumed. It does not prove that TCC, an installation,
-or a particular nested layer is the cause. Runtime E2E remains blocked until an
-explicitly approved usable isolation/execution boundary is available. Neither
-this build path nor Tauri changes or removes that boundary.
+Its one authorization was consumed. That specific invocation must not be retried
+or bypassed. It does **not** establish that the Tauri app cannot start. The first
+desktop report had not attempted an app launch; a static controller contains no
+runtime action. TSX's UNIX socket failure and hdiutil's device failure also do not
+qualify or disqualify native app startup.
+
+A separate, independently reviewed cold-start controller may run the **frozen
+packaged executable** once in the original executor boundary. It supplies a
+private HOME/auth home and an acceptance plan bound to the bundle SHA. The shell
+uses a unique runtime application identifier (isolating the single-instance
+socket), a nonpersistent WebKit store, private app state, and only the empty
+Welcome workspace. Project selection, external links, previews and restarts are
+disabled in this mode. The shell observes a native window, authenticated
+Host/daemon readiness and the Host document load, then uses normal owned
+shutdown after at most 30 seconds of observation. An uncertain controller timeout
+retains the PID, owner marker and evidence; it does not force-kill or retry.
+This mode changes no executor sandbox or system permission. A cold-start pass
+still does not prove UI interactions, worker/model, LCU, persistence or full E2E.

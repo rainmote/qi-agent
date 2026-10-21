@@ -1,4 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+use qi_desktop_supervisor::acceptance::Acceptance;
 use qi_desktop_supervisor::{Supervisor, external_link, lock_installation};
 use std::{
     fs::File,
@@ -31,6 +32,7 @@ struct Shell {
     link_prompt: AtomicBool,
     payload: PathBuf,
     state: PathBuf,
+    acceptance: Option<Arc<Acceptance>>,
     _lease: File,
 }
 
@@ -46,6 +48,10 @@ fn notice(app: &tauri::AppHandle, message: impl Into<String>) {
 }
 
 fn failed(app: &tauri::AppHandle, message: &str) {
+    if let Some(mode) = &app.state::<Arc<Shell>>().acceptance {
+        let _ = mode.record("startup_failed");
+        return;
+    }
     if let Some(window) = app.get_webview_window("main") {
         let mut url = tauri::Url::parse("tauri://localhost/index.html").expect("constant URL");
         url.query_pairs_mut().append_pair("status", message);
@@ -75,6 +81,9 @@ fn start(app: tauri::AppHandle) {
         if shell.generation.load(Ordering::SeqCst) == generation {
             match result {
                 Ok(ready) => {
+                    if let Some(mode) = &shell.acceptance {
+                        let _ = mode.record("host_authenticated_ready");
+                    }
                     *shell.origin.write().unwrap() = Some(ready.origin());
                     if let (Some(window), Ok(url)) =
                         (app.get_webview_window("main"), ready.bootstrap_url())
@@ -132,6 +141,9 @@ fn quit(app: tauri::AppHandle) {
 
 fn folder(app: tauri::AppHandle) {
     let shell = app.state::<Arc<Shell>>().inner().clone();
+    if shell.acceptance.is_some() {
+        return;
+    }
     if shell.changing.load(Ordering::SeqCst)
         || shell.quitting.load(Ordering::SeqCst)
         || shell.origin.read().unwrap().is_none()
@@ -160,6 +172,9 @@ fn external(app: tauri::AppHandle, raw: String) {
         return;
     };
     let shell = app.state::<Arc<Shell>>().inner().clone();
+    if shell.acceptance.is_some() {
+        return;
+    }
     if shell.quitting.load(Ordering::SeqCst) || shell.link_prompt.swap(true, Ordering::SeqCst) {
         return;
     }
@@ -185,6 +200,29 @@ fn external(app: tauri::AppHandle, raw: String) {
 }
 
 fn main() {
+    // A test mode narrows runtime data and external actions; it never changes
+    // the executor's sandbox or grants permission to a tool/project/site.
+    let acceptance = match (
+        std::env::var_os("QI_DESKTOP_ACCEPTANCE_ROOT"),
+        std::env::var("QI_DESKTOP_ACCEPTANCE_ID"),
+    ) {
+        (None, Err(_)) => None,
+        (Some(root), Ok(id)) => match Acceptance::load(&PathBuf::from(root), &id) {
+            Ok(mode) => Some(Arc::new(mode)),
+            Err(_) => {
+                eprintln!("Invalid desktop acceptance plan; no services started");
+                std::process::exit(2);
+            }
+        },
+        _ => {
+            eprintln!("Incomplete desktop acceptance plan; no services started");
+            std::process::exit(2);
+        }
+    };
+    let mut context = tauri::generate_context!();
+    if let Some(mode) = &acceptance {
+        context.config_mut().identifier = mode.identifier();
+    }
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| show(app)))
         .plugin(tauri_plugin_dialog::init())
@@ -196,14 +234,25 @@ fn main() {
                 .build(),
         )
         // Intentionally no invoke_handler and no remote capability grants.
-        .setup(|app| {
-            let state = app.path().app_data_dir()?;
+        .setup(move |app| {
+            let state = if let Some(mode) = &acceptance {
+                mode.root.join("state")
+            } else {
+                app.path().app_data_dir()?
+            };
             let lease = lock_installation(&state)?;
             let payload = if cfg!(debug_assertions) {
                 PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../stage/runtime")
             } else {
                 app.path().resource_dir()?.join("runtime")
             };
+            if let Some(mode) = &acceptance {
+                let manifest: serde_json::Value =
+                    serde_json::from_reader(File::open(payload.join("runtime-manifest.json"))?)?;
+                if manifest["source_sha"] != mode.plan.source_sha {
+                    return Err("acceptance source revision mismatch".into());
+                }
+            }
             let shell = Arc::new(Shell {
                 supervisor: Mutex::new(Supervisor::default()),
                 origin: RwLock::new(None),
@@ -216,6 +265,7 @@ fn main() {
                 link_prompt: AtomicBool::new(false),
                 payload,
                 state,
+                acceptance: acceptance.clone(),
                 _lease: lease,
             });
             // Native prompts are merged independently from service transitions.
@@ -223,10 +273,22 @@ fn main() {
             let navigation_app = app.handle().clone();
             let navigation_shell = shell.clone();
             let new_window_app = app.handle().clone();
+            let page_shell = shell.clone();
             WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+                .incognito(acceptance.is_some())
                 .title("qì agent")
                 .inner_size(1280.0, 840.0)
                 .min_inner_size(360.0, 480.0)
+                .on_page_load(move |_, payload| {
+                    if payload.event() == tauri::webview::PageLoadEvent::Finished
+                        && page_shell.origin.read().unwrap().as_deref()
+                            == Some(payload.url().origin().ascii_serialization().as_str())
+                    {
+                        if let Some(mode) = &page_shell.acceptance {
+                            let _ = mode.record("web_document_loaded");
+                        }
+                    }
+                })
                 .on_navigation(move |url| {
                     if url.scheme() == "tauri"
                         || (url.scheme() == "http" && url.host_str() == Some("tauri.localhost"))
@@ -242,6 +304,9 @@ fn main() {
                 })
                 .on_new_window(move |url, features| {
                     let shell = new_window_app.state::<Arc<Shell>>().inner().clone();
+                    if shell.acceptance.is_some() {
+                        return NewWindowResponse::Deny;
+                    }
                     let origin = shell.origin.read().unwrap().clone();
                     if origin.as_deref() == Some(url.origin().ascii_serialization().as_str()) {
                         if new_window_app.webview_windows().len() >= 6 {
@@ -286,6 +351,35 @@ fn main() {
                     NewWindowResponse::Deny
                 })
                 .build()?;
+            if let Some(mode) = &acceptance {
+                mode.record("window_created")?;
+                let mode = mode.clone();
+                let handle = app.handle().clone();
+                let acceptance_shell = shell.clone();
+                thread::spawn(move || {
+                    for _ in 0..300 {
+                        if mode.page_ready() {
+                            break;
+                        }
+                        thread::sleep(Duration::from_millis(100));
+                    }
+                    if mode.finishing.swap(true, Ordering::SeqCst) {
+                        return;
+                    }
+                    acceptance_shell.quitting.store(true, Ordering::SeqCst);
+                    acceptance_shell.generation.fetch_add(1, Ordering::SeqCst);
+                    *acceptance_shell.origin.write().unwrap() = None;
+                    let mut supervisor = acceptance_shell.supervisor.lock().unwrap();
+                    if !supervisor.alive() {
+                        mode.mark_failed();
+                    }
+                    let cleaned = supervisor.stop().is_ok();
+                    drop(supervisor);
+                    let passed = mode.finish(cleaned).unwrap_or(false);
+                    acceptance_shell.exit_ready.store(true, Ordering::SeqCst);
+                    handle.exit(if passed { 0 } else { 1 });
+                });
+            }
             let open = MenuItem::with_id(app, "project", "打开项目…", true, Some("CmdOrCtrl+O"))?;
             let restart = MenuItem::with_id(app, "restart", "重启本地服务…", true, None::<&str>)?;
             let exit = MenuItem::with_id(app, "quit", "退出 qì agent…", true, Some("CmdOrCtrl+Q"))?;
@@ -324,6 +418,9 @@ fn main() {
                 "quit" => quit(app.clone()),
                 "restart" => {
                     let shell = app.state::<Arc<Shell>>().inner().clone();
+                    if shell.acceptance.is_some() {
+                        return;
+                    }
                     if shell.changing.load(Ordering::SeqCst)
                         || shell.quitting.load(Ordering::SeqCst)
                         || shell.restart_prompt.swap(true, Ordering::SeqCst)
@@ -366,6 +463,9 @@ fn main() {
                         && supervisor.has_runtime()
                         && !supervisor.alive()
                     {
+                        if let Some(mode) = &shell.acceptance {
+                            mode.mark_failed();
+                        }
                         shell.generation.fetch_add(1, Ordering::SeqCst);
                         *shell.origin.write().unwrap() = None;
                         let result = supervisor.stop();
@@ -397,7 +497,7 @@ fn main() {
                 }
             }
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("could not initialize qì agent desktop");
     app.run(|app, event| match event {
         RunEvent::ExitRequested { api, .. } => {
