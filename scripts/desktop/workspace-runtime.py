@@ -191,6 +191,62 @@ def distribution_name(name):
     return re.sub(r"[-_.]+", "_", name).lower()
 
 
+def pnpm_entries(path, writer, version):
+    """Retain arm64 pnpm, omit only its bound foreign optional reflink packages.
+
+    Both passes use the same inert archive parser and limits. Neither metadata
+    nor a foreign suffix alone authorizes omission: the parent must declare the
+    exact child identity/version and that child must declare its exact target.
+    """
+    prefix = "node_modules/pnpm"
+    family = prefix + "/dist/node_modules/@reflink/"
+    metadata = {}
+    class Metadata:
+        def put(self, name, data, executable=False):
+            if name == prefix + "/package.json" or (name.startswith(family) and name.endswith("/package.json")):
+                if len(data) > 1_000_000:
+                    raise ValueError("oversized bundled pnpm metadata")
+                value = json.loads(data)
+                if not isinstance(value, dict):
+                    raise ValueError("invalid bundled pnpm package metadata")
+                metadata[name] = value
+    tar_entries(path, "package", prefix, Metadata())
+    package = metadata.get(prefix + "/package.json", {})
+    parent = metadata.get(family + "reflink/package.json", {})
+    if (package.get("name") != "pnpm" or package.get("version") != version
+            or parent.get("name") != "@reflink/reflink" or not isinstance(parent.get("version"), str)
+            or not isinstance(parent.get("optionalDependencies"), dict)):
+        raise ValueError("unbound bundled pnpm native parent")
+    targets = {
+        "reflink-darwin-arm64": (["darwin"], ["arm64"]),
+        "reflink-darwin-x64": (["darwin"], ["x64"]),
+        "reflink-win32-arm64-msvc": (["win32"], ["arm64"]),
+        "reflink-win32-x64-msvc": (["win32"], ["x64"]),
+    }
+    children = {name: value for name, value in metadata.items() if name != family + "reflink/package.json" and name.startswith(family)}
+    target = family + "reflink-darwin-arm64/package.json"
+    if target not in children:
+        raise ValueError("missing bundled pnpm arm64 native package")
+    omitted = []
+    for name, child in sorted(children.items()):
+        folder = name[len(family):].removesuffix("/package.json")
+        identity = "@reflink/" + folder
+        flags = targets.get(folder)
+        if (flags is None or child.get("name") != identity or child.get("version") != parent["version"]
+                or parent.get("optionalDependencies", {}).get(identity) != child.get("version")
+                or child.get("os") != flags[0] or child.get("cpu") != flags[1]):
+            raise ValueError("unbound bundled pnpm optional native package")
+        if name != target:
+            omitted.append({"package":identity,"version":child["version"],"os":child["os"],"cpu":child["cpu"],
+                            "path":name.removesuffix("/package.json")})
+    class TargetWriter:
+        def put(self, name, data, executable=False):
+            if not any(name.startswith(item["path"] + "/") for item in omitted):
+                writer.put(name, data, executable)
+    tar_entries(path, "package", prefix, TargetWriter())
+    return omitted
+
+
 def wheel_entries(path, writer):
     with zipfile.ZipFile(path) as archive:
         metadata_paths = [name for name in archive.namelist()
@@ -252,6 +308,7 @@ def prepare(lock, cache, target):
     writer = Writer(target)
     npm = {}
     wheels = {}
+    platform_omissions = []
     python_locked = {distribution_name(name): version for name, version in lock.get("python_packages", {}).items()}
     if len(python_locked) != len(lock.get("python_packages", {})):
         raise ValueError("duplicate normalized Python package identity")
@@ -269,7 +326,10 @@ def prepare(lock, cache, target):
             package = source["package"]
             if not re.fullmatch(r"(?:@[a-z0-9._-]+/)?[a-z0-9._-]+", package):
                 raise ValueError("invalid npm package path")
-            tar_entries(path, "package", "node_modules/" + package, writer)
+            if package == "pnpm" and lock.get("target") == "aarch64-apple-darwin":
+                platform_omissions.extend(pnpm_entries(path, writer, source["version"]))
+            else:
+                tar_entries(path, "package", "node_modules/" + package, writer)
             metadata = json.loads((target / "node_modules" / package / "package.json").read_text())
             if metadata["name"] != package or metadata["version"] != source["version"]:
                 raise ValueError("npm package identity mismatch")
@@ -319,7 +379,8 @@ def prepare(lock, cache, target):
     writer.put("licenses.json", (json.dumps({"notice_paths_relative_to": "workspace", "notices": notices,
                                             "supplemental_notices": supplemental}, indent=2) + "\n").encode())
     hashes = {str(path.relative_to(target)): hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(target.rglob("*")) if path.is_file()}
-    writer.put("workspace-manifest.json", (json.dumps({"schema": 1, "target": lock["target"], "python_version": lock["python_version"], "files": hashes}, indent=2) + "\n").encode())
+    writer.put("workspace-manifest.json", (json.dumps({"schema": 1, "target": lock["target"], "python_version": lock["python_version"],
+                                                     "platform_omissions":platform_omissions,"files": hashes}, indent=2) + "\n").encode())
 
 
 if __name__ == "__main__":

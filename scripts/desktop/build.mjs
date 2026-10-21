@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { build } from 'esbuild';
 import { machOMagics, loadCommands, qualifyNative } from './native-payload.mjs';
+import { normalizePillow } from './native-normalize.mjs';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const desktop = join(repo, 'apps/desktop');
@@ -180,6 +181,15 @@ async function prepare() {
   // archives; it never downloads dependencies or runs package install scripts.
   run('python3', [join(repo, 'scripts/desktop/workspace-runtime.py'),
     join(desktop, 'workspace-runtime-sources.json'), join(cache, 'workspace'), workspaceStage]);
+  const workspaceLock = JSON.parse(await readFile(join(desktop,'workspace-runtime-sources.json'),'utf8'));
+  const derivation = await normalizePillow(workspaceStage,workspaceLock,run,shellConfig.bundle.macOS.minimumSystemVersion);
+  const workspaceManifestPath = join(workspaceStage,'workspace-manifest.json');
+  const workspaceManifest = JSON.parse(await readFile(workspaceManifestPath,'utf8'));
+  if (workspaceManifest.files[derivation.entry] !== derivation.original_sha256) throw new Error('Native source differs from prepared workspace manifest');
+  workspaceManifest.files[derivation.entry] = derivation.derived_sha256;
+  workspaceManifest.native_derivations = [derivation];
+  await writeFile(workspaceManifestPath,JSON.stringify(workspaceManifest,null,2)+'\n');
+  await assertSource();
   const archive = join(cache, sources.node.archive);
   if (hash(await readFile(archive)) !== sources.node.sha256) throw new Error('Missing/mismatched official Node archive; run desktop:bootstrap explicitly');
   if (hash(await readFile(join(cache, 'babashka-LICENSE'))) !== sources.babashka.license_sha256) throw new Error('Babashka license mismatch');
@@ -238,7 +248,7 @@ async function verify(app) {
         'workspace/node_modules/@deepseek-ai/libreoffice-kit-darwin-arm64/bin/libreoffice-kit'].includes(name)) throw new Error(`Required native file is not Mach-O: ${name}`);
       continue;
     }
-    try { qualifyNative({ root, file: path, regularFiles, minimumOS: shellConfig.bundle.macOS.minimumSystemVersion,
+    try { qualifyNative({ root, file: path, fileBytes:await readFile(path), regularFiles, minimumOS: shellConfig.bundle.macOS.minimumSystemVersion,
       architectures: run('/usr/bin/lipo', ['-archs', path]), commands: loadCommands(run('/usr/bin/otool', ['-arch', 'arm64', '-l', path])) }); }
     catch (error) { throw new Error(`Native payload ${name}: ${error.message}`); }
     native.push(name);

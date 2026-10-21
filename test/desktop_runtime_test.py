@@ -258,4 +258,62 @@ class ArchiveTests(unittest.TestCase):
             self.assertFalse((root / "new").exists())
 
 
+class PnpmPlatformTests(unittest.TestCase):
+    def fixture(self, root, mutation=None, omit_target=False):
+        package = "@reflink/reflink"
+        target_name = package + "-darwin-arm64"
+        foreign_name = package + "-darwin-x64"
+        parent = {"name": package, "version": "0.1.19", "optionalDependencies": {target_name:"0.1.19", foreign_name:"0.1.19"}}
+        children = {target_name:{"name":target_name,"version":"0.1.19","os":["darwin"],"cpu":["arm64"]},
+                    foreign_name:{"name":foreign_name,"version":"0.1.19","os":["darwin"],"cpu":["x64"]}}
+        if mutation: mutation(parent,children)
+        if omit_target: del children[target_name]
+        entries = {"package/package.json":json.dumps({"name":"pnpm","version":"11.28.5"}).encode(),
+                   "package/LICENSE":b"publisher fixture", "package/bin/pnpm.cjs":b"inert fixture",
+                   "package/dist/node_modules/"+package+"/package.json":json.dumps(parent).encode()}
+        for name, metadata in children.items():
+            prefix = "package/dist/node_modules/" + name
+            entries[prefix+"/package.json"] = json.dumps(metadata).encode()
+            entries[prefix+"/binding.node"] = b"inert target" if name == target_name else b"inert foreign"
+            entries[prefix+"/LICENSE"] = b"publisher fixture"
+        path = root / "pnpm.tgz"
+        with tarfile.open(path,"w:gz") as archive:
+            for name,data in entries.items():
+                info=tarfile.TarInfo(name);info.size=len(data);archive.addfile(info,io.BytesIO(data))
+        output=root/"output";output.mkdir()
+        outcome="ACCEPTED";omitted=[]
+        try:
+            if hasattr(runtime,"pnpm_entries"):
+                omitted=runtime.pnpm_entries(path,runtime.Writer(output),"11.28.5")
+            else:
+                runtime.tar_entries(path,"package","node_modules/pnpm",runtime.Writer(output))
+        except ValueError: outcome="REJECTED"
+        return outcome,output,omitted,target_name,foreign_name
+
+    def test_foreign_bundled_optional_native_package_is_not_shipped_but_arm64_bytes_are_preserved(self):
+        with tempfile.TemporaryDirectory(prefix="qi-pnpm-platform-unit-") as temporary:
+            outcome,output,omitted,target,foreign=self.fixture(Path(temporary))
+            self.assertEqual(outcome,"ACCEPTED")
+            nested=output/"node_modules/pnpm/dist/node_modules"
+            self.assertFalse((nested/foreign).exists(),"x64 optional package must not enter an arm64 app")
+            self.assertEqual((nested/target/"binding.node").read_bytes(),b"inert target")
+            self.assertTrue((nested/target/"LICENSE").is_file())
+            self.assertEqual([row["package"] for row in omitted],[foreign])
+
+    def test_omission_requires_parent_exact_optional_dependency_and_valid_child_identity(self):
+        changes=[lambda parent,children:parent.update(optionalDependencies={}),
+                 lambda parent,children:children["@reflink/reflink-darwin-x64"].update(version="9.9.9"),
+                 lambda parent,children:children["@reflink/reflink-darwin-x64"].update(name="foreign"),
+                 lambda parent,children:children["@reflink/reflink-darwin-x64"].update(cpu=["!arm64"])]
+        for mutation in changes:
+            with self.subTest(mutation=mutation),tempfile.TemporaryDirectory(prefix="qi-pnpm-platform-unit-") as temporary:
+                outcome,_,_,_,_=self.fixture(Path(temporary),mutation)
+                self.assertEqual(outcome,"REJECTED","unbound metadata must not authorize pruning")
+
+    def test_required_arm64_optional_package_cannot_be_missing(self):
+        with tempfile.TemporaryDirectory(prefix="qi-pnpm-platform-unit-") as temporary:
+            outcome,_,_,_,_=self.fixture(Path(temporary),omit_target=True)
+            self.assertEqual(outcome,"REJECTED","a foreign-only archive is not a complete arm64 runtime")
+
+
 if __name__ == "__main__": unittest.main()

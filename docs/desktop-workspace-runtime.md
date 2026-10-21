@@ -27,6 +27,12 @@ XlsxWriter 的 `vba_extract.py` 等辅助 `scripts` 仅保留在
 `python/share/qi-wheel-data/<发行名-版本>/scripts/`，普通文件模式 0644，不进入
 PATH 或 Python 导入目录，不改 shebang、不执行安装。未知安装 scheme 仍拒绝。
 
+pnpm 原归档同时包含部分其他平台的可选 reflink 模块。arm64 派生输出仅在同归档
+父包 `optionalDependencies` 与子包的名称、精确版本、`os`、`cpu` 一致时筛除
+darwin-x64、win32-arm64-msvc、win32-x64-msvc 三个目录，保留 arm64 原字节；
+缺少目标模块或身份/平台不明确均失败。`workspace-manifest.json` 记录排除清单，
+不按验证失败结果泛删 native 文件，原锁定归档和失败暂存目录不变。
+
 npm 归档未附许可证正文时，只接受固定 `apps/desktop/notices` 中精确包版本绑定的
 补充正文：文件名和 SHA256 一致、许可证标识匹配，并提供冻结 Git commit/原文
 blob 绑定，或同版本已锁定父包的精确依赖关系、归档 pin、路径及原文字节证明。
@@ -40,7 +46,16 @@ fontkit 2.0.4、dfa 1.2.0、brotli 1.3.3 的锁定包及冻结源码仍缺库级
 构建不包含 xterm，明确显示不可用。桌面构建把锁定 xterm 静态打进前端；无 CDN、
 动态代码求值、自动终端输入或剪贴板 addon。运行时逐文件清单封存最终字节，静态
 验证遍历所有 Mach-O，而非只检查 Node/bb/qi 三个入口，检查 arm64、最低 macOS、
-依赖与 rpath。无法解析的嵌入宿主相对链接保持失败，不能猜测为可移植。
+依赖与 rpath。只有实际选中 arm64 header 为 `MH_EXECUTE` 的主程序才能解析自身
+`@executable_path`；FAT 表、CPU subtype、对齐和 load-command 长度须有效。
+库和未知类型仍不能猜测嵌入 Node/Python/engine 的路径上下文。
+
+Pillow 12.3.0 的固定 libjpeg 原文含一条构建机绝对 rpath。构建只对原 wheel pin
+及 libjpeg 原 SHA256 双重绑定的新副本，删除这条未被静态依赖使用的路径，并做
+无密钥/时间戳服务的 ad-hoc 重签与严格验证。变换须保持 `MH_DYLIB`、完整架构、
+`LC_ID_DYLIB`、依赖和最低系统版本；没有外部路径白名单或泛化重写。工作区清单
+记录原/派生哈希、移除项和工具哈希，再绑定最终 runtime 字节。源码和纯 fixture
+通过不代表此原生变换、Python 导入或完整包已实际通过。
 
 Office kit/engine 声明 MPL-2.0。除许可证外，重新分发前还须核验所携对应源版本、
 修改与构建资料；上游来源为 `https://github.com/deepseek-ai/dsh-libreoffice-kit`。
