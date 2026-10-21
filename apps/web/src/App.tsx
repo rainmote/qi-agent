@@ -23,6 +23,7 @@ import { Trajectory } from "./Trajectory";
 import { WorkspacePanel } from "./WorkspacePanel";
 import { DesktopBrowser } from "./DesktopBrowser";
 import { TerminalPanel } from "./TerminalPanel";
+import { officeCancellationEvent } from "./office-result";
 import { ComposerAttachments, ComposerReferences, type AttachmentRef } from "./ComposerAttachments";
 import { AutomationPanel } from "./AutomationPanel";
 import { OrchestrationPanel } from "./OrchestrationPanel";
@@ -231,6 +232,8 @@ export function App() {
   };
   const [busy, setBusy] = useState(false);
   const [pendingOperation, setPendingOperation] = useState<PendingOperation | null>(null);
+  const [officeCancellationBusy, setOfficeCancellationBusy] = useState(false);
+  useEffect(() => { setOfficeCancellationBusy(false); }, [pendingOperation?.commandId]);
   const [operationMissing, setOperationMissing] = useState(false);
   const openingCursor = useRef<string | undefined>(undefined);
   const [composer, setComposer] = useState("");
@@ -1025,11 +1028,28 @@ export function App() {
   const workbenchRpc = useCallback((method: string, params: Record<string, unknown> = {}) => {
     const sessionId = activeSession?.id, current = viewScope.current.capture();
     if (!sessionId) return Promise.reject(new Error(t("请先开始一个会话")));
-    return api.rpc(sessionId, method, params).catch(error => {
-      if (current() && activeSessionId.current === sessionId) showError(error);
+    const operation = api.rpc(sessionId, method, params);
+    if (current()) setPendingOperation(api.pendingOperation(sessionId));
+    return operation.catch(error => {
+      if (method !== "workspace.runtime-status" && current() && activeSessionId.current === sessionId) showError(error);
       throw error;
-    });
+    }).finally(() => { if (current() && activeSessionId.current === sessionId) setPendingOperation(api.pendingOperation(sessionId)); });
   }, [activeSession?.id, showError]);
+
+  const cancelPendingOffice = async () => {
+    const operation = pendingOperation, current = viewScope.current.capture();
+    if (officeCancellationBusy || operation?.method !== "workspace.office-preview" || typeof operation.params.request_id !== "string") return;
+    setOfficeCancellationBusy(true);
+    const owns = () => current() && activeSessionId.current === operation.sessionId
+      && api.pendingOperation(operation.sessionId)?.commandId === operation.commandId;
+    window.dispatchEvent(new CustomEvent(officeCancellationEvent, { detail: { request_id: operation.params.request_id } }));
+    try {
+      const result = await api.rpc<{ cancelled?: boolean }>(operation.sessionId, "workspace.office-cancel", { request_id: operation.params.request_id });
+      if (owns()) flashNotice(result.cancelled === true
+        ? t("取消已登记；保留原操作编号，请继续核对原输出。") : t("取消未登记，请核对原操作结果。"), 8000);
+    } catch (error) { if (owns()) showError(error); }
+    finally { if (owns()) setOfficeCancellationBusy(false); }
+  };
 
   useEffect(() => {
     if (!preferences.codeView && conversationView === "trajectory") setConversationView("chat");
@@ -1074,6 +1094,11 @@ export function App() {
       suggest={api.referenceSuggestions} disabled={busy || !!pendingOperation} />}
     {pendingOperation && <div className="provider-reload-notice" role="status">
       <p>{t("上一项操作的结果尚未确认。核对完成前暂停新提交，以免重复执行。")}</p>
+      {pendingOperation.method === "workspace.office-preview" && <>
+        <p>{t("原 Office 输入：{0}；新 PDF 输出：{1}。", String(pendingOperation.params.path || ""), String(pendingOperation.params.output || ""))}</p>
+        <button type="button" className="button ghost" disabled={officeCancellationBusy}
+          onClick={() => void cancelPendingOffice()}>{t(officeCancellationBusy ? "正在登记取消…" : "取消原 Office 转换")}</button>
+      </>}
       <button type="button" className="button ghost" disabled={busy} onClick={() => void reconcileOperation()}>{t("核对结果")}</button>
       {operationMissing && <button type="button" className="button ghost" disabled={busy}
         onClick={() => void reconcileOperation(true)}>{t("使用原编号重试")}</button>}
@@ -1335,6 +1360,7 @@ export function App() {
       <span tabIndex={workbenchModal ? 0 : -1} data-focus-boundary="start" className="workbench-focus-boundary"
         onFocus={() => { if (workbenchElement.current) workbenchControls(workbenchElement.current).at(-1)?.focus(); }} />
       <div className="workbench-content">{workbench === "files" ? <WorkspacePanel key={activeSession?.id || workspaceId} workspaceId={workspaceId} sessionId={activeSession?.id} api={api.workspaceFiles} showChanges={preferences.codeView}
+        officeRpc={activeSession ? workbenchRpc : undefined} readOnly={policy?.mode === "deny"}
         previewRequest={fileRequest?.scope === `${workspaceId}:${activeSession?.id || "draft"}` ? fileRequest : undefined}
         responseDetail={([...projection?.events || []].reverse().find(event => event.type === "session/preferences")?.data.response_detail as "short" | "auto" | "detailed") || "auto"}
         onResponseDetail={async value => {

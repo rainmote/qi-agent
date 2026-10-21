@@ -861,6 +861,8 @@ fn authenticate_and_attach(
                     | "terminal.status"
                     | "terminal.stop"
                     | "terminal.cancel"
+                    | "workspace.runtime-status"
+                    | "workspace.office-cancel"
             ) || (method == "subagent.invoke"
                 && request.pointer("/params/method").and_then(Value::as_str) == Some("turn.abort"));
             if !allowed_during_cancel

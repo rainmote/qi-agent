@@ -157,7 +157,7 @@ export const api = {
     });
     const pending = pendingOperation(id);
     // Interrupt remains available while the original outcome is uncertain.
-    if (pending && !["turn.abort", "repl.interrupt", "interaction.resolve", "planning.cancel", "planning.exit", "terminal.stop", "terminal.cancel"].includes(method)) return Promise.reject(unknownOutcome(pending));
+    if (pending && !["turn.abort", "repl.interrupt", "interaction.resolve", "planning.cancel", "planning.exit", "terminal.stop", "terminal.cancel", "workspace.office-cancel"].includes(method)) return Promise.reject(unknownOutcome(pending));
     const operation = { sessionId: id, method, params, commandId: `web-${crypto.randomUUID()}` };
     if (pending) return request<T>(`/api/sessions/${encodeURIComponent(id)}/rpc`, {
       method: "POST", body: JSON.stringify(operation),

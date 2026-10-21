@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { WorkspaceLink } from "./WorkspaceLinks";
+import { OfficePreviewAction, type OfficeRpc } from "./OfficePreviewAction";
 import type { ChangeSet, FileListing, FilePreview } from "../../web-host/workspace-files.js";
 
 export interface WorkspacePanelApi {
@@ -18,6 +19,7 @@ export interface WorkspacePanelProps {
   responseDetail?: "short" | "auto" | "detailed";
   previewRequest?: { path: string; serial: number };
   onResponseDetail?: (value: "short" | "auto" | "detailed") => Promise<void>;
+  officeRpc?: OfficeRpc; readOnly?: boolean;
 }
 
 export function sandboxedHtml(text: string): string {
@@ -46,9 +48,10 @@ export function WorkspaceVerificationSummary({ changes }: { changes: ChangeSet }
 }
 
 /** File access is server-authorized; changing workspace aborts and discards all prior reads. */
-export function WorkspacePanel({ workspaceId, sessionId, api, onReference, onClose, responseDetail = "auto", onResponseDetail, showChanges = true, previewRequest }: WorkspacePanelProps & { showChanges?: boolean }) {
+export function WorkspacePanel({ workspaceId, sessionId, api, onReference, onClose, responseDetail = "auto", onResponseDetail, showChanges = true, previewRequest, officeRpc, readOnly = false }: WorkspacePanelProps & { showChanges?: boolean }) {
   const [path, setPath] = useState(""), [query, setQuery] = useState(""), [listing, setListing] = useState<FileListing | null>(null);
   const [preview, setPreview] = useState<FilePreview | null>(null), [changes, setChanges] = useState<ChangeSet | null>(null);
+  const [officeNotice, setOfficeNotice] = useState("");
   const markdownComponents = useMemo<Components>(() => ({
     img: ({ alt }) => <span>{t("[图片：")}{alt || t("未加载")}]</span>,
     a: ({ children, href }) => <WorkspaceLink href={href} directory={preview?.path.split("/").slice(0, -1).join("/")}>{children}</WorkspaceLink>,
@@ -85,9 +88,9 @@ export function WorkspacePanel({ workspaceId, sessionId, api, onReference, onClo
     const timer = setTimeout(() => setRevision(value => value + 1), 1000);
     return () => clearTimeout(timer);
   }, [tab, changes]);
-  const openFile = async (file: string) => {
+  const openFile = async (file: string, notice = "") => {
     view.current?.abort(); const controller = new AbortController(); view.current = controller;
-    setPreviewBusy(true); setError(""); setPreview(null);
+    setPreviewBusy(true); setError(""); setPreview(null); setOfficeNotice(notice);
     try { const value = await api.preview(workspaceId, file, controller.signal); if (!controller.signal.aborted) setPreview(value); }
     catch (failure) { if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : t("预览失败，请重试。")); }
     finally { if (!controller.signal.aborted) setPreviewBusy(false); }
@@ -126,6 +129,11 @@ export function WorkspacePanel({ workspaceId, sessionId, api, onReference, onClo
           {preview.size <= 8 * 1024 * 1024 && <a href={api.contentUrl(workspaceId, preview.path, true)} download>{t("下载")}</a>}</div>
         <p className="workspace-muted">{preview.path} · {Math.ceil(preview.size / 1024)} KiB</p>
         {preview.notice && <p className="workspace-muted">{preview.notice}</p>}
+        {officeNotice && <p className="workspace-muted" role="status">{officeNotice}</p>}
+        {officeRpc && sessionId && preview.size <= 8 * 1024 * 1024 && /\.(?:docx?|xlsx?|pptx?|od[pts]|rtf)$/i.test(preview.path)
+          && <OfficePreviewAction key={`${workspaceId}:${sessionId}:${preview.path}`} path={preview.path} rpc={officeRpc}
+            readOnly={readOnly} onCreated={(output, bytes) => openFile(output, bytes > 8 * 1024 * 1024
+              ? t("PDF 副本已生成；超过 8 MiB 内嵌预览上限，仅显示文件信息。") : t("PDF 副本已生成；原文件未改动。"))} />}
         {preview.kind === "text" && (preview.mime === "text/markdown" ? <><div className="workspace-markdown"><Markdown remarkPlugins={[remarkGfm]}
           components={markdownComponents}>{preview.text || ""}</Markdown></div>
           <details><summary>{t("Markdown 源文")}</summary><pre tabIndex={0}>{preview.text}</pre></details></> : <pre tabIndex={0}>{preview.text}</pre>)}

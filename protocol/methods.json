@@ -20,6 +20,7 @@
     "runtime.status",
     "terminal.status",
     "terminal.read",
+    "workspace.runtime-status",
     "repl.status",
     "repl.describe",
     "state.snapshot",

@@ -1,9 +1,12 @@
 (ns qi.terminal-test
   (:require [clojure.test :refer [deftest is]]
+            [babashka.fs :as fs]
+            [cheshire.core :as json]
             [qi.cancellation :as cancellation]
             [qi.kernel :as kernel]
             [qi.plugin :as plugin]
             [qi.terminal-process :as transport]
+            [qi.workspace-runtime :as runtime]
             [qi.plugins.workspace-tools :as workspace]))
 
 (defn fixture [options]
@@ -96,3 +99,112 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"detached shell descendants"
                          ((:start! controller) (fn [_] (throw (ex-info "must not admit" {}))) 90 24)))
     (is (:cleanup_confirmed ((:status controller))))))
+
+(defn office-fixture [options]
+  (let [root (fs/create-temp-dir {:prefix "qi-office-mock-"})
+        ctx (kernel/create-context) owner (kernel/plugin-context ctx :test/office)
+        calls (atom [])]
+    (kernel/register-service! owner :execution/world
+                              {:root (str root) :capabilities #{:process} :workspace-runtime {:available? true}
+                               :resolve! #(str (fs/path root %)) :resolve-write! #(str (fs/path root %))
+                               :spawn! (fn [request]
+                                         (swap! calls conj request)
+                                         (if-let [spawn (:spawn options)] (spawn request)
+                                           {:exit-code 0 :stdout (json/generate-string {:output "report.preview.pdf" :bytes 12})}))})
+    (kernel/register-service! owner :project/trust {:trusted? (constantly (get options :trusted true))})
+    (kernel/register-service! owner :approval/request (or (:approve options) (constantly :allow)))
+    (kernel/mark-loaded! ctx {:id :test/office})
+    (plugin/load-all! ctx [{:ns 'qi.plugins.remote-registry} {:ns 'qi.plugins.policy :config (:policy options {})}
+                           {:ns 'qi.plugins.workspace-tools}])
+    {:root root :ctx ctx :calls calls
+     :rpc (fn [method params] ((:invoke! (kernel/service ctx :remote/registry)) method params))}))
+
+(def office-assets {:available? true :node "/bundle/node" :office-helper "/bundle/office.mjs"})
+
+(deftest office-manual-preview-honors-bash-deny-trust-and-explicit-approval
+  (doseq [options [{:trusted false} {:policy {:deny-tools ["bash"]}} {:policy {:deny-tools ["office_preview"]}}]]
+    (let [{:keys [ctx root calls rpc]} (office-fixture options)]
+      (try (with-redefs [runtime/describe (constantly office-assets)]
+             (is (thrown? Exception (rpc "workspace.office-preview" {:path "report.docx" :output "report.preview.pdf"})))
+             (is (empty? @calls)))
+           (finally (kernel/dispose-all! ctx) (fs/delete-tree root)))))
+  (let [approval (atom nil) {:keys [ctx root calls rpc]} (office-fixture {:approve #(do (reset! approval %) :allow)})]
+    (try (with-redefs [runtime/describe (constantly office-assets)]
+           (is (:available (rpc "workspace.runtime-status" {})))
+           (is (= "report.preview.pdf" (:output (rpc "workspace.office-preview" {:path "report.docx" :output "report.preview.pdf"}))))
+           (is (= "office_preview" (:name @approval)))
+           (is (= 1 (count @calls)))
+           (spit (str (fs/path root "report.preview.pdf")) "preserved")
+           (is (thrown? Exception (rpc "workspace.office-preview" {:path "report.docx" :output "report.preview.pdf"})))
+           (is (= "preserved" (slurp (str (fs/path root "report.preview.pdf")))))
+           (is (= 1 (count @calls))))
+         (finally (kernel/dispose-all! ctx) (fs/delete-tree root)))))
+
+(deftest office-duplicate-click-and-cancel-during-approval-never-spawn
+  (let [entered (promise) release (promise)
+        {:keys [ctx root calls rpc]} (office-fixture {:approve (fn [_] (deliver entered true) (deref release 1000 :deny))})
+        id (str (random-uuid))]
+    (try (with-redefs [runtime/describe (constantly office-assets)]
+           (let [operation (future (try (rpc "workspace.office-preview" {:path "report.docx" :output "report.preview.pdf" :request_id id})
+                                       (catch Throwable _ :cancelled)))]
+             (is (= true (deref entered 1000 :timeout)))
+             (is (thrown? Exception (rpc "workspace.office-preview" {:path "report.docx" :output "second.pdf"})))
+             (is (:cancelled (rpc "workspace.office-cancel" {:request_id id})))
+             (deliver release :allow)
+             (is (= :cancelled (deref operation 1000 :timeout)))
+             (is (empty? @calls))))
+         (finally (deliver release :deny) (kernel/dispose-all! ctx) (fs/delete-tree root)))))
+
+(deftest office-cancel-after-spawn-is-uncertain-and-rpcs-dispose-with-plugin
+  (let [entered (promise)
+        {:keys [ctx root rpc]} (office-fixture {:spawn (fn [{:keys [cancel-token]}]
+                                                       (deliver entered true)
+                                                       (loop [attempt 0]
+                                                         (cancellation/throw-if-cancelled! cancel-token)
+                                                         (when (> attempt 200) (throw (ex-info "fixture deadline" {})))
+                                                         (Thread/sleep 5) (recur (inc attempt))))})
+        id (str (random-uuid))]
+    (try (with-redefs [runtime/describe (constantly office-assets)]
+           (let [operation (future (try (rpc "workspace.office-preview" {:path "report.docx" :output "report.preview.pdf" :request_id id})
+                                       (catch Throwable error (ex-data error))))]
+             (is (= true (deref entered 1000 :timeout)))
+             (is (:cancelled (rpc "workspace.office-cancel" {:request_id id})))
+             (is (= "uncertain" (:status (deref operation 1000 {}))))))
+         (kernel/dispose-plugin! ctx :tools/workspace-runtime)
+         (is (nil? ((:method (kernel/service ctx :remote/registry)) "workspace.office-preview")))
+         (is (nil? (kernel/tool ctx "office_preview")))
+         (finally (kernel/dispose-all! ctx) (fs/delete-tree root)))))
+
+(deftest office-plan-short-circuit-is-not-a-successful-conversion
+  (let [{:keys [ctx root calls rpc]} (office-fixture {})]
+    (try (with-redefs [runtime/describe (constantly office-assets)]
+           (kernel/intercept! (kernel/plugin-context ctx :test/office-plan) :tool/execute -1000 (fn [_ _ _] {:blocked true}))
+           (is (thrown? Exception (rpc "workspace.office-preview" {:path "report.docx" :output "report.preview.pdf"})))
+           (is (empty? @calls)))
+         (finally (kernel/dispose-all! ctx) (fs/delete-tree root)))))
+
+(deftest office-cancel-can-arrive-before-the-queued-conversion
+  (let [approvals (atom 0) {:keys [ctx root calls rpc]} (office-fixture {:approve (fn [_] (swap! approvals inc) :allow)})
+        id (str (random-uuid))]
+    (try (with-redefs [runtime/describe (constantly office-assets)]
+           (is (:cancelled (rpc "workspace.office-cancel" {:request_id id})))
+           (is (thrown? Exception (rpc "workspace.office-preview" {:path "report.docx" :output "report.preview.pdf" :request_id id})))
+           (is (zero? @approvals))
+           (is (empty? @calls)))
+         (finally (kernel/dispose-all! ctx) (fs/delete-tree root)))))
+
+(deftest office-invalid-or-replaced-output-is-an-uncertain-result
+  (let [{:keys [ctx root rpc]} (office-fixture {:spawn (fn [_] {:exit-code 0 :stdout "{\"output\":\"other.pdf\",\"bytes\":12}"})})]
+    (try (with-redefs [runtime/describe (constantly office-assets)]
+           (is (= "uncertain" (try (rpc "workspace.office-preview" {:path "report.docx" :output "report.preview.pdf"})
+                                   (catch Throwable error (:status (ex-data error)))))))
+         (finally (kernel/dispose-all! ctx) (fs/delete-tree root)))))
+
+(deftest office-cancellation-ledger-is-bounded-and-never-forgets-an-earlier-cancel
+  (let [{:keys [ctx root calls rpc]} (office-fixture {}) ids (repeatedly 129 #(str (random-uuid)))]
+    (try (with-redefs [runtime/describe (constantly office-assets)]
+           (doseq [id ids] (is (:cancelled (rpc "workspace.office-cancel" {:request_id id}))))
+           (is (false? (:available (rpc "workspace.runtime-status" {}))))
+           (is (thrown? Exception (rpc "workspace.office-preview" {:path "report.docx" :output "report.preview.pdf" :request_id (first ids)})))
+           (is (empty? @calls)))
+         (finally (kernel/dispose-all! ctx) (fs/delete-tree root)))))
