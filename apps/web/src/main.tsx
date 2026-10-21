@@ -6,6 +6,7 @@ import "./workspace-panel.css";
 import "./AutomationPanel.css";
 import "./orchestration.css";
 import "./harness.css";
+import "./desktop-browser.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode><App /></StrictMode>,

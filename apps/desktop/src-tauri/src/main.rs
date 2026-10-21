@@ -1,4 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+mod browser;
 use qi_desktop_supervisor::acceptance::Acceptance;
 use qi_desktop_supervisor::{Supervisor, external_link, lock_installation};
 use std::{
@@ -66,6 +67,7 @@ fn start(app: tauri::AppHandle) {
         return;
     }
     let generation = shell.generation.fetch_add(1, Ordering::SeqCst) + 1;
+    browser::clear(&app);
     *shell.origin.write().unwrap() = None;
     for (label, window) in app.webview_windows() {
         if label != "main" {
@@ -121,6 +123,7 @@ fn quit(app: tauri::AppHandle) {
                 return;
             }
             shell.generation.fetch_add(1, Ordering::SeqCst);
+            browser::clear(&app);
             *shell.origin.write().unwrap() = None;
             let handle = app.clone();
             thread::spawn(move || match shell.supervisor.lock().unwrap().stop() {
@@ -224,6 +227,24 @@ fn main() {
         context.config_mut().identifier = mode.identifier();
     }
     let app = tauri::Builder::default()
+        .on_web_content_process_terminate(|view| {
+            if view.label() == "main" {
+                if let Some(mode) = &view.app_handle().state::<Arc<Shell>>().acceptance {
+                    mode.mark_failed();
+                }
+                browser::clear(view.app_handle());
+                if let Some(mode) = &view.app_handle().state::<Arc<Shell>>().acceptance {
+                    let _ = mode.record("startup_failed");
+                } else {
+                    notice(
+                        view.app_handle(),
+                        "应用页面进程失联，未自动重载。请从应用菜单明确重启本地服务或正常退出。",
+                    );
+                }
+            } else {
+                browser::disconnected(view);
+            }
+        })
         .plugin(tauri_plugin_single_instance::init(|app, _, _| show(app)))
         .plugin(tauri_plugin_dialog::init())
         // Native confirmation below owns link opening. Do not inject the
@@ -270,16 +291,24 @@ fn main() {
             });
             // Native prompts are merged independently from service transitions.
             app.manage(shell.clone());
+            app.manage(browser::Browser::default());
             let navigation_app = app.handle().clone();
             let navigation_shell = shell.clone();
             let new_window_app = app.handle().clone();
             let page_shell = shell.clone();
+            let page_app = app.handle().clone();
             WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+                .initialization_script(
+                    "Object.defineProperty(window,'__QI_DESKTOP_BROWSER__',{value:true});",
+                )
                 .incognito(acceptance.is_some())
                 .title("qì agent")
                 .inner_size(1280.0, 840.0)
                 .min_inner_size(360.0, 480.0)
                 .on_page_load(move |_, payload| {
+                    if payload.event() == tauri::webview::PageLoadEvent::Started {
+                        browser::clear(&page_app);
+                    }
                     if payload.event() == tauri::webview::PageLoadEvent::Finished
                         && page_shell.origin.read().unwrap().as_deref()
                             == Some(payload.url().origin().ascii_serialization().as_str())
@@ -290,6 +319,9 @@ fn main() {
                     }
                 })
                 .on_navigation(move |url| {
+                    if browser::intercept(&navigation_app, url) {
+                        return false;
+                    }
                     if url.scheme() == "tauri"
                         || (url.scheme() == "http" && url.host_str() == Some("tauri.localhost"))
                     {
@@ -398,6 +430,22 @@ fn main() {
                 ],
             )?;
             let file = Submenu::with_items(app, "文件", true, &[&open, &restart])?;
+            let new_browser = MenuItem::with_id(
+                app,
+                "browser-new",
+                "新建浏览器标签",
+                acceptance.is_none(),
+                Some("CmdOrCtrl+T"),
+            )?;
+            let close_browser = MenuItem::with_id(
+                app,
+                "browser-close",
+                "关闭浏览器标签",
+                acceptance.is_none(),
+                Some("CmdOrCtrl+W"),
+            )?;
+            let browser_menu =
+                Submenu::with_items(app, "浏览器", true, &[&new_browser, &close_browser])?;
             let edit = Submenu::with_items(
                 app,
                 "编辑",
@@ -412,10 +460,30 @@ fn main() {
                     &PredefinedMenuItem::select_all(app, None)?,
                 ],
             )?;
-            app.set_menu(Menu::with_items(app, &[&app_menu, &file, &edit])?)?;
+            app.set_menu(Menu::with_items(
+                app,
+                &[&app_menu, &file, &edit, &browser_menu],
+            )?)?;
             app.on_menu_event(|app, event| match event.id().as_ref() {
                 "project" => folder(app.clone()),
                 "quit" => quit(app.clone()),
+                "browser-new" | "browser-close" => {
+                    let shell = app.state::<Arc<Shell>>();
+                    if shell.acceptance.is_some()
+                        || shell.quitting.load(Ordering::SeqCst)
+                        || shell.origin.read().unwrap().is_none()
+                    {
+                        return;
+                    }
+                    if let Some(main) = app.get_webview_window("main") {
+                        let event = if event.id().as_ref() == "browser-new" {
+                            "qi-browser-new-tab"
+                        } else {
+                            "qi-browser-close-tab"
+                        };
+                        let _ = main.eval(format!("window.dispatchEvent(new Event('{event}'));"));
+                    }
+                }
                 "restart" => {
                     let shell = app.state::<Arc<Shell>>().inner().clone();
                     if shell.acceptance.is_some() {

@@ -21,6 +21,7 @@ import { SubagentMenu, SubagentPanel } from "./SubagentPanel";
 import { collapseTiming, transcriptView, type CollapseTiming, type TranscriptView } from "./transcript-display";
 import { Trajectory } from "./Trajectory";
 import { WorkspacePanel } from "./WorkspacePanel";
+import { DesktopBrowser } from "./DesktopBrowser";
 import { ComposerAttachments, ComposerReferences, type AttachmentRef } from "./ComposerAttachments";
 import { AutomationPanel } from "./AutomationPanel";
 import { OrchestrationPanel } from "./OrchestrationPanel";
@@ -234,7 +235,13 @@ export function App() {
   const [composer, setComposer] = useState("");
   const [attachments, setAttachments] = useState<AttachmentRef[]>([]);
   const [uploading, setUploading] = useState(false);
-  const [workbench, setWorkbench] = useState<"files" | "automation" | "plugins" | "orchestration" | null>(null);
+  const [workbench, setWorkbench] = useState<"files" | "browser" | "automation" | "plugins" | "orchestration" | null>(null);
+  const [browserNewTabSerial, setBrowserNewTabSerial] = useState(0);
+  useEffect(() => {
+    const open = () => { setWorkbench("browser"); setBrowserNewTabSerial(value => value + 1); };
+    window.addEventListener("qi-browser-new-tab", open);
+    return () => window.removeEventListener("qi-browser-new-tab", open);
+  }, []);
   const [workbenchModal, setWorkbenchModal] = useState(false);
   const [pluginSlots, setPluginSlots] = useState<PluginSlot[]>([]);
   const [commandIndex, setCommandIndex] = useState(0);
@@ -1118,6 +1125,7 @@ export function App() {
             { label: t("引用文件 / 会话"), icon: "copy", disabled: !workspaceId || busy, run: () => { setComposer(value => `${value}${value ? " " : ""}@`); composerInput.current?.focus(); } },
             { label: t("命令"), icon: "command", disabled: !workspaceId || busy, run: () => { setComposer(value => value.startsWith("/") ? value : "/"); composerInput.current?.focus(); } },
             { label: t("文件与变更"), icon: "folder", disabled: !workspaceId, run: () => setWorkbench("files") },
+            { label: t("浏览器"), icon: "eye", disabled: !workspaceId, run: () => setWorkbench("browser") },
             { label: t("计划与协作"), icon: "bot", disabled: !activeSession, run: () => setWorkbench("orchestration") },
             { label: t("自动化"), icon: "clock", disabled: !activeSession, run: () => setWorkbench("automation") },
             { label: t("插件"), icon: "settings", disabled: !activeSession, run: () => setWorkbench("plugins") },
@@ -1230,6 +1238,8 @@ export function App() {
         {workspaceId && <button type="button" className={`header-action draft-files-trigger ${workbench === "files" ? "active" : ""}`}
           aria-label={t("文件与变更")} title={t("文件与变更")} aria-expanded={workbench === "files"}
           onClick={() => setWorkbench(value => value === "files" ? null : "files")}><Icon name="panel" /></button>}
+        {workspaceId && <button type="button" className={`header-action draft-browser-trigger ${workbench === "browser" ? "active" : ""}`} aria-label={t("浏览器")} title={t("浏览器")}
+          aria-expanded={workbench === "browser"} onClick={() => setWorkbench(value => value === "browser" ? null : "browser")}><Icon name="eye" /></button>}
         <div className="new-session-center">
           <div className="welcome-copy">
             <BrandMark size={34} /><div className="welcome-title-group"><h1>{t("探索未至之境")}</h1><span className="preview-badge">{t("预览版")}</span></div>
@@ -1294,7 +1304,22 @@ export function App() {
         <span><strong>{runtime?.plugins.length ?? "—"}</strong>{t("插件")}</span></div></section>
     </aside>}
 
-    {workbench && workspaceId && <section ref={workbenchElement} className="workbench-drawer" aria-label={t("工作台")}
+    {workspaceId && <section ref={workbench === "browser" ? workbenchElement : undefined} className={`${workbench === "browser" ? "workbench-drawer" : "browser-persistent-container"} desktop-browser-workbench`}
+      hidden={workbench !== "browser" || settingsOpen || shortcutsOpen || workspaceDialogOpen || fullAccessDialogOpen || !!trust.dialog || !!projection?.interactions.length}
+      role={workbenchModal ? "dialog" : undefined} aria-modal={workbenchModal || undefined} aria-label={t("浏览器")}
+      onKeyDown={event => {
+        if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setWorkbench(null); }
+        if (event.key === "Tab" && workbenchModal) {
+          const controls = workbenchControls(event.currentTarget);
+          if (controls.length && ((event.shiftKey && document.activeElement === controls[0]) || (!event.shiftKey && document.activeElement === controls.at(-1)))) {
+            event.preventDefault(); (event.shiftKey ? controls.at(-1) : controls[0])?.focus();
+          }
+        }
+      }}>
+      <DesktopBrowser workspaceId={workspaceId} sessionId={activeSession?.id} newTabSerial={browserNewTabSerial} visible={workbench === "browser" && !settingsOpen && !shortcutsOpen && !workspaceDialogOpen && !fullAccessDialogOpen && !trust.dialog && !projection?.interactions.length}
+        onClose={() => setWorkbench(null)} />
+    </section>}
+    {workbench && workbench !== "browser" && workspaceId && <section ref={workbenchElement} className="workbench-drawer" aria-label={t("工作台")}
       role={workbenchModal ? "dialog" : undefined} aria-modal={workbenchModal || undefined} onKeyDown={event => {
         if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setWorkbench(null); }
         if (event.key === "Tab") {

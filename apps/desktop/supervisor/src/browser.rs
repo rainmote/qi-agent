@@ -46,6 +46,8 @@ pub struct Request {
     pub lease: Option<String>,
     pub url: Option<String>,
     pub bounds: Option<Bounds>,
+    pub visibility: Option<u64>,
+    pub acquisition: Option<String>,
 }
 
 impl Request {
@@ -69,13 +71,17 @@ impl Request {
                     | "back"
                     | "forward"
                     | "reload"
-                    | "bounds"
-                    | "hide"
+                    | "present"
+                    | "abandon"
+                    | "cleanup"
                     | "release"
                     | "status"
             ),
             "unknown browser action"
         );
+        if let Some(id) = &request.acquisition {
+            ensure!(Uuid::parse_str(id).is_ok(), "invalid acquisition identity");
+        }
         Ok(request)
     }
 }
@@ -91,9 +97,42 @@ pub struct Lease {
 #[derive(Default)]
 pub struct Leases {
     tabs: BTreeMap<String, Lease>,
+    reservations: BTreeMap<String, (String, u64, Option<String>)>,
 }
 
 impl Leases {
+    pub fn reserve(
+        &mut self,
+        request_id: &str,
+        workspace: &str,
+        generation: u64,
+    ) -> Result<(Lease, bool)> {
+        if let Some((owner, epoch, id)) = self.reservations.get(request_id) {
+            ensure!(
+                owner == workspace && *epoch == generation,
+                "foreign acquisition"
+            );
+            return Ok((
+                self.get(
+                    id.as_deref()
+                        .ok_or_else(|| anyhow::anyhow!("acquisition retired"))?,
+                    workspace,
+                    generation,
+                )?,
+                false,
+            ));
+        }
+        ensure!(
+            self.reservations.len() < 256,
+            "browser reservation ledger is full; reload the application document"
+        );
+        let lease = self.acquire(workspace, generation)?;
+        self.reservations.insert(
+            request_id.to_owned(),
+            (workspace.to_owned(), generation, Some(lease.id.clone())),
+        );
+        Ok((lease, true))
+    }
     pub fn acquire(&mut self, workspace: &str, generation: u64) -> Result<Lease> {
         ensure!(
             self.tabs.len() < MAX_TABS,
@@ -128,7 +167,45 @@ impl Leases {
         Ok(self.tabs.remove(id))
     }
     pub fn drain(&mut self) -> Vec<Lease> {
+        self.reservations.clear();
         std::mem::take(&mut self.tabs).into_values().collect()
+    }
+    pub fn snapshot(&self) -> Vec<Lease> {
+        self.tabs.values().cloned().collect()
+    }
+    // Retire even an unseen request, so a queued acquire cannot create a guest
+    // after its owner has explicitly abandoned an unconfirmed operation.
+    pub fn abandon(
+        &mut self,
+        request: &str,
+        workspace: &str,
+        generation: u64,
+    ) -> Result<Option<Lease>> {
+        if let Some((owner, epoch, id)) = self.reservations.get(request) {
+            ensure!(
+                owner == workspace && *epoch == generation,
+                "foreign acquisition"
+            );
+            return Ok(id.as_ref().and_then(|id| self.tabs.get(id)).cloned());
+        }
+        ensure!(
+            self.reservations.len() < 256,
+            "browser reservation ledger full"
+        );
+        self.reservations
+            .insert(request.to_owned(), (workspace.to_owned(), generation, None));
+        Ok(None)
+    }
+    pub fn is_empty(&self) -> bool {
+        self.tabs.is_empty()
+    }
+    pub fn clear_ledger_if_empty(&mut self) -> bool {
+        if self.tabs.is_empty() {
+            self.reservations.clear();
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -155,13 +232,8 @@ pub fn target(raw: &str, application: &str) -> Result<Url> {
         "URL credentials are not allowed"
     );
     let host = Url::parse(application)?;
-    let alias = matches!(
-        url.host_str(),
-        Some("localhost" | "127.0.0.1" | "[::1]" | "::1")
-    );
     ensure!(
-        !(url.port_or_known_default() == host.port_or_known_default()
-            && (url.host_str() == host.host_str() || alias)),
+        url.port_or_known_default() != host.port_or_known_default(),
         "application Host cannot be opened in a guest"
     );
     Ok(url)
@@ -248,5 +320,27 @@ mod tests {
         assert_eq!(leases.drain().len(), MAX_TABS);
         assert!(leases.drain().is_empty());
         assert!(leases.acquire("0123456789abcdef", 2).is_ok());
+    }
+    #[test]
+    fn duplicate_acquisition_does_not_create_a_second_guest_or_replay_a_released_lease() {
+        let mut leases = Leases::default();
+        let request = Uuid::new_v4().to_string();
+        let (first, new) = leases.reserve(&request, "0123456789abcdef", 1).unwrap();
+        assert!(new);
+        let (second, new) = leases.reserve(&request, "0123456789abcdef", 1).unwrap();
+        assert!(!new);
+        assert_eq!(first.id, second.id);
+        assert!(leases.reserve(&request, "aaaaaaaaaaaaaaaa", 1).is_err());
+        leases.release(&first.id, &first.workspace, 1).unwrap();
+        assert!(leases.reserve(&request, &first.workspace, 1).is_err());
+        let unseen = Uuid::new_v4().to_string();
+        assert!(
+            leases
+                .abandon(&unseen, &first.workspace, 1)
+                .unwrap()
+                .is_none()
+        );
+        assert!(leases.reserve(&unseen, &first.workspace, 1).is_err());
+        assert!(leases.abandon(&unseen, "aaaaaaaaaaaaaaaa", 1).is_err());
     }
 }

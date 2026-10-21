@@ -17,7 +17,7 @@
 | 外链与工作区文件 | 外链协议白名单、无凭据/私有token、原生确认后系统打开；文件权限沿用现有面板 | 系统打开/下载/新窗口兼容待验证，未声明全部完成 |
 | LCU 状态与连接入口 | 沿用 1bb 的延迟连接、未知结果、清理与代次边界；不随壳启用 LCU | 实际 LCU 首调历史 BLOCKED；原隔离 true probe 已失败且授权消费，不重试。原生截图/输入 E2E OPEN |
 | Chrome computer use | 仍是明确 opt-in，扩展与 origin 未安装/注册 | OPEN，需要独立批准与实际能力验证；不等于侧栏 Browser |
-| Harness 侧栏 Browser 的租约/隔离分区 | qi 无等价原生浏览器会话后端 | 明确功能缺口 OPEN；不以普通外链/LCU 标签代替，需新增后端与产品决定 |
+| Harness 侧栏 Browser 的租约/隔离分区 | 已编写 macOS WK 原生子视图、工作区非持久分区、会话页签保留/显式恢复、前后导航与菜单、弹出请求需明确准备及打开；不向模型暴露网页工具 | 源码与纯单元/编译检查，不等于原生验收。真实分区、导航、焦点、弹层、窄屏、取消与清理 E2E OPEN；详见 `desktop-browser.md` |
 | Platform 登录、内嵌账号文档 | qi 无对应 Platform 账号/文档凭据隔离后端 | OPEN；不能冒充同名服务或复制账户凭据，需要产品决定 |
 | 终端与 CLI | 随包 Rust CLI 为 Host/daemon 使用；现有 bash 工具不是完整侧栏 PTY | 系统 PATH 注册未授权；侧栏 PTY 是新增后端缺口 OPEN |
 | 独立 Python/Office/Node/pnpm 工作区运行时 | 本轮闭包为 Node+bb+Rust+Web 与 qi 资源 | Python/Office/pnpm 未提供，不能称运行时等价；需独立组件/许可证与功能实施 |
