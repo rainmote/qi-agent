@@ -71,6 +71,58 @@
       (is (empty? @calls))
       (finally (kernel/dispose-all! ctx)))))
 
+(deftest terminal-cancel-before-queued-open-prevents-approval-and-admission
+  (let [approvals (atom 0)
+        {:keys [ctx calls rpc]} (fixture {:approve (fn [_] (swap! approvals inc) :allow)})
+        id (str (random-uuid))]
+    (try
+      (is (:cancelled (rpc "terminal.cancel" {:request_id id})))
+      (is (thrown? Exception (rpc "terminal.execute" {:action "open" :request_id id})))
+      (is (zero? @approvals))
+      (is (empty? @calls))
+      (finally (kernel/dispose-all! ctx)))))
+
+(deftest terminal-cancel-before-queued-input-or-resize-never-reaches-the-terminal
+  (let [approvals (atom 0)
+        {:keys [ctx calls rpc]} (fixture {:approve (fn [_] (swap! approvals inc) :allow)})]
+    (try
+      (let [terminal-id (:terminal_id (rpc "terminal.execute" {:action "open"}))
+            before @calls]
+        (doseq [operation [{:action "input" :text "must not run\n"} {:action "resize" :cols 80 :rows 20}]]
+          (let [id (str (random-uuid))]
+            (is (:cancelled (rpc "terminal.cancel" {:request_id id})))
+            (is (thrown? Exception (rpc "terminal.execute" (assoc operation :terminal_id terminal-id :request_id id))))))
+        (is (= 1 @approvals))
+        (is (= before @calls)))
+      (finally (kernel/dispose-all! ctx)))))
+
+(deftest model-tool-cannot-reuse-a-manual-terminal-request-identity
+  (let [{:keys [ctx calls rpc]} (fixture {}) id (str (random-uuid))]
+    (try
+      (rpc "terminal.cancel" {:request_id id})
+      (let [tool (kernel/tool ctx "terminal")]
+        (is (not (contains? (get-in tool [:parameters :properties]) :request_id)))
+        (is (thrown? Exception ((:execute tool) {:action "open" :request_id id} {})))
+        (is (empty? @calls)))
+      (finally (kernel/dispose-all! ctx)))))
+
+(deftest terminal-cancellation-limit-closes-new-admission-without-losing-cleanup
+  (let [{:keys [ctx calls rpc]} (fixture {})
+        ids (vec (repeatedly 129 #(str (random-uuid))))]
+    (try
+      (let [terminal-id (:terminal_id (rpc "terminal.execute" {:action "open"}))]
+        (doseq [id ids] (is (:cancelled (rpc "terminal.cancel" {:request_id id}))))
+        (is (false? (:available (rpc "terminal.status" {}))))
+        (doseq [id [(first ids) (last ids) (str (random-uuid))]]
+          (is (thrown? Exception (rpc "terminal.execute" {:action "open" :request_id id}))))
+        (is (thrown? Exception ((:execute (kernel/tool ctx "terminal"))
+                               {:action "input" :terminal_id terminal-id :text "must not run\n"} {})))
+        (is (= 1 (count (filter #{:open} @calls))))
+        (is (= "fixture" (:output (rpc "terminal.read" {:terminal_id terminal-id}))))
+        (is (= "running" (:status (rpc "terminal.execute" {:action "interrupt" :terminal_id terminal-id}))))
+        (is (:cleanup_confirmed (rpc "terminal.stop" {:terminal_id terminal-id}))))
+      (finally (kernel/dispose-all! ctx)))))
+
 (deftest trust-revocation-requests-stop-and-plugin-removal-removes-its-rpcs
   (let [{:keys [ctx rpc trusted closed]} (fixture {})]
     (try

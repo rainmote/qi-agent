@@ -11,8 +11,12 @@
                 :text {:type "string" :maxLength 16384}
                 :since {:type "integer" :minimum 0}
                 :cols {:type "integer" :minimum 2 :maximum 300}
-                :rows {:type "integer" :minimum 2 :maximum 300}
-                :request_id {:type "string" :maxLength 80}}})
+                :rows {:type "integer" :minimum 2 :maximum 300}}})
+
+;; Transport identity belongs to manual RPCs. Model tool call IDs are owned by
+;; the runtime and cannot impersonate a cancelled manual request.
+(def manual-parameters
+  (assoc-in parameters [:properties :request_id] {:type "string" :maxLength 80}))
 
 (def plugin
   {:id :execution/terminal
@@ -25,15 +29,18 @@
            method-disposers (atom [])
            register-method! #(swap! method-disposers conj ((:register! registry) %))
            terminals (atom {}) disposed? (atom false) lock (Object.)
-           pending (atom {})
+           pending (atom {}) cancelled (atom #{}) admission-closed? (atom false)
            trusted? #(when-let [trust (kernel/service ctx :project/trust)] ((:trusted? trust)))
            status (fn []
-                    {:available (boolean (and (:terminal-controller world) (kernel/service ctx :execution/process-admission)))
+                    {:available (boolean (and (not @disposed?) (not @admission-closed?)
+                                              (:terminal-controller world) (kernel/service ctx :execution/process-admission)))
                      :trusted (boolean (trusted?)) :sandbox (:sandbox world)
                      :runtime (:workspace-runtime world)
                      :pending_request_ids (vec (keys @pending))
-                     :reason (when-not (:terminal-controller world) (or (get-in world [:terminal-capability :reason])
-                                                                       (get-in world [:workspace-runtime :reason]) "No safe terminal runtime is configured."))
+                     :reason (if @admission-closed?
+                               "Terminal request admission is closed; inspect or close existing terminals and use a new session."
+                               (when-not (:terminal-controller world) (or (get-in world [:terminal-capability :reason])
+                                                                         (get-in world [:workspace-runtime :reason]) "No safe terminal runtime is configured.")))
                      :terminals (mapv (fn [[id terminal]] (assoc ((:status terminal)) :id id)) @terminals)})
            close-all! (fn []
                         (let [tasks (mapv #(future ((:close! %))) (vals @terminals))
@@ -43,6 +50,8 @@
            (fn [{:keys [action terminal_id text since cols rows] :as args} execution]
              (schema/validate! parameters args "Invalid terminal request")
              (when @disposed? (throw (ex-info "Terminal plugin is closed" {})))
+             (when (and @admission-closed? (not (contains? #{"read" "close" "interrupt"} action)))
+               (throw (ex-info "Terminal request admission is closed; only inspection and cleanup remain available" {})))
              (when-not (contains? #{"close" "interrupt"} action)
                (kernel/require-service ctx :tool/policy)
                (when-not (trusted?)
@@ -91,27 +100,30 @@
                  :execution-mode :sequential :uncertain-on-cancel true :stop-batch-on-error true
                  :execute execute}
            gated (fn [args]
-                   (schema/validate! parameters args "Invalid terminal request")
+                   (schema/validate! manual-parameters args "Invalid terminal request")
                    (if (contains? #{"close" "interrupt"} (:action args))
                      ;; Closing or interrupting cannot start another command;
                      ;; it remains possible after trust/policy revocation.
-                     (execute args {})
+                     (execute (dissoc args :request_id) {})
                      (let [token (cancellation/create-token)
+                           arguments (dissoc args :request_id)
                            _ (kernel/require-service ctx :tool/policy)
                            id (or (:request_id args) (str (random-uuid)))
                            _ (try (java.util.UUID/fromString id) (catch Throwable _ (throw (ex-info "Invalid terminal request identity" {}))))
                            _ (locking lock
-                               (when (or @disposed? (>= (count @pending) 32) (contains? @pending id))
-                                 (throw (ex-info "Terminal request is already pending or admission is closed" {})))
+                               (when (or @disposed? @admission-closed? (contains? @cancelled id)
+                                         (>= (count @pending) 32) (contains? @pending id))
+                                 (throw (ex-info "Terminal request was cancelled, is already pending or admission is closed" {})))
                                (swap! pending assoc id token))
-                           request {:tool tool :execution {:name "terminal" :arguments args :token (str (random-uuid))
+                           request {:tool tool :execution {:name "terminal" :arguments arguments :token (str (random-uuid))
                                                            :call-id id :cancel-token token}}]
                        (try
+                         (cancellation/throw-if-cancelled! token)
                          (let [gate (kernel/waterfall ctx :tool/pre-execute request #(assoc % :decision :allow))]
                            (when-not (= :allow (:decision gate))
                              (throw (ex-info (or (:reason gate) "Terminal was not approved") {})))
                            (cancellation/throw-if-cancelled! token)
-                           (kernel/waterfall ctx :tool/execute gate #(execute args (:execution %))))
+                           (kernel/waterfall ctx :tool/execute gate #(execute arguments (:execution %))))
                          (finally (swap! pending dissoc id))))))
            monitor (future
                      (loop []
@@ -129,7 +141,7 @@
                               :params-schema {:type "object" :properties {} :additionalProperties false} :result-schema {:type "object"}
                               :handler (fn [_] (status))})
        (register-method! {:method "terminal.execute" :description "User terminal control through normal trust, planning and approval gates."
-                              :blocking true :params-schema parameters :result-schema {:type "object"} :handler gated})
+                              :blocking true :params-schema manual-parameters :result-schema {:type "object"} :handler gated})
        (register-method! {:method "terminal.read" :description "Read bounded output from an existing session-owned terminal; never starts a process."
                               :blocking true :params-schema {:type "object" :additionalProperties false :required ["terminal_id"]
                                                              :properties {:terminal_id {:type "string" :maxLength 80} :since {:type "integer" :minimum 0}}}
@@ -138,13 +150,23 @@
                               :blocking true :params-schema {:type "object" :additionalProperties false :required ["terminal_id"]
                                                              :properties {:terminal_id {:type "string" :maxLength 80}}}
                               :result-schema {:type "object"} :handler #(execute (assoc % :action "close") {})})
-       (register-method! {:method "terminal.cancel" :description "Cancel one pending user terminal request without replay or restart."
+       (register-method! {:method "terminal.cancel" :description "Record cancellation of one queued or pending user terminal request without replay or restart."
                          :params-schema {:type "object" :additionalProperties false :required ["request_id"]
                                          :properties {:request_id {:type "string" :maxLength 80}}}
                          :result-schema {:type "object"}
                          :handler (fn [{:keys [request_id]}]
-                                    (if-let [token (get @pending request_id)]
-                                      (do (cancellation/cancel! token) {:cancelled true}) {:cancelled false}))})
+                                    (try (java.util.UUID/fromString request_id)
+                                         (catch Throwable _ (throw (ex-info "Invalid terminal request identity" {}))))
+                                    (let [token (locking lock
+                                                  ;; A cancellation can overtake a blocking RPC.
+                                                  ;; Never evict its identity; close new admission
+                                                  ;; at the finite limit, while preserving cleanup.
+                                                  (if (or (contains? @cancelled request_id) (< (count @cancelled) 128))
+                                                    (swap! cancelled conj request_id)
+                                                    (reset! admission-closed? true))
+                                                  (get @pending request_id))]
+                                      (when token (cancellation/cancel! token))
+                                      {:cancelled true :pending (boolean token) :admission_closed @admission-closed?}))})
        (fn []
          (locking lock (reset! disposed? true))
          (doseq [token (vals @pending)] (cancellation/cancel! token))
