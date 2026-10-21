@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "default_profile": "official",
+  "profiles": {
+    "official": {},
+    "cn": {
+      "status": "candidate_requires_pinned_verification",
+      "npm_registry": "https://registry.npmmirror.com",
+      "pypi_simple": "https://pypi.tuna.tsinghua.edu.cn/simple/",
+      "portable_python": null
+    }
+  },
+  "documentation": [
+    "https://npmmirror.com/",
+    "https://mirrors.tuna.tsinghua.edu.cn/help/pypi/"
+  ]
+}

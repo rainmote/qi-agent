@@ -13,6 +13,9 @@
 Python 提供 numpy、pandas、python-docx、python-pptx、openpyxl、Pillow、lxml、
 XlsxWriter 及其锁定依赖。未包含 JVM、系统 PATH 注册、扩展或系统权限安装。
 
+归档下载与准备分开；项目内的[国内镜像预设及校验下载](desktop-dependency-mirrors.md)
+提供离线计划和显式下载命令。默认仍为官方来源，不自动更改 npm/pip 或系统配置。
+
 `scripts/desktop/workspace-runtime.py` 仅从 `QI_DESKTOP_CACHE/workspace/<name>`
 读取已锁定归档，不下载、运行安装脚本、执行包或查找宿主 Python。先核验整个闭包，
 再写入新的 build-owned 目录；缺失或哈希不符时不创建输出。Tar 链接仅解析归档内
