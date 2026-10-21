@@ -1,0 +1,178 @@
+{
+  "fetched_at": "2026-10-21T00:59:14.103109+00:00",
+  "purpose": "unmodified license texts only; no executable source fetched or run",
+  "notices": [
+    {
+      "package": "ratatui-termina@0.1.0",
+      "file": "50eb43e8d742c9c61a9391e42b2184fce54dbd1893a1bb1c85b8c9ee217ab1f5.txt",
+      "sha256": "50eb43e8d742c9c61a9391e42b2184fce54dbd1893a1bb1c85b8c9ee217ab1f5",
+      "source": "https://github.com/ratatui/ratatui/blob/e665c36cb14752a61cd777fbd06dbef8474f2add/LICENSE",
+      "download_url": "https://raw.githubusercontent.com/ratatui/ratatui/e665c36cb14752a61cd777fbd06dbef8474f2add/LICENSE",
+      "license_identifier": "MIT",
+      "source_commit": "e665c36cb14752a61cd777fbd06dbef8474f2add"
+    },
+    {
+      "package": "vtparse@0.6.2",
+      "file": "37db33bbbd7348969eda397b89a16f252d56c1ca7481b6ccaf56ccdcbab5dcca.txt",
+      "sha256": "37db33bbbd7348969eda397b89a16f252d56c1ca7481b6ccaf56ccdcbab5dcca",
+      "source": "https://github.com/wezterm/wezterm/blob/edeae72b5fc55c7fa4aa1d08bbefd08c5493f757/LICENSE.md",
+      "download_url": "https://raw.githubusercontent.com/wezterm/wezterm/edeae72b5fc55c7fa4aa1d08bbefd08c5493f757/LICENSE.md",
+      "license_identifier": "NOASSERTION",
+      "source_commit": "edeae72b5fc55c7fa4aa1d08bbefd08c5493f757"
+    },
+    {
+      "package": "wezterm-input-types@0.1.0",
+      "file": "37db33bbbd7348969eda397b89a16f252d56c1ca7481b6ccaf56ccdcbab5dcca.txt",
+      "sha256": "37db33bbbd7348969eda397b89a16f252d56c1ca7481b6ccaf56ccdcbab5dcca",
+      "source": "https://github.com/wezterm/wezterm/blob/d5ca5509b95edc31291ba29bd1fcbf3f0b12c92d/LICENSE.md",
+      "download_url": "https://raw.githubusercontent.com/wezterm/wezterm/d5ca5509b95edc31291ba29bd1fcbf3f0b12c92d/LICENSE.md",
+      "license_identifier": "NOASSERTION",
+      "source_commit": "d5ca5509b95edc31291ba29bd1fcbf3f0b12c92d"
+    },
+    {
+      "package": "alloc-stdlib@0.3.0",
+      "file": "c0c56f26d9c051cac4d200c34c84e7ae9aaa853e01a982a1df08b09931e518ae.txt",
+      "sha256": "c0c56f26d9c051cac4d200c34c84e7ae9aaa853e01a982a1df08b09931e518ae",
+      "source": "https://github.com/dropbox/rust-alloc-no-stdlib/blob/0a81fd6928ea3b33c8cd484aa4575d50ffb98012/LICENSE",
+      "download_url": "https://raw.githubusercontent.com/dropbox/rust-alloc-no-stdlib/0a81fd6928ea3b33c8cd484aa4575d50ffb98012/LICENSE",
+      "license_identifier": "BSD-3-Clause",
+      "source_commit": "0a81fd6928ea3b33c8cd484aa4575d50ffb98012"
+    },
+    {
+      "package": "block2@0.6.2",
+      "file": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54.txt",
+      "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+      "source": "https://github.com/madsmtm/objc2/blob/b4167b582b2f75f9a1be75495c41b765344fd03c/LICENSE.md",
+      "download_url": "https://raw.githubusercontent.com/madsmtm/objc2/b4167b582b2f75f9a1be75495c41b765344fd03c/LICENSE.md",
+      "license_identifier": "NOASSERTION",
+      "source_commit": "b4167b582b2f75f9a1be75495c41b765344fd03c"
+    },
+    {
+      "package": "dispatch2@0.3.1",
+      "file": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54.txt",
+      "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+      "source": "https://github.com/madsmtm/objc2/blob/8852b424193ca41602281b3d7540d7c8ed51e49a/LICENSE.md",
+      "download_url": "https://raw.githubusercontent.com/madsmtm/objc2/8852b424193ca41602281b3d7540d7c8ed51e49a/LICENSE.md",
+      "license_identifier": "NOASSERTION",
+      "source_commit": "8852b424193ca41602281b3d7540d7c8ed51e49a"
+    },
+    {
+      "package": "objc2@0.6.5",
+      "file": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54.txt",
+      "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+      "source": "https://github.com/madsmtm/objc2/blob/d7d2fa23ceaa5e6096c923b081040e5d81b3b9df/LICENSE.md",
+      "download_url": "https://raw.githubusercontent.com/madsmtm/objc2/d7d2fa23ceaa5e6096c923b081040e5d81b3b9df/LICENSE.md",
+      "license_identifier": "NOASSERTION",
+      "source_commit": "d7d2fa23ceaa5e6096c923b081040e5d81b3b9df"
+    },
+    {
+      "package": "objc2-app-kit@0.3.2",
+      "file": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54.txt",
+      "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+      "source": "https://github.com/madsmtm/objc2/blob/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+      "download_url": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+      "license_identifier": "NOASSERTION",
+      "source_commit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b"
+    },
+    {
+      "package": "objc2-core-foundation@0.3.2",
+      "file": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54.txt",
+      "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+      "source": "https://github.com/madsmtm/objc2/blob/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+      "download_url": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+      "license_identifier": "NOASSERTION",
+      "source_commit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b"
+    },
+    {
+      "package": "objc2-core-graphics@0.3.2",
+      "file": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54.txt",
+      "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+      "source": "https://github.com/madsmtm/objc2/blob/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+      "download_url": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+      "license_identifier": "NOASSERTION",
+      "source_commit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b"
+    },
+    {
+      "package": "objc2-encode@4.1.0",
+      "file": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54.txt",
+      "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+      "source": "https://github.com/madsmtm/objc2/blob/8d214f5477365ffcbcbb7de058c86ed9a518efb7/LICENSE.md",
+      "download_url": "https://raw.githubusercontent.com/madsmtm/objc2/8d214f5477365ffcbcbb7de058c86ed9a518efb7/LICENSE.md",
+      "license_identifier": "NOASSERTION",
+      "source_commit": "8d214f5477365ffcbcbb7de058c86ed9a518efb7"
+    },
+    {
+      "package": "objc2-exception-helper@0.1.1",
+      "file": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54.txt",
+      "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+      "source": "https://github.com/madsmtm/objc2/blob/8d214f5477365ffcbcbb7de058c86ed9a518efb7/LICENSE.md",
+      "download_url": "https://raw.githubusercontent.com/madsmtm/objc2/8d214f5477365ffcbcbb7de058c86ed9a518efb7/LICENSE.md",
+      "license_identifier": "NOASSERTION",
+      "source_commit": "8d214f5477365ffcbcbb7de058c86ed9a518efb7"
+    },
+    {
+      "package": "objc2-foundation@0.3.2",
+      "file": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54.txt",
+      "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+      "source": "https://github.com/madsmtm/objc2/blob/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+      "download_url": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+      "license_identifier": "NOASSERTION",
+      "source_commit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b"
+    },
+    {
+      "package": "objc2-io-surface@0.3.2",
+      "file": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54.txt",
+      "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+      "source": "https://github.com/madsmtm/objc2/blob/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+      "download_url": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+      "license_identifier": "NOASSERTION",
+      "source_commit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b"
+    },
+    {
+      "package": "objc2-quartz-core@0.3.2",
+      "file": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54.txt",
+      "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+      "source": "https://github.com/madsmtm/objc2/blob/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+      "download_url": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+      "license_identifier": "NOASSERTION",
+      "source_commit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b"
+    },
+    {
+      "package": "objc2-web-kit@0.3.2",
+      "file": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54.txt",
+      "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+      "source": "https://github.com/madsmtm/objc2/blob/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+      "download_url": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+      "license_identifier": "NOASSERTION",
+      "source_commit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b"
+    },
+    {
+      "package": "selectors@0.38.0",
+      "file": "66a3107d5ad6a058aab753eaac2047ccb2ed0e39465dd0fe5844da3e300d5172.txt",
+      "sha256": "66a3107d5ad6a058aab753eaac2047ccb2ed0e39465dd0fe5844da3e300d5172",
+      "source": "https://raw.githubusercontent.com/spdx/license-list-data/main/text/MPL-2.0.txt",
+      "download_url": "https://raw.githubusercontent.com/spdx/license-list-data/main/text/MPL-2.0.txt",
+      "license_identifier": "MPL-2.0",
+      "note": "standard license text",
+      "source_code": "https://github.com/servo/stylo/tree/572ecba2d1600e7c3d490586692a209faf703baa/selectors"
+    },
+    {
+      "package": "tauri-plugin@2.7.2",
+      "file": "9dd42ea92cff2ede5cd477cbfcce051b2d0115c0ac7f368ee88cb545055dff1d.txt",
+      "sha256": "9dd42ea92cff2ede5cd477cbfcce051b2d0115c0ac7f368ee88cb545055dff1d",
+      "source": "https://raw.githubusercontent.com/tauri-apps/tauri/59b63ab500da9859f12d8888c3298bc29bba0b92/LICENSE-MIT",
+      "download_url": "https://raw.githubusercontent.com/tauri-apps/tauri/59b63ab500da9859f12d8888c3298bc29bba0b92/LICENSE-MIT",
+      "license_identifier": "MIT",
+      "note": "unmodified upstream license"
+    },
+    {
+      "package": "MIT-standard-text",
+      "file": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5.txt",
+      "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+      "source": "https://raw.githubusercontent.com/spdx/license-list-data/main/text/MIT.txt",
+      "download_url": "https://raw.githubusercontent.com/spdx/license-list-data/main/text/MIT.txt",
+      "license_identifier": "MIT",
+      "note": "standard license text"
+    }
+  ]
+}

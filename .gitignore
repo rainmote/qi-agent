@@ -34,6 +34,11 @@ temp/
 *.log
 node_modules/
 apps/web/dist/
+apps/desktop/stage/
+apps/desktop/.tools/
+apps/desktop/.cache/
+apps/desktop/src-tauri/gen/
+apps/desktop/src-tauri/icons/
 evals/results/
 evals/exports/
 /.maintenance/state/

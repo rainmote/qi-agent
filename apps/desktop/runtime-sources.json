@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "target": "aarch64-apple-darwin",
+  "node": {
+    "version": "v24.22.0",
+    "archive": "node-v24.22.0-darwin-arm64.tar.gz",
+    "url": "https://nodejs.org/dist/v24.22.0/node-v24.22.0-darwin-arm64.tar.gz",
+    "sha256": "6a9724d9b50a5f22b4816cded441b5a8d9ddae546191a5e5b7efa5a5e2ee26d5",
+    "checksums_url": "https://nodejs.org/dist/v24.22.0/SHASUMS256.txt"
+  },
+  "babashka": {
+    "version": "1.13.219",
+    "installed_binary_sha256": "6ed5ad89a62d82b8a9f7b95c4fc9d46393d81b61fc233dabad957e61b80d35b0",
+    "license_url": "https://raw.githubusercontent.com/babashka/babashka/v1.13.219/LICENSE",
+    "license_sha256": "cc07bd2bd6ba843a9a2865ed891d5a3b5835a64bab6fa90945403ee53965d46f"
+  },
+  "downloaded_at": "2026-10-21T00:29:47.060730+00:00"
+}

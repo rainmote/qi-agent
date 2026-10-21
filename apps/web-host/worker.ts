@@ -18,6 +18,8 @@ interface PendingCall {
 }
 
 export interface DaemonEnvironment {
+  /** An external supervisor owns this daemon; never launch a replacement. */
+  allowLaunch?: boolean;
   runtimeDirectory?: string;
   stateDirectory?: string;
   providerSettingsPath?: string;
@@ -321,7 +323,10 @@ export class AgentWorker extends EventEmitter {
     const socketPath = this.daemonSocketPath();
     try {
       return await connectSocket(socketPath);
-    } catch {
+    } catch (error) {
+      if (this.daemonEnvironment.allowLaunch === false) {
+        throw new Error(`The desktop-owned daemon is unavailable: ${String(error)}`);
+      }
       this.launchDaemon();
     }
     const deadline = Date.now() + 20_000;

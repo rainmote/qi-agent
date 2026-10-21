@@ -1,0 +1,1 @@
+:root{color-scheme:light dark;font-family:system-ui,sans-serif}body{margin:0;display:grid;min-height:100vh;place-items:center;background:#f9f9f8;color:#1f2328}main{max-width:520px;padding:32px}h1{font-size:28px;font-weight:600}p{line-height:1.6}#status{font-weight:500}@media(prefers-color-scheme:dark){body{background:#17181a;color:#e8e8e8}}

@@ -3,7 +3,7 @@ import { constants, createReadStream } from "node:fs";
 import { access, readFile, readdir, realpath, rm, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { isIP } from "node:net";
-import { dirname, extname, join, normalize, resolve } from "node:path";
+import { dirname, extname, isAbsolute, join, normalize, resolve } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { SessionManager } from "./sessions.js";
@@ -30,6 +30,8 @@ const mimeTypes: Record<string, string> = {
 };
 
 interface WebHostOptions {
+  /** Private socket directory owned and cleaned by the desktop supervisor. */
+  externalDaemonRuntimeDirectory?: string;
   host?: string;
   port?: number;
   workspace?: string;
@@ -269,6 +271,10 @@ async function serveStatic(response: ServerResponse, root: string,
 }
 
 export async function startWebHost(options: WebHostOptions = {}) {
+  if (options.externalDaemonRuntimeDirectory
+    && (!options.stateDirectory || !isAbsolute(options.externalDaemonRuntimeDirectory))) {
+    throw new Error("An external daemon requires private state and an absolute runtime directory");
+  }
   const host = options.host || "127.0.0.1";
   const networkExposed = !isLoopbackHost(host);
   if (networkExposed && !options.unsafeAllowNetwork) {
@@ -293,7 +299,9 @@ export async function startWebHost(options: WebHostOptions = {}) {
   const ownedDaemonEnvironment = options.stateDirectory ? {
     // Unix socket paths are short on macOS. Keep the ephemeral runtime path
     // out of deeply nested test/application state directories.
-    runtimeDirectory: join("/tmp", `qi-agent-web-${process.pid}-${randomBytes(6).toString("hex")}`),
+    runtimeDirectory: options.externalDaemonRuntimeDirectory
+      || join("/tmp", `qi-agent-web-${process.pid}-${randomBytes(6).toString("hex")}`),
+    ...(options.externalDaemonRuntimeDirectory ? { allowLaunch: false } : {}),
     stateDirectory: join(options.stateDirectory, "daemon-state"),
     providerSettingsPath: providers.statePath,
     attachmentDirectory: files.attachmentDirectory,
@@ -636,13 +644,13 @@ export async function startWebHost(options: WebHostOptions = {}) {
     files,
     candidates,
     close: async () => {
-      if (options.stateDirectory) await sessions.shutdownDaemon();
+      if (options.stateDirectory && !options.externalDaemonRuntimeDirectory) await sessions.shutdownDaemon();
       await sessions.closeAll();
       await turnFiles.close();
       const closed = new Promise<void>((resolve) => server.close(() => resolve()));
       server.closeAllConnections();
       await closed;
-      if (ownedDaemonEnvironment) {
+      if (ownedDaemonEnvironment && !options.externalDaemonRuntimeDirectory) {
         await new Promise((resolve) => setTimeout(resolve, 100));
         await rm(ownedDaemonEnvironment.runtimeDirectory, { recursive: true, force: true });
       }

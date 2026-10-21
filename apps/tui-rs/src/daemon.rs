@@ -1548,7 +1548,35 @@ fn prune_worker_logs(directory: &Path, keep: usize) -> Result<usize> {
 }
 
 pub fn serve(repository_root: Option<&Path>, config_path: Option<&Path>) -> Result<()> {
+    let owner_value = std::env::var("QI_AGENT_DESKTOP_PARENT_PID").ok();
+    let desktop_parent = crate::desktop_owner::validate_parent(owner_value.as_deref(), unsafe {
+        libc::getppid() as u32
+    })?;
+    let desktop_run = if desktop_parent.is_some() {
+        let id =
+            std::env::var("QI_AGENT_DESKTOP_RUN_ID").context("desktop run identity missing")?;
+        Uuid::parse_str(&id)?;
+        Some(id)
+    } else {
+        None
+    };
     let paths = RuntimePaths::discover()?;
+    // This lease survives a shell crash until the old daemon has stopped its
+    // workers. A new temporary socket directory cannot bypass the same state.
+    let _desktop_lease = if desktop_parent.is_some() {
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(paths.state_dir.join("desktop-daemon.lock"))?;
+        set_owner_only_file(&paths.state_dir.join("desktop-daemon.lock"))?;
+        file.try_lock_exclusive()
+            .context("the previous desktop daemon is still stopping")?;
+        Some(file)
+    } else {
+        None
+    };
     prune_worker_logs(&paths.logs_dir, configured_max_worker_logs())?;
     let repository_root = discover_repository_root(repository_root)?;
     let config_path = config_path
@@ -1594,6 +1622,22 @@ pub fn serve(repository_root: Option<&Path>, config_path: Option<&Path>) -> Resu
         last_idle_sweep_at_ms: AtomicU64::new(0),
         next_idle_sweep_at_ms: AtomicU64::new(0),
     });
+    if let Some(parent) = desktop_parent {
+        let weak = Arc::downgrade(&runtime);
+        thread::spawn(move || {
+            while let Some(runtime) = weak.upgrade() {
+                if unsafe { libc::getppid() as u32 } != parent {
+                    runtime.shutdown.store(true, Ordering::SeqCst);
+                    break;
+                }
+                if runtime.shutdown.load(Ordering::SeqCst) {
+                    break;
+                }
+                drop(runtime);
+                thread::sleep(Duration::from_millis(100));
+            }
+        });
+    }
     runtime.restore_agents()?;
     runtime.recover_session_archives();
     runtime.adopt_workers();
@@ -1619,7 +1663,13 @@ pub fn serve(repository_root: Option<&Path>, config_path: Option<&Path>) -> Resu
         }
     }
 
-    runtime.stop_all_workers();
+    let cleanup_errors = runtime.stop_all_workers_checked();
+    if let Some(run_id) = desktop_run {
+        crate::desktop_owner::shutdown_receipt(&paths.runtime_dir, &run_id, &cleanup_errors)?;
+        if !cleanup_errors.is_empty() {
+            bail!("desktop worker cleanup incomplete; retained descriptors require reconciliation");
+        }
+    }
     let _ = fs::remove_file(&paths.public_socket);
     drop(lock_file);
     Ok(())
@@ -3447,6 +3497,10 @@ impl Runtime {
     }
 
     fn stop_all_workers(&self) {
+        let _ = self.stop_all_workers_checked();
+    }
+
+    fn stop_all_workers_checked(&self) -> Vec<String> {
         let agent_ids: Vec<_> = self
             .agents
             .lock()
@@ -3454,9 +3508,13 @@ impl Runtime {
             .keys()
             .cloned()
             .collect();
+        let mut errors = Vec::new();
         for agent_id in agent_ids {
-            let _ = self.stop_agent(&agent_id);
+            if self.stop_agent(&agent_id).is_err() {
+                errors.push(format!("worker cleanup failed for agent {agent_id}"));
+            }
         }
+        errors
     }
 }
 

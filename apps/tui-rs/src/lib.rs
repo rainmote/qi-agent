@@ -1,6 +1,7 @@
 pub mod app;
 pub mod client;
 pub mod daemon;
+pub mod desktop_owner;
 pub mod editor;
 pub mod loading;
 pub mod markdown;

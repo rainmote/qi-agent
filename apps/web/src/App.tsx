@@ -1,4 +1,5 @@
 import { uiText as t } from "./i18n";
+import { desktopDirectory } from "./desktop-directory";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { uncertainOperation, type PendingOperation, api, type Bootstrap } from "./api";
 import { RequestScope } from "./request-scope";
@@ -315,6 +316,16 @@ export function App() {
   const [stepsView, setStepsView] = useState<TranscriptView>(() => transcriptView(localStorage.getItem("qi-agent.transcript-view")));
   const [stepsCollapseTiming, setStepsCollapseTiming] = useState<CollapseTiming>(() => collapseTiming(localStorage.getItem("qi-agent.collapse-timing")));
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
+  const [desktopWorkspacePath, setDesktopWorkspacePath] = useState<string | null>(null);
+  useEffect(() => {
+    const selected = (event: Event) => {
+      const path = desktopDirectory((event as CustomEvent<unknown>).detail);
+      if (path) { setDesktopWorkspacePath(path); setWorkspaceDialogOpen(true); }
+    };
+    window.addEventListener("qi-desktop-directory", selected);
+    return () => window.removeEventListener("qi-desktop-directory", selected);
+  }, []);
+  useEffect(() => { if (!workspaceDialogOpen) setDesktopWorkspacePath(null); }, [workspaceDialogOpen]);
   const [fullAccessDialogOpen, setFullAccessDialogOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -1366,7 +1377,7 @@ export function App() {
       }}
       onAddWorkspace={() => { setSettingsOpen(false); setWorkspaceDialogOpen(true); }} onRemoveWorkspace={removeWorkspace} />}
     {shortcutsOpen && <ShortcutReference onClose={closeShortcuts} context={{ workspace: !!workspaceId, session: !!activeSession, busy, codeView: preferences.codeView }} />}
-    {workspaceDialogOpen && <WorkspaceDialog initialPath={activeWorkspace?.path} onClose={() => setWorkspaceDialogOpen(false)} onSelect={addWorkspace} />}
+    {workspaceDialogOpen && <WorkspaceDialog key={desktopWorkspacePath || "manual"} initialPath={desktopWorkspacePath || activeWorkspace?.path} onClose={() => setWorkspaceDialogOpen(false)} onSelect={addWorkspace} />}
     {notice && <div className="toast" role="status">{notice}</div>}
   </div></WorkspaceLinkProvider>;
 }

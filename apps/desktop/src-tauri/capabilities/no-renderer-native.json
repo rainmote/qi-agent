@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "no-renderer-native",
+  "description": "The Web UI uses only the authenticated local Host. No native commands, shell, filesystem, or remote IPC permissions.",
+  "windows": ["main"],
+  "permissions": []
+}
