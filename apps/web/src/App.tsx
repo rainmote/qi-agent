@@ -1360,7 +1360,7 @@ export function App() {
       <span tabIndex={workbenchModal ? 0 : -1} data-focus-boundary="start" className="workbench-focus-boundary"
         onFocus={() => { if (workbenchElement.current) workbenchControls(workbenchElement.current).at(-1)?.focus(); }} />
       <div className="workbench-content">{workbench === "files" ? <WorkspacePanel key={activeSession?.id || workspaceId} workspaceId={workspaceId} sessionId={activeSession?.id} api={api.workspaceFiles} showChanges={preferences.codeView}
-        officeRpc={activeSession ? workbenchRpc : undefined} readOnly={policy?.mode === "deny"}
+        officeRpc={activeSession?.workspaceId === workspaceId ? workbenchRpc : undefined} readOnly={policy?.mode === "deny"}
         previewRequest={fileRequest?.scope === `${workspaceId}:${activeSession?.id || "draft"}` ? fileRequest : undefined}
         responseDetail={([...projection?.events || []].reverse().find(event => event.type === "session/preferences")?.data.response_detail as "short" | "auto" | "detailed") || "auto"}
         onResponseDetail={async value => {
