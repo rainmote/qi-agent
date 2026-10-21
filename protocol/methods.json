@@ -18,6 +18,8 @@
     "trust.status",
     "command.list",
     "runtime.status",
+    "terminal.status",
+    "terminal.read",
     "repl.status",
     "repl.describe",
     "state.snapshot",

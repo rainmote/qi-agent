@@ -2472,7 +2472,12 @@ impl Runtime {
             {
                 descriptor.clone()
             } else {
-                retire_orphaned_worker(&descriptor, self.desktop_owned)?;
+                if self.desktop_owned {
+                    let mut latest = read_descriptor(&descriptor_path)?;
+                    retain_worker_identity(&mut latest, &descriptor)?;
+                    descriptor = latest;
+                }
+                retire_orphaned_worker(&descriptor, self.desktop_owned, &descriptor_path)?;
                 if self.desktop_owned {
                     self.workers
                         .lock()
@@ -3168,7 +3173,8 @@ impl Runtime {
                     continue;
                 }
                 if self.desktop_owned {
-                    if let Err(error) = retire_orphaned_worker(&worker.descriptor, true) {
+                    if let Err(error) = retire_orphaned_worker(&worker.descriptor, true,
+                        &self.paths.worker_descriptor(&worker.descriptor.worker_id)) {
                         outcomes.push(json!({"worker_id":worker.descriptor.worker_id,
                             "evicted":false,"pin_reasons":[format!("cleanup-unknown:{error}")]}));
                         continue;
@@ -3382,7 +3388,12 @@ impl Runtime {
                     }
                     terminate_worker_groups(&descriptor);
                 }
-                retire_orphaned_worker(&descriptor, self.desktop_owned)?;
+                if self.desktop_owned {
+                    let mut latest = read_descriptor(&descriptor_path)?;
+                    retain_worker_identity(&mut latest, &descriptor)?;
+                    descriptor = latest;
+                }
+                retire_orphaned_worker(&descriptor, self.desktop_owned, &descriptor_path)?;
                 self.database
                     .release_workspace_lease(&descriptor.workspace_id, &descriptor.root_agent_id)?;
             }
@@ -3574,7 +3585,12 @@ impl Runtime {
                     terminate_failed_worker_start(&descriptor_path, false, descriptor.pid);
                 }
             }
-            retire_orphaned_worker(&descriptor, self.desktop_owned)?;
+            if self.desktop_owned {
+                let mut latest = read_descriptor(&descriptor_path)?;
+                retain_worker_identity(&mut latest, &descriptor)?;
+                descriptor = latest;
+            }
+            retire_orphaned_worker(&descriptor, self.desktop_owned, &descriptor_path)?;
             if self.desktop_owned {
                 let mut stopped = descriptor;
                 stopped.pid = None;
@@ -5489,6 +5505,11 @@ fn retain_worker_identity(
     descriptor.pid = descriptor.pid.or(known.pid);
     descriptor.child_pid = descriptor.child_pid.or(known.child_pid);
     descriptor.child_process_group = descriptor.child_process_group.or(known.child_process_group);
+    for helper in &known.owned_helpers {
+        if !descriptor.owned_helpers.contains(helper) {
+            descriptor.owned_helpers.push(helper.clone());
+        }
+    }
     Ok(())
 }
 
@@ -5502,10 +5523,26 @@ fn check_desktop_process_observations(descriptor: &WorkerDescriptor) -> Result<(
     {
         crate::desktop_owner::process_presence(group, true)?;
     }
+    for helper in &descriptor.owned_helpers {
+        crate::desktop_owner::helper_present(helper)?;
+    }
     Ok(())
 }
 
-fn retire_orphaned_worker(descriptor: &WorkerDescriptor, strict: bool) -> Result<()> {
+fn final_retired_identity(mut latest: WorkerDescriptor, known: &WorkerDescriptor) -> Result<WorkerDescriptor> {
+    // An absent/cleared PID is expected on normal stop. A different/new PID
+    // has not been proven absent and must never pass a stale cleanup snapshot.
+    for (observed, recorded) in [(latest.pid, known.pid), (latest.child_pid, known.child_pid),
+        (latest.child_process_group, known.child_process_group)] {
+        if observed.is_some() && observed != recorded {
+            bail!("final desktop worker process identity changed; cleanup UNKNOWN");
+        }
+    }
+    retain_worker_identity(&mut latest, known)?;
+    Ok(latest)
+}
+
+fn retire_orphaned_worker(descriptor: &WorkerDescriptor, strict: bool, descriptor_path: &Path) -> Result<()> {
     let alive = |pid: Option<u32>| -> Result<bool> {
         if strict {
             match pid {
@@ -5530,6 +5567,15 @@ fn retire_orphaned_worker(descriptor: &WorkerDescriptor, strict: bool) -> Result
     if alive(descriptor.pid)? {
         bail!("existing worker proxy is still alive; refusing a second session writer")
     }
+    // The proxy stdout reader can admit a guardian until the proxy actually
+    // exits. Read its final durable record only after proving that absence;
+    // an earlier stop/archive snapshot cannot close this registration race.
+    let final_descriptor;
+    let descriptor = if strict {
+        final_descriptor = final_retired_identity(read_descriptor(descriptor_path)
+            .context("final desktop worker descriptor unavailable; cleanup UNKNOWN")?, descriptor)?;
+        &final_descriptor
+    } else { descriptor };
     if let Some(group) = descriptor.pid {
         let child_group = descriptor.child_process_group.unwrap_or(group);
         if descriptor.child_process_group.is_some()
@@ -5571,6 +5617,13 @@ fn retire_orphaned_worker(descriptor: &WorkerDescriptor, strict: bool) -> Result
                 }
             }
         }
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !crate::desktop_owner::helpers_absent(&descriptor.owned_helpers)? {
+        if std::time::Instant::now() >= deadline {
+            bail!("owned terminal guardian cleanup UNKNOWN; descriptor retained");
+        }
+        thread::sleep(Duration::from_millis(25));
     }
     Ok(())
 }
@@ -6136,6 +6189,7 @@ mod tests {
             pid: (state == "known-pid").then_some(proxy.0.id()),
             child_pid: (state == "child-group").then_some(child.0.id()),
             child_process_group: (state == "child-group").then_some(child.0.id()),
+            owned_helpers: Vec::new(),
             session_id: None,
             status: "starting".into(),
             started_at_ms: 0,
@@ -6354,6 +6408,7 @@ mod tests {
             pid: None,
             child_pid: None,
             child_process_group: None,
+            owned_helpers: Vec::new(),
             session_id: Some("session-1".into()),
             status: "running".into(),
             started_at_ms: 0,
@@ -6908,6 +6963,7 @@ mod tests {
             pid: None,
             child_pid: None,
             child_process_group: None,
+            owned_helpers: Vec::new(),
             session_id: None,
             status: "running".into(),
             started_at_ms: 0,

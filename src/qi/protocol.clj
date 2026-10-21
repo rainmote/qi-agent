@@ -97,10 +97,41 @@
       (and (= "subagent.invoke" method)
            (blocking-rpc? (:method params) (:params params)))))
 
+(defn- process-admission! [ctx]
+    (let [owner (kernel/plugin-context ctx :protocol/process-admission)
+          pending (atom {})
+          closed? (atom false)]
+      (kernel/register-service!
+       owner :execution/process-admission
+       {:admit! (fn [pid]
+                  (when @closed? (throw (ex-info "Process admission is closed" {})))
+                  (let [id (str (random-uuid)) result (promise)]
+                    (swap! pending assoc id result)
+                    (try
+                      (write-json! {:type "process-admit" :id id :pid pid})
+                      (when-not (= true (deref result 2000 ::unconfirmed))
+                        (throw (ex-info "Native process admission was not confirmed; no PTY shell was started" {:uncertain true})))
+                      true
+                      (finally (swap! pending dissoc id)))))
+        :resolve! (fn [params]
+                    ;; A separate unguessable one-use request identity stays on
+                    ;; the private worker stdio only. No capability is placed
+                    ;; in an environment inherited by model REPL processes.
+                    (when-not (and (boolean? (:admitted params)) (contains? @pending (:id params)))
+                      (throw (ex-info "Invalid private process acknowledgement" {})))
+                    (when-let [result (get @pending (:id params))]
+                      (deliver result (:admitted params)))
+                    {:accepted true})})
+      (fn [] (reset! closed? true)
+        (doseq [result (vals @pending)] (deliver result false))
+        (reset! pending {})
+        (kernel/dispose-plugin! ctx :protocol/process-admission))))
+
 (defn rpc! [ctx]
   (let [session (kernel/require-service ctx :agent/session)
         store (kernel/require-service ctx :session/store)
         dispose (subscribe-json! ctx)
+        dispose-admission (process-admission! ctx)
         tasks (atom #{})]
     (write-json! {:type "ready"
                   :session_id (:session-id store)
@@ -115,13 +146,18 @@
               (let [{:keys [id method params] :as request}
                     (try
                       (json/parse-string line true)
-                      (catch Throwable error
-                        (rpc-error! nil error)
+                      (catch Throwable _
+                        ;; Parser diagnostics can quote the input buffer,
+                        ;; including a partially written private process ACK.
+                        (rpc-error! nil (ex-info "Invalid RPC JSON" {:invalid-json true}))
                         nil))]
                 (when request
                   (try
                     (let [registry (kernel/service ctx :remote/registry)]
                       (cond
+                        (= "native.process-result" method)
+                        (rpc-response! id ((:resolve! (kernel/require-service ctx :execution/process-admission)) params))
+
                         (= "shutdown" method)
                         (do
                           (reset! shutdown? true)
@@ -209,6 +245,7 @@
                       (rpc-error! id error))))))
             (when-not @shutdown? (recur)))))
       (finally
+        (when dispose-admission (dispose-admission))
         ((:abort! session))
         (doseq [task @tasks] (deref task 1000 nil))
         (dispose)))))

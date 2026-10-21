@@ -1,0 +1,257 @@
+"""Prepare pinned workspace runtimes from inert local archives, without installs.
+
+No network, shell, subprocess, pip, npm scripts or third-party imports. Every
+output is a regular file below the new build-owned destination. Archive links
+are resolved against archive entries only and copied as regular files.
+"""
+import base64
+from email.parser import Parser
+import hashlib
+import json
+import os
+from pathlib import Path, PurePosixPath
+import re
+import shutil
+import sys
+import tarfile
+import zipfile
+
+MAX_BYTES = 2_000_000_000
+MAX_FILES = 100_000
+MAX_FILE = 500_000_000
+
+
+def relative(name):
+    path = PurePosixPath(name)
+    if not name or path.is_absolute() or ".." in path.parts or "\\" in name or "\0" in name:
+        raise ValueError("unsafe archive path")
+    return str(path)
+
+
+class Writer:
+    def __init__(self, root):
+        self.root = root
+        self.bytes = 0
+        self.count = 0
+
+    def put(self, name, data, executable=False):
+        name = relative(name)
+        if len(data) > MAX_FILE:
+            raise ValueError("oversized extracted file")
+        self.bytes += len(data)
+        self.count += 1
+        if self.bytes > MAX_BYTES or self.count > MAX_FILES:
+            raise ValueError("workspace runtime archive limits exceeded")
+        path = self.root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists():
+            if path.is_symlink() or not path.is_file() or path.read_bytes() != data:
+                raise ValueError("conflicting runtime entries")
+            return
+        with path.open("xb") as output:
+            output.write(data)
+        path.chmod(0o755 if executable else 0o644)
+
+
+def verify(source, cache):
+    name = source["name"]
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", name):
+        raise ValueError("invalid cache identity")
+    path = cache / name
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > source["limit"]:
+        raise ValueError("missing or invalid pinned workspace archive: " + name)
+    data = path.read_bytes()
+    if "sha256" in source:
+        valid = hashlib.sha256(data).hexdigest() == source["sha256"]
+    else:
+        valid = source["integrity"] == "sha512-" + base64.b64encode(hashlib.sha512(data).digest()).decode()
+    if not valid:
+        raise ValueError("workspace archive checksum mismatch: " + name)
+    return path
+
+
+def tar_entries(path, expected_prefix, destination, writer):
+    with tarfile.open(path, "r:gz") as archive:
+        members = {}
+        total = 0
+        for member in archive:
+            name = relative(member.name)
+            if name == expected_prefix and member.isdir():
+                continue
+            if not name.startswith(expected_prefix + "/"):
+                raise ValueError("unexpected archive root")
+            if name in members or len(members) >= MAX_FILES:
+                raise ValueError("duplicate or excess archive entries")
+            if member.size < 0 or member.size > MAX_FILE:
+                raise ValueError("oversized archive entry")
+            total += member.size
+            if total > MAX_BYTES:
+                raise ValueError("archive decompression limit")
+            if not (member.isdir() or member.isfile() or member.issym() or member.islnk()):
+                raise ValueError("special archive entries are forbidden")
+            members[name] = member
+
+        def resolve_entry(name, seen=()):
+            if name in seen or len(seen) >= 32:
+                raise ValueError("cyclic archive link")
+            member = members.get(name)
+            if member is None:
+                raise ValueError("unresolved archive link")
+            if member.issym() or member.islnk():
+                if member.islnk():
+                    target = member.linkname
+                else:
+                    if PurePosixPath(member.linkname).is_absolute():
+                        raise ValueError("absolute archive link")
+                    # Normalize inside the archive, never through the host FS.
+                    target = os.path.normpath(str(PurePosixPath(name).parent / member.linkname))
+                target = relative(target)
+                if not target.startswith(expected_prefix + "/"):
+                    raise ValueError("archive link escapes runtime")
+                return resolve_entry(target, seen + (name,))
+            if not member.isfile():
+                raise ValueError("directory links require explicit expansion; not accepted")
+            stream = archive.extractfile(member)
+            if stream is None:
+                raise ValueError("archive file unreadable")
+            with stream:
+                data = stream.read(MAX_FILE + 1)
+            if len(data) != member.size:
+                raise ValueError("truncated archive file")
+            return data, bool(member.mode & 0o111)
+
+        for name, member in members.items():
+            if member.isdir():
+                continue
+            data, executable = resolve_entry(name)
+            writer.put(destination + "/" + name[len(expected_prefix) + 1:], data, executable)
+
+
+def distribution_name(name):
+    return re.sub(r"[-_.]+", "_", name).lower()
+
+
+def wheel_entries(path, writer):
+    with zipfile.ZipFile(path) as archive:
+        metadata_paths = [name for name in archive.namelist()
+                          if re.fullmatch(r"[^/]+\.dist-info/METADATA", name)]
+        if len(metadata_paths) != 1:
+            raise ValueError("wheel must contain one distribution identity")
+        metadata_path = metadata_paths[0]
+        info = archive.getinfo(metadata_path)
+        if info.file_size > 1000000:
+            raise ValueError("oversized wheel metadata")
+        metadata = Parser().parsestr(archive.read(info).decode("utf-8"))
+        if len(metadata.get_all("Name", [])) != 1 or len(metadata.get_all("Version", [])) != 1:
+            raise ValueError("invalid wheel metadata identity")
+        name, version = metadata["Name"], metadata["Version"]
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", name) or not re.fullmatch(r"[A-Za-z0-9.+!_-]+", version):
+            raise ValueError("invalid wheel distribution name or version")
+        identity = metadata_path.split("/", 1)[0]
+        folder_name, separator, folder_version = identity.removesuffix(".dist-info").rpartition("-")
+        if not separator or distribution_name(folder_name) != distribution_name(name) or folder_version != version:
+            raise ValueError("wheel metadata and directory identity disagree")
+        seen = set()
+        for member in archive.infolist():
+            name = relative(member.filename)
+            if member.is_dir():
+                continue
+            if name in seen or (member.external_attr >> 16) & 0o170000 == 0o120000:
+                raise ValueError("duplicate or symbolic wheel entry")
+            seen.add(name)
+            if len(seen) > MAX_FILES or member.file_size > MAX_FILE:
+                raise ValueError("wheel archive limit")
+            parts = PurePosixPath(name).parts
+            if parts[0].endswith(".dist-info") and parts[0] != identity:
+                raise ValueError("foreign distribution metadata in wheel")
+            if parts[0].endswith(".data"):
+                if len(parts) < 3 or parts[1] not in ("purelib", "platlib"):
+                    raise ValueError("unsupported wheel data installation")
+                name = "/".join(parts[2:])
+            with archive.open(member) as stream:
+                data = stream.read(MAX_FILE + 1)
+            if len(data) != member.file_size:
+                raise ValueError("truncated wheel file")
+            writer.put("python/lib/python3.12/site-packages/" + name, data)
+        return {"name": metadata["Name"], "version": metadata["Version"], "directory": identity}
+
+
+def prepare(lock, cache, target):
+    if target.exists() or target.is_symlink():
+        raise ValueError("workspace runtime destination must be new")
+    # Admit and verify the entire closure before creating any build output.
+    archives = [(source, verify(source, cache)) for source in lock["sources"]]
+    target.mkdir(mode=0o700)
+    writer = Writer(target)
+    npm = {}
+    wheels = {}
+    python_locked = {distribution_name(name): version for name, version in lock.get("python_packages", {}).items()}
+    if len(python_locked) != len(lock.get("python_packages", {})):
+        raise ValueError("duplicate normalized Python package identity")
+    for source, path in archives:
+        kind = source["kind"]
+        if kind == "python":
+            tar_entries(path, "python", "python", writer)
+        elif kind == "wheel":
+            identity = wheel_entries(path, writer)
+            name = distribution_name(identity["name"])
+            if name in wheels or python_locked.get(name) != identity["version"]:
+                raise ValueError("unlocked, duplicate or wrong-version Python wheel")
+            wheels[name] = identity
+        elif kind == "npm":
+            package = source["package"]
+            if not re.fullmatch(r"(?:@[a-z0-9._-]+/)?[a-z0-9._-]+", package):
+                raise ValueError("invalid npm package path")
+            tar_entries(path, "package", "node_modules/" + package, writer)
+            metadata = json.loads((target / "node_modules" / package / "package.json").read_text())
+            if metadata["name"] != package or metadata["version"] != source["version"]:
+                raise ValueError("npm package identity mismatch")
+            npm[package] = (source, metadata)
+        else:
+            raise ValueError("unsupported workspace runtime source")
+    for package, (source, metadata) in npm.items():
+        declared = {item.rsplit("@", 1)[0]: item.rsplit("@", 1)[1] for item in source["dependencies"]}
+        required = set(metadata.get("dependencies", {})) | {name for name in metadata.get("peerDependencies", {}) if not metadata.get("peerDependenciesMeta", {}).get(name, {}).get("optional")}
+        if not required.issubset(declared):
+            raise ValueError("unlocked npm runtime dependency: " + package)
+        for name, version in declared.items():
+            if name not in npm or npm[name][1]["version"] != version:
+                raise ValueError("missing exact npm runtime dependency")
+    for required in ["python/bin/python3.12", "node_modules/pnpm/bin/pnpm.cjs", "node_modules/@deepseek-ai/libreoffice-kit/package.json", "node_modules/@deepseek-ai/libreoffice-kit-darwin-arm64/package.json", "node_modules/@koromix/koffi-darwin-arm64/package.json"]:
+        if not (target / required).is_file():
+            raise ValueError("missing required workspace runtime entry")
+    wrappers = {
+        "python3": 'exec "$qi_root/python/bin/python3.12" "$@"',
+        "python": 'exec "$qi_root/python/bin/python3.12" "$@"',
+        "pnpm": 'exec "$qi_root/../bin/node" "$qi_root/node_modules/pnpm/bin/pnpm.cjs" "$@"',
+    }
+    for name, command in wrappers.items():
+        writer.put("bin/" + name, ('#!/bin/sh\nset -eu\nqi_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)\n' + command + '\n').encode(), True)
+    notices = []
+    for path in sorted(target.rglob("*")):
+        if path.is_file() and (re.match(r"(?i)^(license|licence|copying|notice|copyright)([.-]|$)", path.name) or "licenses" in path.parts):
+            notices.append(str(path.relative_to(target)))
+    # Package metadata without an actual license/notice file is insufficient.
+    for package in npm:
+        prefix = "node_modules/" + package + "/"
+        if not any(name.startswith(prefix) for name in notices):
+            raise ValueError("missing npm runtime license text: " + package)
+    if not any(name.startswith("python/") and "site-packages" not in name for name in notices):
+        raise ValueError("missing standalone Python license text")
+    if set(wheels) != set(python_locked):
+        raise ValueError("incomplete pinned Python wheel closure")
+    for package in lock["python_packages"]:
+        identity = wheels[distribution_name(package)]
+        prefix = "python/lib/python3.12/site-packages/" + identity["directory"] + "/"
+        if not any(name.startswith(prefix) for name in notices):
+            raise ValueError("missing Python package license text: " + package)
+    writer.put("runtime-inputs.json", (json.dumps(lock, indent=2) + "\n").encode())
+    writer.put("licenses.json", (json.dumps({"notice_paths_relative_to": "workspace", "notices": notices}, indent=2) + "\n").encode())
+    hashes = {str(path.relative_to(target)): hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(target.rglob("*")) if path.is_file()}
+    writer.put("workspace-manifest.json", (json.dumps({"schema": 1, "target": lock["target"], "python_version": lock["python_version"], "files": hashes}, indent=2) + "\n").encode())
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 4:
+        raise SystemExit("Usage: workspace-runtime.py LOCK CACHE NEW-DESTINATION")
+    prepare(json.loads(Path(sys.argv[1]).read_text()), Path(sys.argv[2]), Path(sys.argv[3]))

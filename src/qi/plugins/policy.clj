@@ -30,20 +30,22 @@
         ctx :tool/pre-execute -100
         (fn [_ request next]
           (let [tool-name (get-in request [:execution :name])
+                names (cond-> #{tool-name} (contains? #{"terminal" "office_preview"} tool-name) (conj "bash"))
+                member? (fn [configured] (some #(contains? configured %) names))
                 trust (kernel/service ctx :project/trust)]
             (cond
-              (contains? denied tool-name)
+              (member? denied)
               (deny request "Denied by configured tool policy."
                     terminate-on-deny)
 
-              (and (or (contains? trust-required tool-name)
+              (and (or (member? trust-required)
                        (true? (get-in request [:tool :requires-trust])))
                    (not (and trust ((:trusted? trust)))))
               (deny request
                     "Tool requires a trusted project; use /trust allow to enable it."
                     terminate-on-deny)
 
-              (or (contains? approval-required tool-name)
+              (or (member? approval-required)
                   (true? (get-in request [:tool :requires-approval])))
               (let [approve (kernel/service ctx :approval/request)
                     approval-request

@@ -1,0 +1,138 @@
+"""Pure protocol/archive fixtures. Never calls PTY/fork, ps, sandbox or Office."""
+import importlib.util
+import hashlib
+import io
+import json
+from pathlib import Path
+import tarfile
+import tempfile
+import unittest
+import uuid
+import zipfile
+from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def module(name, path):
+    spec = importlib.util.spec_from_file_location(name, ROOT / path)
+    value = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(value)
+    return value
+
+
+terminal = module("terminal_protocol", "src/qi/terminal_helper.py")
+runtime = module("runtime_archive", "scripts/desktop/workspace-runtime.py")
+
+
+class ProtocolTests(unittest.TestCase):
+    def test_finite_input_geometry_and_request_identity(self):
+        request = {"id": str(uuid.uuid4()), "op": "open", "cols": 90, "rows": 24}
+        self.assertEqual(terminal.validate(request), request)
+        for change in [{"cols": True}, {"rows": 301}, {"command": "ignored"}, {"id": "invalid"}]:
+            with self.assertRaises(ValueError):
+                terminal.validate({**request, **change})
+        with self.assertRaises(ValueError):
+            terminal.validate({"id": str(uuid.uuid4()), "op": "input", "text": "界" * 6000})
+
+    def test_bounded_output_cursor_preserves_partial_utf8_and_reports_truncation(self):
+        output = terminal.Output()
+        output.append("界".encode()[:2])
+        self.assertEqual(output.read(0)["cursor"], 0)
+        output.append("界".encode()[2:])
+        self.assertEqual(output.read(0)["output"], "界")
+        self.assertEqual(output.read(0)["cursor"], 3)
+        output.append(b"a" * (terminal.MAX_BUFFER + 10))
+        self.assertTrue(output.read(0)["truncated"])
+        self.assertLessEqual(len(output.buffer), terminal.MAX_BUFFER)
+        with self.assertRaises(ValueError): output.read(10 ** 10)
+
+    def test_unknown_cleanup_never_retries_native_observations(self):
+        instance = terminal.Terminal("/fixture", 12345)
+        instance.pid = 98765; instance.reason = "cleanup_unknown"
+        with patch.object(terminal, "census", side_effect=AssertionError("must not invoke ps")):
+            self.assertFalse(instance.close()["cleanup_confirmed"])
+
+    def test_expired_cleanup_is_sticky_and_cannot_repeat_signals(self):
+        instance = terminal.Terminal("/fixture", 12345)
+        instance.pid = 98765; instance.known = {98765: "fixture-start"}
+        rows = {98765: (12345, 98765, "fixture-start")}
+        with patch.object(instance, "remember", return_value=rows) as remember, \
+             patch.object(terminal.os, "kill") as kill, \
+             patch.object(terminal.os, "waitpid", return_value=(0, 0)), \
+             patch.object(terminal.time, "sleep"), \
+             patch.object(terminal.time, "monotonic", side_effect=[0, 0.5, 2]):
+            self.assertEqual(instance.close()["reason"], "cleanup_unknown")
+            observations, signals = remember.call_count, kill.call_count
+            self.assertFalse(instance.close()["cleanup_confirmed"])
+            self.assertEqual((remember.call_count, kill.call_count), (observations, signals))
+
+    def test_unproven_descendant_containment_rejects_before_fork_or_census(self):
+        instance = terminal.Terminal("/fixture", 12345)
+        with patch.object(instance, "parent_alive", return_value=True), \
+             patch.object(terminal, "census", side_effect=AssertionError("must not invoke ps")), \
+             patch.object(terminal.pty, "fork", side_effect=AssertionError("must not fork")):
+            with self.assertRaisesRegex(RuntimeError, "descendant_containment_unavailable"):
+                instance.start(90, 24)
+
+
+class ArchiveTests(unittest.TestCase):
+    def test_locked_wheel_identity_and_license_are_accepted_without_install_or_execution(self):
+        with tempfile.TemporaryDirectory(prefix="qi-runtime-unit-") as temporary:
+            root = Path(temporary)
+            sources = []
+
+            def tar_source(name, kind, prefix, entries, **metadata):
+                path = root / name
+                with tarfile.open(path, "w:gz") as archive:
+                    for entry, data in entries.items():
+                        info = tarfile.TarInfo(prefix + "/" + entry); info.size = len(data)
+                        archive.addfile(info, io.BytesIO(data))
+                sources.append({"name": name, "kind": kind, "limit": 100000,
+                                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), **metadata})
+
+            tar_source("python.tgz", "python", "python", {"bin/python3.12": b"inert-fixture", "LICENSE": b"fixture"})
+            for index, package in enumerate(["pnpm", "@deepseek-ai/libreoffice-kit", "@deepseek-ai/libreoffice-kit-darwin-arm64", "@koromix/koffi-darwin-arm64"]):
+                entries = {"package.json": json.dumps({"name": package, "version": "1.0.0"}).encode(), "LICENSE": b"fixture"}
+                if package == "pnpm": entries["bin/pnpm.cjs"] = b"inert-fixture"
+                tar_source(f"npm-{index}.tgz", "npm", "package", entries, package=package, version="1.0.0", dependencies=[])
+            wheel = root / "numpy.whl"
+            with zipfile.ZipFile(wheel, "w") as archive:
+                archive.writestr("numpy-2.3.5.dist-info/METADATA", "Metadata-Version: 2.4\nName: numpy\nVersion: 2.3.5\n")
+                archive.writestr("numpy-2.3.5.dist-info/licenses/LICENSE.txt", "fixture")
+            sources.append({"name": wheel.name, "kind": "wheel", "limit": 100000,
+                            "sha256": hashlib.sha256(wheel.read_bytes()).hexdigest()})
+            lock = {"sources": sources, "python_packages": {"numpy": "2.3.5"}, "target": "fixture", "python_version": "fixture"}
+            runtime.prepare(lock, root, root / "accepted")
+            manifest = json.loads((root / "accepted/workspace-manifest.json").read_text())
+            self.assertIn("python/lib/python3.12/site-packages/numpy-2.3.5.dist-info/METADATA", manifest["files"])
+            with self.assertRaises(ValueError):
+                runtime.prepare({**lock, "python_packages": {"numpy": "9.9.9"}}, root, root / "wrong-version")
+
+    def test_links_are_resolved_inside_the_archive_and_materialized_as_regular_files(self):
+        with tempfile.TemporaryDirectory(prefix="qi-runtime-unit-") as temporary:
+            root = Path(temporary); archive = root / "source.tgz"
+            with tarfile.open(archive, "w:gz") as tar:
+                info = tarfile.TarInfo("python/bin/python3.12"); info.size = 7; info.mode = 0o755
+                tar.addfile(info, io.BytesIO(b"fixture"))
+                alias = tarfile.TarInfo("python/bin/python3"); alias.type = tarfile.SYMTYPE; alias.linkname = "python3.12"
+                tar.addfile(alias)
+            target = root / "output"; target.mkdir()
+            runtime.tar_entries(archive, "python", "python", runtime.Writer(target))
+            result = target / "python/bin/python3"
+            self.assertEqual(result.read_bytes(), b"fixture"); self.assertFalse(result.is_symlink())
+
+    def test_archive_escape_is_rejected_and_missing_inputs_cannot_build(self):
+        with tempfile.TemporaryDirectory(prefix="qi-runtime-unit-") as temporary:
+            root = Path(temporary); archive = root / "source.tgz"
+            with tarfile.open(archive, "w:gz") as tar:
+                info = tarfile.TarInfo("python/../../outside"); info.size = 1
+                tar.addfile(info, io.BytesIO(b"x"))
+            target = root / "output"; target.mkdir()
+            with self.assertRaises(ValueError): runtime.tar_entries(archive, "python", "python", runtime.Writer(target))
+            self.assertFalse((root / "outside").exists())
+            with self.assertRaises(ValueError): runtime.prepare({"sources": [{"name": "missing", "limit": 100}]}, root, root / "new")
+            self.assertFalse((root / "new").exists())
+
+
+if __name__ == "__main__": unittest.main()

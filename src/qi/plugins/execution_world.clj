@@ -7,6 +7,8 @@
             [qi.kernel :as kernel]
             [qi.sandbox :as sandbox]
             [qi.secure-files :as secure]
+            [qi.terminal-process :as terminal]
+            [qi.workspace-runtime :as runtime]
             [babashka.fs :as fs]
             [babashka.process :as process]
             [clojure.java.io :as io]
@@ -352,7 +354,7 @@
         (recur)
         value))))
 
-(defn- process-command [sandbox root command]
+(defn- process-command [sandbox root command assets]
   ;; Tool commands are intentionally non-login shells. A login shell reads
   ;; user startup files before executing the requested command, which leaks
   ;; unrelated configuration into results and conflicts with a workspace-only
@@ -365,7 +367,9 @@
     :none ["/bin/sh" "-c" command]
     :seatbelt ["/usr/bin/sandbox-exec"
                "-D" (str "WORKSPACE=" root)
-               "-p" seatbelt-profile
+               "-D" (str "RUNTIME=" (or (:root assets) root))
+               "-p" (str seatbelt-profile
+                         (when (:available? assets) "\n(allow file-read* (subpath (param \"RUNTIME\")))\n"))
                "/bin/sh" "-c" command]
     :unavailable
     (throw (ex-info
@@ -374,7 +378,7 @@
 
 (defn- spawn! [root output-root sandbox default-timeout max-timeout
                max-output max-output-file-chars max-output-files
-               max-walk-entries
+               max-walk-entries assets
                {:keys [command cwd timeout-ms cancel-token on-update stream-output?]
                 :or {cwd "."}}]
   (when (str/blank? command)
@@ -395,9 +399,22 @@
           stderr-spool (spool-path! output-root "stderr")
           overflow (atom nil)
           process (try
-                    (.start (doto (ProcessBuilder.
-                                   (process-command sandbox root command))
-                              (.directory (io/file (str working-directory)))))
+                    (let [builder (doto (ProcessBuilder.
+                                         (process-command sandbox root command assets))
+                                    (.directory (io/file (str working-directory))))]
+                      (when (:available? assets)
+                        ;; Packaged tools do not inherit provider credentials,
+                        ;; shell injection or npm user authentication settings.
+                        (let [home (fs/path root ".qi-agent/workspace-runtime/home")
+                              temporary (fs/path root ".qi-agent/workspace-runtime/tmp")]
+                          (doseq [path [home temporary]]
+                            (secure/protect-managed-parents! path)
+                            (secure/protect-directory! path))
+                          (.clear (.environment builder))
+                          (.putAll (.environment builder)
+                                   (merge {"HOME" (str home) "TMPDIR" (str temporary) "LANG" "en_US.UTF-8"}
+                                          (runtime/environment assets root)))))
+                      (.start builder))
                     (catch Throwable error
                       (doseq [path [stdout-spool stderr-spool]]
                         (try (fs/delete-if-exists path) (catch Throwable _)))
@@ -505,6 +522,7 @@
                         :max-timeout-ms max-timeout-ms})))
      (let [workspace-root (real-path root)
            mode (sandbox/resolve-mode sandbox)
+           assets (runtime/describe)
            output-root (lexical-path workspace-root output-dir)
            _ (when (Files/exists output-root (make-array LinkOption 0))
                (secure/protect-tree! output-root))
@@ -517,6 +535,11 @@
             :default-timeout-ms timeout-ms
             :max-timeout-ms max-timeout-ms
             :process-group-enabled (boolean (process-groups-available?))
+            :workspace-runtime (select-keys assets [:available? :reason :python-version])
+            :terminal-capability (terminal/capability)
+            :terminal-controller (when (and (:available? (terminal/capability))
+                                            (:available? assets) (not= :unavailable mode))
+                                   #(terminal/controller workspace-root (runtime/describe) mode seatbelt-profile))
             :capabilities (cond-> #{:fs/read :fs/write}
                             (and (not= :unavailable mode)
                                  (process-groups-available?)) (conj :process))
@@ -624,6 +647,8 @@
             :spawn! #(spawn! workspace-root output-root mode timeout-ms
                              max-timeout-ms
                              max-output-chars max-output-file-chars
-                             max-output-files max-walk-entries %)}]
+                             max-output-files max-walk-entries assets %)}]
+       ;; Kept on the existing ExecutionWorld service: neither Host nor renderer
+       ;; gets a separate process launcher or a sandbox:none fallback.
        (kernel/register-service! ctx :execution/world world))
      nil)})

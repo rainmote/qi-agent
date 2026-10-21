@@ -1,6 +1,7 @@
 //! Opt-in parent lifetime for a foreground daemon owned by the desktop shell.
 //! No process enumeration, permissive fallback, or change to normal daemons.
 use anyhow::{Result, bail};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
     fs::{self, OpenOptions},
@@ -12,6 +13,78 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
 };
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct OwnedHelper {
+    pub pid: u32,
+    pub parent: u32,
+    pub started_sec: u64,
+    pub started_usec: u64,
+}
+
+pub fn admit_helper(parent: u32, observed: OwnedHelper) -> Result<OwnedHelper> {
+    if parent <= 2
+        || observed.pid <= 2
+        || observed.pid == parent
+        || observed.parent != parent
+        || observed.started_sec == 0
+        || observed.started_usec >= 1_000_000
+    {
+        bail!("helper parent/identity could not be verified");
+    }
+    Ok(observed)
+}
+
+#[cfg(target_os = "macos")]
+pub fn helper_identity(pid: u32) -> Result<Option<OwnedHelper>> {
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdinfo>();
+    let count = unsafe {
+        libc::proc_pidinfo(
+            pid.try_into()?,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            &mut info as *mut _ as *mut libc::c_void,
+            size.try_into()?,
+        )
+    };
+    if count == 0 {
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ESRCH) {
+            return Ok(None);
+        }
+        return Err(error.into());
+    }
+    if count != size as i32 || info.pbi_pid != pid {
+        bail!("helper process observation UNKNOWN");
+    }
+    Ok(Some(OwnedHelper {
+        pid,
+        parent: info.pbi_ppid,
+        started_sec: info.pbi_start_tvsec,
+        started_usec: info.pbi_start_tvusec,
+    }))
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn helper_identity(_pid: u32) -> Result<Option<OwnedHelper>> {
+    bail!("guarded PTY admission is not supported on this target")
+}
+
+pub fn helper_present(owned: &OwnedHelper) -> Result<bool> {
+    Ok(helper_identity(owned.pid)?.is_some_and(|now| {
+        now.started_sec == owned.started_sec && now.started_usec == owned.started_usec
+    }))
+}
+
+pub fn helpers_absent(helpers: &[OwnedHelper]) -> Result<bool> {
+    for owned in helpers {
+        if helper_present(owned)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
 
 /// The check must follow the shared residency lock. An already admitted
 /// process can finish publishing; cleanup takes the same lock before its
@@ -119,6 +192,30 @@ pub fn failed_start_identity(directory: &Path, descriptor: &Path, pid: u32) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminal_guardian_admission_rejects_foreign_parent_and_invalid_identity() {
+        let valid = OwnedHelper {
+            pid: 23456,
+            parent: 12345,
+            started_sec: 100,
+            started_usec: 20,
+        };
+        assert_eq!(admit_helper(12345, valid.clone()).unwrap(), valid);
+        assert!(admit_helper(12346, valid.clone()).is_err());
+        assert!(admit_helper(23456, valid.clone()).is_err());
+        assert!(
+            admit_helper(
+                12345,
+                OwnedHelper {
+                    started_sec: 0,
+                    ..valid.clone()
+                }
+            )
+            .is_err()
+        );
+        assert!(admit_helper(12345, OwnedHelper { pid: 1, ..valid }).is_err());
+    }
     #[test]
     fn desktop_parent_is_opt_in_and_never_adopts_an_arbitrary_pid() {
         assert_eq!(validate_parent(None, 1).unwrap(), None);

@@ -22,6 +22,7 @@ import { collapseTiming, transcriptView, type CollapseTiming, type TranscriptVie
 import { Trajectory } from "./Trajectory";
 import { WorkspacePanel } from "./WorkspacePanel";
 import { DesktopBrowser } from "./DesktopBrowser";
+import { TerminalPanel } from "./TerminalPanel";
 import { ComposerAttachments, ComposerReferences, type AttachmentRef } from "./ComposerAttachments";
 import { AutomationPanel } from "./AutomationPanel";
 import { OrchestrationPanel } from "./OrchestrationPanel";
@@ -235,7 +236,7 @@ export function App() {
   const [composer, setComposer] = useState("");
   const [attachments, setAttachments] = useState<AttachmentRef[]>([]);
   const [uploading, setUploading] = useState(false);
-  const [workbench, setWorkbench] = useState<"files" | "browser" | "automation" | "plugins" | "orchestration" | null>(null);
+  const [workbench, setWorkbench] = useState<"files" | "browser" | "terminal" | "automation" | "plugins" | "orchestration" | null>(null);
   const [browserNewTabSerial, setBrowserNewTabSerial] = useState(0);
   useEffect(() => {
     const open = () => { setWorkbench("browser"); setBrowserNewTabSerial(value => value + 1); };
@@ -1126,6 +1127,7 @@ export function App() {
             { label: t("命令"), icon: "command", disabled: !workspaceId || busy, run: () => { setComposer(value => value.startsWith("/") ? value : "/"); composerInput.current?.focus(); } },
             { label: t("文件与变更"), icon: "folder", disabled: !workspaceId, run: () => setWorkbench("files") },
             { label: t("浏览器"), icon: "eye", disabled: !workspaceId, run: () => setWorkbench("browser") },
+            { label: t("终端"), icon: "terminal", disabled: !activeSession, run: () => setWorkbench("terminal") },
             { label: t("计划与协作"), icon: "bot", disabled: !activeSession, run: () => setWorkbench("orchestration") },
             { label: t("自动化"), icon: "clock", disabled: !activeSession, run: () => setWorkbench("automation") },
             { label: t("插件"), icon: "settings", disabled: !activeSession, run: () => setWorkbench("plugins") },
@@ -1342,8 +1344,9 @@ export function App() {
           if (current()) await refreshSnapshot(id);
         }}
         onClose={() => setWorkbench(null)} onReference={reference => { setComposer(value => `${value}${value ? " " : ""}${reference} `); workbenchReturnFocus.current = composerInput.current; setWorkbench(null); }} />
-        : <><header className="workbench-heading"><strong>{workbench === "automation" ? t("自动化") : workbench === "plugins" ? t("插件") : t("计划与协作")}</strong>
+        : <><header className="workbench-heading"><strong>{workbench === "terminal" ? t("终端") : workbench === "automation" ? t("自动化") : workbench === "plugins" ? t("插件") : t("计划与协作")}</strong>
           <button type="button" onClick={() => setWorkbench(null)} aria-label={t("关闭工作台")}>×</button></header>
+          {activeSession && workbench === "terminal" && <TerminalPanel key={activeSession.id} sessionId={activeSession.id} rpc={workbenchRpc} readOnly={policy?.mode === "deny"} />}
           {activeSession && workbench === "automation" && <AutomationPanel agentId={activeSession.id} readOnly={policy?.mode === "deny"}
             rpc={workbenchRpc} />}
           {activeSession && workbench === "plugins" && <PluginPanel readOnly={policy?.mode === "deny"}

@@ -34,7 +34,12 @@ point to a project-private official registry cache. Build dependencies must be
 available before the offline preparation/build steps. An absent or mismatched
 archive, Babashka binary, or license fails closed. The default profile starts
 from the portable Standard preset; computer use remains disabled. An optional
-JVM REPL, LSP, Python, Office, pnpm, and an LCU installation are not supplied.
+JVM REPL, LSP, and an LCU installation are not supplied. The workspace-runtime
+preparer now additionally requires all 37 pinned Python/wheel/pnpm/Office/xterm
+archives described in `workspace-runtime-sources.json`, under the cache's
+`workspace/<name>` paths. It performs no network requests or package installs.
+They are missing in this execution, so a new full package cannot be produced.
+See [runtime and PTY boundaries](../../docs/desktop-workspace-runtime.md).
 
 After independent review and a clean local commit:
 
@@ -148,3 +153,10 @@ shutdown after at most 30 seconds of observation. An uncertain controller timeou
 retains the PID, owner marker and evidence; it does not force-kill or retry.
 This mode changes no executor sandbox or system permission. A cold-start pass
 still does not prove UI interactions, worker/model, LCU, persistence or full E2E.
+
+The first actual cold-start at `eb9c889` exited with SIGABRT in AppKit
+`_RegisterApplication`/`NSApplication init`, before qi setup. No native window,
+Host readiness, or UI screenshot was observed. The specific registration reason
+is unknown; a narrow read-only system-log query was denied while sandboxed.
+Neither action was retried or routed through another launcher. Later static
+builds do not change that runtime failure or authorize another native attempt.

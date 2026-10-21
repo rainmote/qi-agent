@@ -9,7 +9,9 @@
         existing (set (map :ns plugins))
         additions (remove #(contains? existing (:ns %))
                           [{:ns 'qi.plugins.computer-use}
-                           {:ns 'qi.plugins.lcu :config {:enabled false}}])
+                           {:ns 'qi.plugins.lcu :config {:enabled false}}
+                           {:ns 'qi.plugins.terminal}
+                           {:ns 'qi.plugins.workspace-tools}])
         index (or (first (keep-indexed #(when (= 'qi.plugins.mcp-client (:ns %2)) %1) plugins))
                   (count plugins))
         result (assoc profile :plugins (vec (concat (take index plugins) additions (drop index plugins))))]

@@ -46,6 +46,8 @@ pub struct WorkerDescriptor {
     pub child_pid: Option<u32>,
     #[serde(default)]
     pub child_process_group: Option<u32>,
+    #[serde(default)]
+    pub owned_helpers: Vec<crate::desktop_owner::OwnedHelper>,
     pub session_id: Option<String>,
     pub status: String,
     pub started_at_ms: u128,
@@ -82,6 +84,7 @@ impl WorkerDescriptor {
             pid: None,
             child_pid: None,
             child_process_group: None,
+            owned_helpers: Vec::new(),
             session_id: None,
             status: "starting".into(),
             started_at_ms: now_ms(),
@@ -414,6 +417,7 @@ pub fn serve(descriptor_path: &Path) -> Result<()> {
         Arc::clone(&stdin),
         &descriptor_path,
         Arc::clone(&watchdog),
+        Arc::clone(&shutdown_requested),
     )?;
     let mut child_started = Instant::now();
     let mut restart_attempts = 0u32;
@@ -626,6 +630,7 @@ pub fn serve(descriptor_path: &Path) -> Result<()> {
                 Arc::clone(&stdin),
                 &descriptor_path,
                 Arc::clone(&watchdog),
+                Arc::clone(&shutdown_requested),
             )?;
             child_started = Instant::now();
             hard_timeout = false;
@@ -646,11 +651,22 @@ fn start_babashka(
     stdin: ActiveStdin,
     descriptor_path: &Path,
     watchdog: SharedWatchdog,
+    closing: Arc<AtomicBool>,
 ) -> Result<std::process::Child> {
     let snapshot = descriptor
         .lock()
         .expect("descriptor mutex poisoned")
         .clone();
+    if !crate::desktop_owner::helpers_absent(&snapshot.owned_helpers)? {
+        bail!(
+            "previous owned terminal guardian is still present or cleanup UNKNOWN; worker replacement blocked"
+        );
+    }
+    descriptor
+        .lock()
+        .expect("descriptor mutex poisoned")
+        .owned_helpers
+        .clear();
     {
         let mut timer = watchdog.lock().expect("watchdog mutex poisoned");
         timer.runs.clear();
@@ -750,6 +766,8 @@ fn start_babashka(
         descriptor_path.to_path_buf(),
         watchdog,
         snapshot.generation,
+        Arc::clone(&stdin),
+        closing,
     );
     spawn_stderr_reader(
         child
@@ -840,6 +858,9 @@ fn authenticate_and_attach(
                     | "session.events"
                     | "runtime.status"
                     | "remote.methods"
+                    | "terminal.status"
+                    | "terminal.stop"
+                    | "terminal.cancel"
             ) || (method == "subagent.invoke"
                 && request.pointer("/params/method").and_then(Value::as_str) == Some("turn.abort"));
             if !allowed_during_cancel
@@ -904,6 +925,8 @@ fn spawn_stdout_reader(
     descriptor_path: PathBuf,
     watchdog: SharedWatchdog,
     generation: u64,
+    stdin: ActiveStdin,
+    closing: Arc<AtomicBool>,
 ) {
     thread::spawn(move || {
         for line in BufReader::new(stdout).lines() {
@@ -942,6 +965,74 @@ fn spawn_stdout_reader(
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_owned();
+            if kind == "process-admit" {
+                let id = value
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .filter(|id| uuid::Uuid::parse_str(id).is_ok());
+                let pid = value
+                    .get("pid")
+                    .and_then(Value::as_u64)
+                    .and_then(|pid| u32::try_from(pid).ok());
+                if let (Some(id), Some(pid)) = (id, pid) {
+                    let admitted = (|| -> Result<()> {
+                        if closing.load(Ordering::SeqCst)
+                            || watchdog
+                                .lock()
+                                .expect("watchdog mutex poisoned")
+                                .cancel_started
+                                .is_some()
+                        {
+                            bail!("process admission closed");
+                        }
+                        let mut current = descriptor.lock().expect("descriptor mutex poisoned");
+                        if current.generation != generation || current.status != "running" {
+                            bail!("process admission closed");
+                        }
+                        let mut remaining = Vec::new();
+                        for helper in &current.owned_helpers {
+                            if crate::desktop_owner::helper_present(helper)? {
+                                remaining.push(helper.clone());
+                            }
+                        }
+                        current.owned_helpers = remaining;
+                        if current.owned_helpers.len() >= 32 {
+                            bail!("process admission closed");
+                        }
+                        let parent = current.child_pid.context("worker parent unavailable")?;
+                        let observed = crate::desktop_owner::helper_identity(pid)?
+                            .context("helper disappeared before admission")?;
+                        let record = crate::desktop_owner::admit_helper(parent, observed)?;
+                        if !current.owned_helpers.contains(&record) {
+                            current.owned_helpers.push(record);
+                        }
+                        write_descriptor(&descriptor_path, &current)?;
+                        Ok(())
+                    })()
+                    .is_ok();
+                    let ack = json!({"id":format!("native-process-ack-{id}"),"method":"native.process-result",
+                        "params":{"id":id,"admitted":admitted}});
+                    if let Some(writer) =
+                        stdin.lock().expect("worker stdin mutex poisoned").as_mut()
+                    {
+                        let _ = (|| -> Result<()> {
+                            serde_json::to_writer(&mut *writer, &ack)?;
+                            writer.write_all(b"\n")?;
+                            writer.flush()?;
+                            Ok(())
+                        })();
+                    }
+                }
+                continue;
+            }
+            if kind == "response"
+                && value
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| id.starts_with("native-process-ack-"))
+            {
+                continue;
+            }
             if kind == "ready" {
                 let mut current = descriptor.lock().expect("descriptor mutex poisoned");
                 if let Some(session_id) = value.get("session_id").and_then(Value::as_str) {

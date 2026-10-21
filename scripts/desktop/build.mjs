@@ -1,9 +1,10 @@
-import { createHash } from 'node:crypto';
-import { chmod, copyFile, cp, lstat, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { chmod, copyFile, cp, lstat, mkdir, open, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { build } from 'esbuild';
+import { machOMagics, loadCommands, qualifyNative } from './native-payload.mjs';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const desktop = join(repo, 'apps/desktop');
@@ -174,6 +175,11 @@ async function licenses(root) {
 
 async function prepare() {
   await assertSource();
+  const workspaceStage = join(desktop, 'stage', `workspace-${randomUUID()}`);
+  // Full runtime closure is mandatory. This preparer only reads pinned cache
+  // archives; it never downloads dependencies or runs package install scripts.
+  run('python3', [join(repo, 'scripts/desktop/workspace-runtime.py'),
+    join(desktop, 'workspace-runtime-sources.json'), join(cache, 'workspace'), workspaceStage]);
   const archive = join(cache, sources.node.archive);
   if (hash(await readFile(archive)) !== sources.node.sha256) throw new Error('Missing/mismatched official Node archive; run desktop:bootstrap explicitly');
   if (hash(await readFile(join(cache, 'babashka-LICENSE'))) !== sources.babashka.license_sha256) throw new Error('Babashka license mismatch');
@@ -184,11 +190,12 @@ async function prepare() {
   // model is run and no user config/credentials enter the staging directory.
   run('cargo', ['build', '--locked', '--offline', '--release', '--manifest-path', 'apps/tui-rs/Cargo.toml', '--bin', 'qi-agent']);
   await assertSource();
-  run('node', ['scripts/desktop/web-build.mjs']);
+  run('node', ['scripts/desktop/web-build.mjs', workspaceStage]);
   await assertSource();
   await rm(runtime, { recursive: true, force: true }); // fixed ignored build-owned directory only
   await mkdir(join(runtime, 'bin'), { recursive: true });
   await copyTracked(['src', 'plugins', 'presets', 'assets', 'protocol', 'scripts/lcu', 'bb.edn', 'LICENSE']);
+  await cp(workspaceStage, join(runtime, 'workspace'), { recursive: true });
   await copyFile(join(repo, 'presets/standard/agent.edn'), join(runtime, 'agent.edn'));
   const profiles = [join(runtime, 'agent.edn'), join(runtime, 'presets/standard/agent.edn'), join(runtime, 'presets/creator/agent.edn')];
   run(bb, [join(repo, 'scripts/desktop/profile.clj'), ...profiles]);
@@ -220,18 +227,29 @@ async function verify(app) {
   const record = JSON.parse(await readFile(manifestPath, 'utf8'));
   const actual = await files(root);
   if (JSON.stringify(actual) !== JSON.stringify(record.files)) throw new Error('Packaged runtime files differ from final manifest');
-  for (const binary of ['node', 'bb', 'qi-agent']) {
-    const path = join(root, 'bin', binary);
-    const dependencies = run('/usr/bin/otool', ['-L', path]);
-    for (const line of dependencies.split('\n').slice(1).filter(Boolean)) {
-      const dependency = line.trim().split(' (')[0];
-      if (!dependency.startsWith('/usr/lib/') && !dependency.startsWith('/System/Library/')) throw new Error(`Non-system dependency in packaged ${binary}: ${dependency}`);
+  const regularFiles = new Set(Object.keys(actual).map(name => join(root, name)));
+  const native = [];
+  for (const name of Object.keys(actual)) {
+    const path = join(root, name), prefix = Buffer.alloc(4), input = await open(path, 'r');
+    try { await input.read(prefix, 0, 4, 0); } finally { await input.close(); }
+    const magic = prefix.toString('hex');
+    if (!machOMagics.has(magic)) {
+      if (/\.(?:so|dylib|node)$/.test(name) || ['bin/node', 'bin/bb', 'bin/qi-agent', 'workspace/python/bin/python3.12',
+        'workspace/node_modules/@deepseek-ai/libreoffice-kit-darwin-arm64/bin/libreoffice-kit'].includes(name)) throw new Error(`Required native file is not Mach-O: ${name}`);
+      continue;
     }
-    if (!run('/usr/bin/lipo', ['-archs', path]).includes('arm64')) throw new Error(`Wrong architecture: ${binary}`);
+    try { qualifyNative({ root, file: path, regularFiles, minimumOS: shellConfig.bundle.macOS.minimumSystemVersion,
+      architectures: run('/usr/bin/lipo', ['-archs', path]), commands: loadCommands(run('/usr/bin/otool', ['-arch', 'arm64', '-l', path])) }); }
+    catch (error) { throw new Error(`Native payload ${name}: ${error.message}`); }
+    native.push(name);
   }
+  if (!native.includes('workspace/python/bin/python3.12') || !native.some(name => name.endsWith('.node'))
+    || !native.includes('workspace/node_modules/@deepseek-ai/libreoffice-kit-darwin-arm64/bin/libreoffice-kit')) throw new Error('Incomplete Python/Office/koffi native runtime closure');
   const info = run('/usr/libexec/PlistBuddy', ['-c', 'Print :CFBundleExecutable', join(app, 'Contents/Info.plist')]).trim();
   if (!run('/usr/bin/lipo', ['-archs', join(app, 'Contents/MacOS', info)]).includes('arm64')) throw new Error('Wrong shell architecture');
-  console.log('Static package resource/architecture/linkage verification passed; runtime and real E2E remain unverified.');
+  await writeFile(join(app, '..', 'native-payload-verification.json'), JSON.stringify({ source_sha: record.source_sha,
+    qualification: 'STATIC_ONLY', native_files: native, minimumOS: shellConfig.bundle.macOS.minimumSystemVersion }, null, 2) + '\n');
+  console.log('Static package resource/architecture/linkage/minimumOS verification passed; runtime and real E2E remain unverified.');
   return record;
 }
 
