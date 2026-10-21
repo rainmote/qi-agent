@@ -60,6 +60,11 @@ inventory. Supplemental texts retain their upstream provenance and checksums;
 missing notice files fail the build. Desktop Vite builds disable local `.env`
 loading and source maps; normal Web development settings are unchanged.
 
+`npm run desktop:build-app` only compiles/seals/verifies the `.app` and writes an
+app-only receipt. It never invokes `hdiutil` or another image packager. This can
+produce a revised code candidate while a previous DMG device failure remains
+open; it does not convert that failure to a pass or retry the failed operation.
+
 `desktop:dev` explicitly starts a development app and uses `stage/runtime`.
 It is a separate runtime action, never part of prepare/check/verify. Do not use
 it to bypass an execution or desktop permission denial.
@@ -88,6 +93,15 @@ the existing idempotent command protocol, waits for a bounded matching response,
 then requires a matching cleanup receipt and both owned child exits. Unknown
 cleanup retains ownership/runtime evidence and blocks another daemon start.
 The shell never kills an unverified PID or deletes an uncertain worker record.
+Desktop process admission closes under the existing daemon residency lock;
+cleanup drains earlier worker/preset-helper starts before taking its snapshot,
+then releases the lock before stopping workers. Residual worker registrations
+make the receipt fail rather than silently claiming a complete cleanup.
+Permission/interruption errors while checking a PID or group are UNKNOWN; only
+`ESRCH` proves absence. A failed fresh worker start keeps private identity
+evidence, closes admission, and conservatively keeps the cleanup receipt failed
+even after best-effort stopping. It requires reconciliation, not an automatic
+retry or a force-restart bypass.
 
 On macOS, closing the main window hides it; the application menu provides an
 explicit confirmed exit and service restart. Restart and quit confirmations,

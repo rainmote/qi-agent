@@ -13,7 +13,7 @@
 | 原生项目目录选择 | 原生菜单选择后预填既有 Web 确认框；确认后才走原 allowlist/信任流程 | 取消、重复选择、代次变化、旧结果晚到与真实窄屏 OPEN |
 | 首次项目信任、受限、撤销、权限审批 | 沿用 f7 流程与后端命令幂等；选目录不授信、不扩大审批 | Tauri 内拒绝/取消/返回/刷新/项目切换 E2E OPEN |
 | 窗口隐藏、退出、重复启动 | macOS 关窗隐藏；原生退出有返回；单实例与私有状态租约 | 真实系统窗口/第二实例/后台生命周期 OPEN |
-| Host/daemon 崩溃与清理 | 壳持两 Child；daemon 受真实父 PID 与 state 级租约保护；有清理回执，未知保留归属且阻止重启 | worker setsid，不能以父进程退出代替子树证明；真实进程回收 E2E OPEN |
+| Host/daemon 崩溃与清理 | 壳持两 Child；真实父 PID、state 租约、同锁准入/排空；失败启动保留身份和 sticky UNKNOWN；仅 ESRCH 证明进程/组不存在 | worker setsid，不能以父进程退出、stopped 文件或权限错误代替子树证明；真实进程回收 E2E OPEN |
 | 外链与工作区文件 | 外链协议白名单、无凭据/私有token、原生确认后系统打开；文件权限沿用现有面板 | 系统打开/下载/新窗口兼容待验证，未声明全部完成 |
 | LCU 状态与连接入口 | 沿用 1bb 的延迟连接、未知结果、清理与代次边界；不随壳启用 LCU | 实际 LCU 首调历史 BLOCKED；原隔离 true probe 已失败且授权消费，不重试。原生截图/输入 E2E OPEN |
 | Chrome computer use | 仍是明确 opt-in，扩展与 origin 未安装/注册 | OPEN，需要独立批准与实际能力验证；不等于侧栏 Browser |

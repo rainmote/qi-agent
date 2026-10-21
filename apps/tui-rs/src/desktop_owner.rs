@@ -6,8 +6,69 @@ use std::{
     fs::{self, OpenOptions},
     io::Write,
     os::unix::fs::OpenOptionsExt,
-    path::Path,
+    path::{Path, PathBuf},
+    sync::{
+        Mutex, MutexGuard,
+        atomic::{AtomicBool, Ordering},
+    },
 };
+
+/// The check must follow the shared residency lock. An already admitted
+/// process can finish publishing; cleanup takes the same lock before its
+/// snapshot. No desktop process may be admitted behind that snapshot.
+pub fn process_admission<'a>(
+    owned: bool,
+    closing: &AtomicBool,
+    residency: &'a Mutex<()>,
+) -> Result<MutexGuard<'a, ()>> {
+    let guard = residency.lock().expect("runtime residency mutex poisoned");
+    if owned && closing.load(Ordering::SeqCst) {
+        bail!("desktop daemon is stopping; no new process may start");
+    }
+    Ok(guard)
+}
+
+pub fn drain_processes(owned: bool, residency: &Mutex<()>) -> Option<MutexGuard<'_, ()>> {
+    owned.then(|| residency.lock().expect("runtime residency mutex poisoned"))
+}
+
+/// Only ESRCH proves absence. Permission and interrupted observations remain
+/// unknown; they must never authorize clearing a process identity or lease.
+pub fn presence_result(result: i32, errno: i32) -> Result<bool> {
+    if result == 0 {
+        return Ok(true);
+    }
+    if result == -1 && errno == libc::ESRCH {
+        return Ok(false);
+    }
+    bail!(
+        "process presence UNKNOWN: {}",
+        std::io::Error::from_raw_os_error(errno)
+    );
+}
+
+pub fn signal_target(pid: u32, group: bool) -> Result<i32> {
+    if pid <= 1 {
+        bail!("invalid desktop process identity");
+    }
+    let pid = i32::try_from(pid)?;
+    Ok(if group { -pid } else { pid })
+}
+
+pub fn process_presence(pid: u32, group: bool) -> Result<bool> {
+    let target = signal_target(pid, group)?;
+    let result = unsafe { libc::kill(target, 0) };
+    presence_result(
+        result,
+        if result == 0 {
+            0
+        } else {
+            std::io::Error::last_os_error()
+                .raw_os_error()
+                .unwrap_or(libc::EIO)
+        },
+    )
+}
 
 pub fn validate_parent(raw: Option<&str>, actual_parent: u32) -> Result<Option<u32>> {
     let Some(raw) = raw else { return Ok(None) };
@@ -31,6 +92,28 @@ pub fn shutdown_receipt(directory: &Path, run_id: &str, errors: &[String]) -> Re
     file.sync_all()?;
     fs::rename(temporary, directory.join("desktop-shutdown.json"))?;
     Ok(())
+}
+
+/// Preserve fresh-child identity even if its ordinary descriptor cannot be
+/// read or a later cleanup path changes it. This is evidence, not a success.
+pub fn failed_start_identity(directory: &Path, descriptor: &Path, pid: u32) -> Result<PathBuf> {
+    let id = uuid::Uuid::new_v4();
+    let temporary = directory.join(format!(".desktop-failed-start-{id}.tmp"));
+    let destination = directory.join(format!("desktop-failed-start-{id}.json"));
+    let snapshot = fs::read(descriptor)
+        .ok()
+        .filter(|bytes| bytes.len() <= 524288)
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+    let data = json!({"status":"UNKNOWN", "spawned_pid":pid, "descriptor_path":descriptor, "descriptor":snapshot});
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&temporary)?;
+    file.write_all(&serde_json::to_vec(&data)?)?;
+    file.sync_all()?;
+    fs::rename(temporary, &destination)?;
+    Ok(destination)
 }
 
 #[cfg(test)]
@@ -64,5 +147,71 @@ mod tests {
         let clean: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
         assert_eq!(clean["ok"], true);
         fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn shutdown_drains_admitted_processes_and_refuses_later_desktop_starts() {
+        use std::sync::{Arc, mpsc};
+        let residency = Arc::new(Mutex::new(()));
+        let closing = AtomicBool::new(false);
+        let published = Arc::new(Mutex::new(Vec::new()));
+        let admitted = process_admission(true, &closing, &residency).unwrap();
+        closing.store(true, Ordering::SeqCst);
+        let (entered, receive) = mpsc::sync_channel(1);
+        let lock = Arc::clone(&residency);
+        let values = Arc::clone(&published);
+        let snapshot = std::thread::spawn(move || {
+            entered.send(()).unwrap();
+            let _drained = drain_processes(true, &lock);
+            values.lock().unwrap().clone()
+        });
+        receive.recv().unwrap();
+        assert!(residency.try_lock().is_err());
+        published.lock().unwrap().push("admitted-before-shutdown");
+        drop(admitted);
+        assert_eq!(snapshot.join().unwrap(), vec!["admitted-before-shutdown"]);
+        assert!(process_admission(true, &closing, &residency).is_err());
+        // Non-desktop daemons retain their existing admission behavior.
+        assert!(process_admission(false, &closing, &residency).is_ok());
+    }
+    #[test]
+    fn failed_start_record_retains_fallback_and_original_descriptor() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory =
+            std::env::temp_dir().join(format!("qi-desktop-identity-unit-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&directory).unwrap();
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+        let descriptor = directory.join("worker.json");
+        let original = br#"{"pid":null,"child_pid":789,"child_process_group":789}"#;
+        fs::write(&descriptor, original).unwrap();
+        let record = failed_start_identity(&directory, &descriptor, 123).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&fs::read(&record).unwrap()).unwrap();
+        assert_eq!(value["status"], "UNKNOWN");
+        assert_eq!(value["spawned_pid"], 123);
+        assert_eq!(value["descriptor"]["child_process_group"], 789);
+        assert_eq!(fs::read(&descriptor).unwrap(), original);
+        assert_eq!(
+            fs::metadata(record).unwrap().permissions().mode() & 0o077,
+            0
+        );
+        fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn only_esrch_proves_absence_without_running_an_os_probe() {
+        assert!(presence_result(0, 0).unwrap());
+        assert!(!presence_result(-1, libc::ESRCH).unwrap());
+        for errno in [
+            libc::EPERM,
+            libc::EACCES,
+            libc::EINTR,
+            libc::EINVAL,
+            libc::EIO,
+        ] {
+            assert!(presence_result(-1, errno).is_err());
+        }
+        assert_eq!(signal_target(123, false).unwrap(), 123);
+        assert_eq!(signal_target(123, true).unwrap(), -123);
+        for invalid in [0, 1, u32::MAX] {
+            assert!(signal_target(invalid, true).is_err());
+        }
     }
 }

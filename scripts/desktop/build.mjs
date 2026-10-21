@@ -28,7 +28,7 @@ const env = { PATH: `${dirname(cli)}:/opt/homebrew/bin:/Users/geb/.local/bin:/us
   CARGO_HOME: process.env.CARGO_HOME || join(desktop, '.cache/cargo') };
 if (shellConfig.version !== pkg.version) throw new Error('Core and desktop versions must match');
 if (process.platform !== 'darwin' || process.arch !== 'arm64') throw new Error('Only macOS arm64 is supported; other platform packages are NOT_BUILT');
-if (!['prepare', 'build', 'dev', 'verify'].includes(mode)) throw new Error('Unknown desktop build mode');
+if (!['prepare', 'build', 'build-app', 'dev', 'verify'].includes(mode)) throw new Error('Unknown desktop build mode');
 
 function run(command, args, cwd = repo, binary = false) {
   const report = !binary && ((command === 'cargo' && ['build', 'tauri'].includes(args[0]))
@@ -238,10 +238,10 @@ async function verify(app) {
 const app = join(desktop, 'src-tauri/target/release/bundle/macos/qi-agent.app');
 if (mode === 'verify') { await verify(process.argv[3] ? resolve(process.argv[3]) : app); }
 else {
-  if (mode === 'build' && frozenSource.dirty) throw new Error('Release packaging requires a clean committed candidate; use prepare/check while implementing');
+  if (['build', 'build-app'].includes(mode) && frozenSource.dirty) throw new Error('Release packaging requires a clean committed candidate; use prepare/check while implementing');
   await prepare();
   if (mode === 'dev') { run('cargo', ['tauri', 'dev'], desktop); }
-  if (mode === 'build') {
+  if (['build', 'build-app'].includes(mode)) {
     run('cargo', ['tauri', 'build', '--bundles', 'app', '--', '--locked', '--offline'], desktop);
     await assertSource();
     // Tauri may re-sign native resources during bundling. Freeze FINAL bytes,
@@ -256,17 +256,19 @@ else {
     await rm(copied, { recursive: true, force: true });
     await cp(app, copied, { recursive: true, dereference: false });
     const imageRoot = join(output, 'dmg-content');
-    await rm(imageRoot, { recursive: true, force: true });
-    await mkdir(imageRoot, { recursive: true });
-    await cp(copied, join(imageRoot, 'qi-agent.app'), { recursive: true });
-    await symlink('/Applications', join(imageRoot, 'Applications'));
+    if (mode === 'build') {
+      await rm(imageRoot, { recursive: true, force: true });
+      await mkdir(imageRoot, { recursive: true });
+      await cp(copied, join(imageRoot, 'qi-agent.app'), { recursive: true });
+      await symlink('/Applications', join(imageRoot, 'Applications'));
+    }
     const dmg = join(output, `qi-agent-${pkg.version}-${target}-adhoc.dmg`);
-    const result = { version: pkg.version, target, ...frozenSource, app: copied, dmg,
-      dmg_sha256: null, dmg_status: 'NOT_BUILT', app_files_sha256: hash(JSON.stringify(await files(copied))),
+    const result = { version: pkg.version, target, ...frozenSource, app: copied, dmg: mode === 'build' ? dmg : null,
+      dmg_sha256: null, dmg_status: mode === 'build' ? 'NOT_BUILT' : 'NOT_REQUESTED_APP_ONLY', app_files_sha256: hash(JSON.stringify(await files(copied))),
       manifest_sha256: hash(await readFile(join(copied, 'Contents/Resources/runtime/runtime-manifest.json'))),
       signature: 'ad-hoc; no signing key/notarization/publication', package_verification: 'STATIC_ONLY', actual_e2e: 'NOT_RUN' };
     await writeFile(join(output, 'build-receipt.json'), `${JSON.stringify(result, null, 2)}\n`);
-    try {
+    if (mode === 'build') try {
       run('/usr/bin/hdiutil', ['create', '-volname', 'qi-agent', '-srcfolder', imageRoot, '-format', 'UDZO', '-ov', dmg]);
       await assertSource();
       result.dmg_sha256 = hash(await readFile(dmg)); result.dmg_status = 'BUILT_NOT_LAUNCHED';

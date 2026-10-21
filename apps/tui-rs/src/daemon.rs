@@ -271,6 +271,8 @@ struct Runtime {
     workers: Mutex<HashMap<String, Arc<WorkerConnection>>>,
     residency: Mutex<()>,
     shutdown: AtomicBool,
+    desktop_owned: bool,
+    desktop_startup_unknown: AtomicBool,
     idle_sweep_running: AtomicBool,
     last_idle_sweep_at_ms: AtomicU64,
     next_idle_sweep_at_ms: AtomicU64,
@@ -1618,6 +1620,8 @@ pub fn serve(repository_root: Option<&Path>, config_path: Option<&Path>) -> Resu
         workers: Mutex::new(HashMap::new()),
         residency: Mutex::new(()),
         shutdown: AtomicBool::new(false),
+        desktop_owned: desktop_parent.is_some(),
+        desktop_startup_unknown: AtomicBool::new(false),
         idle_sweep_running: AtomicBool::new(false),
         last_idle_sweep_at_ms: AtomicU64::new(0),
         next_idle_sweep_at_ms: AtomicU64::new(0),
@@ -1676,7 +1680,36 @@ pub fn serve(repository_root: Option<&Path>, config_path: Option<&Path>) -> Resu
 }
 
 impl Runtime {
+    fn retain_failed_desktop_start(&self, descriptor: &Path, pid: Option<u32>) -> bool {
+        let Some(pid) = pid.filter(|_| self.desktop_owned) else {
+            return false;
+        };
+        self.desktop_startup_unknown.store(true, Ordering::SeqCst);
+        self.shutdown.store(true, Ordering::SeqCst);
+        // Keep the agent, preset and ordinary descriptor. An immutable private
+        // identity copy survives best-effort cleanup; any write failure still
+        // leaves the sticky UNKNOWN gate and prevents a successful receipt.
+        let _ =
+            crate::desktop_owner::failed_start_identity(&self.paths.runtime_dir, descriptor, pid);
+        if let Ok(mut value) = read_descriptor(descriptor) {
+            value.pid = value.pid.or(Some(pid));
+            let _ = write_descriptor(descriptor, &value);
+        }
+        true
+    }
+
     fn list_presets(&self) -> Result<Value> {
+        // This bb helper is a daemon child too. Drain it before a desktop
+        // cleanup receipt; materialization already runs under create's gate.
+        let _desktop_process = if self.desktop_owned {
+            Some(crate::desktop_owner::process_admission(
+                true,
+                &self.shutdown,
+                &self.residency,
+            )?)
+        } else {
+            None
+        };
         let expression = r#"
 (require '[qi.presets :as presets]
          '[cheshire.core :as json]
@@ -1829,10 +1862,13 @@ impl Runtime {
             let Ok(descriptor) = read_descriptor(&path) else {
                 continue;
             };
-            let residency = self
-                .residency
-                .lock()
-                .expect("runtime residency mutex poisoned");
+            let Ok(residency) = crate::desktop_owner::process_admission(
+                self.desktop_owned,
+                &self.shutdown,
+                &self.residency,
+            ) else {
+                return;
+            };
             if self
                 .agents
                 .lock()
@@ -1919,10 +1955,11 @@ impl Runtime {
         {
             self.sweep_idle_workers_with_threshold(Duration::ZERO, true)?;
         }
-        let _residency = self
-            .residency
-            .lock()
-            .expect("runtime residency mutex poisoned");
+        let _residency = crate::desktop_owner::process_admission(
+            self.desktop_owned,
+            &self.shutdown,
+            &self.residency,
+        )?;
         let max_workers = configured_max_workers();
         if self.workers.lock().expect("workers mutex poisoned").len() >= max_workers {
             bail!("worker quota reached ({max_workers}); stop an agent before creating another")
@@ -2068,6 +2105,9 @@ impl Runtime {
         let (connected_descriptor, worker, snapshot, summary) = match startup {
             Ok(started) => started,
             Err(error) => {
+                if self.retain_failed_desktop_start(&descriptor_path, spawned_pid) {
+                    return Err(error).context("desktop worker startup UNKNOWN; identity retained and automatic restart blocked");
+                }
                 self.agents
                     .lock()
                     .expect("agents mutex poisoned")
@@ -2370,10 +2410,11 @@ impl Runtime {
         {
             self.sweep_idle_workers_with_threshold(Duration::ZERO, true)?;
         }
-        let _residency = self
-            .residency
-            .lock()
-            .expect("runtime residency mutex poisoned");
+        let _residency = crate::desktop_owner::process_admission(
+            self.desktop_owned,
+            &self.shutdown,
+            &self.residency,
+        )?;
         let agent = self
             .agents
             .lock()
@@ -2394,11 +2435,21 @@ impl Runtime {
         {
             return Ok(worker);
         }
-        self.workers
+        let previous_worker = {
+            let mut workers = self.workers.lock().expect("workers mutex poisoned");
+            if self.desktop_owned {
+                workers.get(&agent.worker_id).cloned()
+            } else {
+                workers.remove(&agent.worker_id)
+            }
+        };
+        let resident_count = self
+            .workers
             .lock()
             .expect("workers mutex poisoned")
-            .remove(&agent.worker_id);
-        if self.workers.lock().expect("workers mutex poisoned").len() >= configured_max_workers() {
+            .len()
+            .saturating_sub(usize::from(self.desktop_owned && previous_worker.is_some()));
+        if resident_count >= configured_max_workers() {
             bail!("worker quota reached; no inactive worker could be resumed")
         }
         let descriptor_path = self.paths.worker_descriptor(&agent.worker_id);
@@ -2408,6 +2459,11 @@ impl Runtime {
                 descriptor_path.display()
             )
         })?;
+        if self.desktop_owned {
+            if let Some(worker) = &previous_worker {
+                retain_worker_identity(&mut descriptor, &worker.descriptor)?;
+            }
+        }
         let mut spawned_pid = None;
         let startup = (|| -> Result<_> {
             let connected_descriptor = if descriptor.status == "running"
@@ -2416,7 +2472,13 @@ impl Runtime {
             {
                 descriptor.clone()
             } else {
-                retire_orphaned_worker(&descriptor)?;
+                retire_orphaned_worker(&descriptor, self.desktop_owned)?;
+                if self.desktop_owned {
+                    self.workers
+                        .lock()
+                        .expect("workers mutex poisoned")
+                        .remove(&agent.worker_id);
+                }
                 if agent.status != "inactive" {
                     let _ = self
                         .database
@@ -2427,6 +2489,9 @@ impl Runtime {
                 descriptor.generation = descriptor.generation.saturating_add(1);
                 descriptor.pid = None;
                 descriptor.child_pid = None;
+                if self.desktop_owned {
+                    descriptor.child_process_group = None;
+                }
                 descriptor.status = "starting".into();
                 descriptor.socket_path = self.paths.worker_socket(&agent.worker_id);
                 write_descriptor(&descriptor_path, &descriptor)?;
@@ -2442,6 +2507,9 @@ impl Runtime {
         let (connected_descriptor, worker, summary) = match startup {
             Ok(started) => started,
             Err(error) => {
+                if self.retain_failed_desktop_start(&descriptor_path, spawned_pid) {
+                    return Err(error).context("desktop worker hydration UNKNOWN; identity retained and automatic restart blocked");
+                }
                 if spawned_pid.is_some() {
                     terminate_failed_worker_start(&descriptor_path, false, spawned_pid);
                 }
@@ -3099,6 +3167,13 @@ impl Runtime {
                     }));
                     continue;
                 }
+                if self.desktop_owned {
+                    if let Err(error) = retire_orphaned_worker(&worker.descriptor, true) {
+                        outcomes.push(json!({"worker_id":worker.descriptor.worker_id,
+                            "evicted":false,"pin_reasons":[format!("cleanup-unknown:{error}")]}));
+                        continue;
+                    }
+                }
                 let _residency = self
                     .residency
                     .lock()
@@ -3264,7 +3339,13 @@ impl Runtime {
                 .expect("agents mutex poisoned")
                 .insert(current.agent_id.clone(), current.clone());
             let descriptor_path = self.paths.worker_descriptor(&current.worker_id);
-            if let Ok(descriptor) = read_descriptor(&descriptor_path) {
+            let descriptor = read_descriptor(&descriptor_path);
+            if self.desktop_owned && descriptor.is_err() {
+                bail!(
+                    "desktop archive cleanup UNKNOWN; worker descriptor retained for reconciliation"
+                );
+            }
+            if let Ok(mut descriptor) = descriptor {
                 let worker = self
                     .workers
                     .lock()
@@ -3279,6 +3360,11 @@ impl Runtime {
                             None
                         }
                     });
+                if self.desktop_owned {
+                    if let Some(worker) = &worker {
+                        retain_worker_identity(&mut descriptor, &worker.descriptor)?;
+                    }
+                }
                 if let Some(worker) = worker {
                     // Archiving must also interrupt a long-running RPC. New
                     // commands are already fenced by the stopped agent record.
@@ -3291,9 +3377,12 @@ impl Runtime {
                     worker.alive.store(false, Ordering::SeqCst);
                 }
                 if !wait_for_worker_stop(&descriptor_path, descriptor.pid, Duration::from_secs(5)) {
+                    if self.desktop_owned {
+                        check_desktop_process_observations(&descriptor)?;
+                    }
                     terminate_worker_groups(&descriptor);
                 }
-                retire_orphaned_worker(&descriptor)?;
+                retire_orphaned_worker(&descriptor, self.desktop_owned)?;
                 self.database
                     .release_workspace_lease(&descriptor.workspace_id, &descriptor.root_agent_id)?;
             }
@@ -3471,11 +3560,28 @@ impl Runtime {
         if let Some(worker) = &worker {
             worker.alive.store(false, Ordering::SeqCst);
         }
-        if let Some(descriptor) = descriptor {
-            if !wait_for_worker_stop(&descriptor_path, descriptor.pid, Duration::from_secs(5)) {
-                terminate_failed_worker_start(&descriptor_path, false, descriptor.pid);
+        if let Some(mut descriptor) = descriptor {
+            if self.desktop_owned {
+                if let Some(worker) = &worker {
+                    retain_worker_identity(&mut descriptor, &worker.descriptor)?;
+                }
             }
-            retire_orphaned_worker(&descriptor)?;
+            if !wait_for_worker_stop(&descriptor_path, descriptor.pid, Duration::from_secs(5)) {
+                if self.desktop_owned {
+                    check_desktop_process_observations(&descriptor)?;
+                    terminate_worker_groups(&descriptor);
+                } else {
+                    terminate_failed_worker_start(&descriptor_path, false, descriptor.pid);
+                }
+            }
+            retire_orphaned_worker(&descriptor, self.desktop_owned)?;
+            if self.desktop_owned {
+                let mut stopped = descriptor;
+                stopped.pid = None;
+                stopped.child_pid = None;
+                stopped.status = "stopped".into();
+                write_descriptor(&descriptor_path, &stopped)?;
+            }
         }
         self.database
             .release_workspace_lease(&agent.workspace_id, &agent.root_agent_id)?;
@@ -3496,22 +3602,35 @@ impl Runtime {
         Ok(result)
     }
 
-    fn stop_all_workers(&self) {
-        let _ = self.stop_all_workers_checked();
-    }
-
     fn stop_all_workers_checked(&self) -> Vec<String> {
-        let agent_ids: Vec<_> = self
-            .agents
-            .lock()
-            .expect("agents mutex poisoned")
-            .keys()
-            .cloned()
-            .collect();
+        let agent_ids: Vec<_> = {
+            // Do not hold residency across stop_agent (it takes that lock).
+            // Once shutdown=true, later desktop starters fail under this same
+            // gate; earlier worker/helper starts finish before this snapshot.
+            let _drained =
+                crate::desktop_owner::drain_processes(self.desktop_owned, &self.residency);
+            self.agents
+                .lock()
+                .expect("agents mutex poisoned")
+                .keys()
+                .cloned()
+                .collect()
+        };
         let mut errors = Vec::new();
         for agent_id in agent_ids {
             if self.stop_agent(&agent_id).is_err() {
                 errors.push(format!("worker cleanup failed for agent {agent_id}"));
+            }
+        }
+        if self.desktop_owned {
+            let remaining = self.workers.lock().expect("workers mutex poisoned").len();
+            if remaining != 0 {
+                errors.push(format!(
+                    "{remaining} worker registrations remain after cleanup"
+                ));
+            }
+            if self.desktop_startup_unknown.load(Ordering::SeqCst) {
+                errors.push("failed worker startup cleanup is UNKNOWN; retained identity requires reconciliation".into());
             }
         }
         errors
@@ -5358,12 +5477,57 @@ fn spawn_worker_proxy(descriptor_path: &Path) -> Result<u32> {
     Ok(pid)
 }
 
-fn retire_orphaned_worker(descriptor: &WorkerDescriptor) -> Result<()> {
+fn retain_worker_identity(
+    descriptor: &mut WorkerDescriptor,
+    known: &WorkerDescriptor,
+) -> Result<()> {
+    if descriptor.worker_id != known.worker_id || descriptor.generation != known.generation {
+        bail!("desktop worker identity generation is UNKNOWN; retaining cleanup state");
+    }
+    // A stopped descriptor may already have cleared these fields. Retain the
+    // connection's recorded identity until actual process/group absence wins.
+    descriptor.pid = descriptor.pid.or(known.pid);
+    descriptor.child_pid = descriptor.child_pid.or(known.child_pid);
+    descriptor.child_process_group = descriptor.child_process_group.or(known.child_process_group);
+    Ok(())
+}
+
+fn check_desktop_process_observations(descriptor: &WorkerDescriptor) -> Result<()> {
+    for pid in [descriptor.pid, descriptor.child_pid].into_iter().flatten() {
+        crate::desktop_owner::process_presence(pid, false)?;
+    }
+    for group in [descriptor.pid, descriptor.child_process_group]
+        .into_iter()
+        .flatten()
+    {
+        crate::desktop_owner::process_presence(group, true)?;
+    }
+    Ok(())
+}
+
+fn retire_orphaned_worker(descriptor: &WorkerDescriptor, strict: bool) -> Result<()> {
+    let alive = |pid: Option<u32>| -> Result<bool> {
+        if strict {
+            match pid {
+                Some(pid) => crate::desktop_owner::process_presence(pid, false),
+                None => Ok(false),
+            }
+        } else {
+            Ok(process_alive(pid))
+        }
+    };
+    let group_alive = |group: u32| -> Result<bool> {
+        if strict {
+            crate::desktop_owner::process_presence(group, true)
+        } else {
+            Ok(unsafe { libc::kill(-(group as i32), 0) } == 0)
+        }
+    };
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
-    while process_alive(descriptor.pid) && std::time::Instant::now() < deadline {
+    while alive(descriptor.pid)? && std::time::Instant::now() < deadline {
         thread::sleep(Duration::from_millis(20));
     }
-    if process_alive(descriptor.pid) {
+    if alive(descriptor.pid)? {
         bail!("existing worker proxy is still alive; refusing a second session writer")
     }
     if let Some(group) = descriptor.pid {
@@ -5373,7 +5537,8 @@ fn retire_orphaned_worker(descriptor: &WorkerDescriptor) -> Result<()> {
         {
             bail!("orphan worker process group does not match its recorded child")
         }
-        if let Some(child_pid) = descriptor.child_pid.filter(|pid| process_alive(Some(*pid)))
+        if let Some(child_pid) = descriptor.child_pid
+            && alive(Some(child_pid))?
             && unsafe { libc::getpgid(child_pid as i32) } != child_group as i32
         {
             bail!("orphan worker process ownership could not be verified")
@@ -5384,21 +5549,28 @@ fn retire_orphaned_worker(descriptor: &WorkerDescriptor) -> Result<()> {
         groups.sort_unstable();
         groups.dedup();
         for group in groups {
-            if unsafe { libc::kill(-(group as i32), 0) } == 0 {
+            if group_alive(group)? {
                 terminate_worker_process_group(Some(group));
                 let deadline = std::time::Instant::now() + Duration::from_secs(5);
-                while unsafe { libc::kill(-(group as i32), 0) } == 0
-                    && std::time::Instant::now() < deadline
-                {
+                while group_alive(group)? && std::time::Instant::now() < deadline {
                     thread::sleep(Duration::from_millis(20));
                 }
-                if unsafe { libc::kill(-(group as i32), 0) } == 0 {
+                if group_alive(group)? {
                     bail!("orphan worker tools have not exited; refusing a second session writer")
                 }
             }
         }
-    } else if process_alive(descriptor.child_pid) {
-        bail!("orphan worker has no recorded process group")
+    } else {
+        if alive(descriptor.child_pid)? {
+            bail!("orphan worker has no recorded process group")
+        }
+        if strict {
+            if let Some(group) = descriptor.child_process_group {
+                if group_alive(group)? {
+                    bail!("orphan worker group remains without a recorded proxy identity");
+                }
+            }
+        }
     }
     Ok(())
 }
