@@ -697,7 +697,7 @@ test("network-exposed web host accepts an HTTPS proxy origin and secures its coo
       headers: { "X-Forwarded-Host": proxyHeaders["X-Forwarded-Host"] },
       redirect: "manual",
     });
-    assert.equal(cookie.status, 303);
+    assert.equal(cookie.status, 200);
     assert.match(cookie.headers.get("set-cookie") || "", /; Secure$/);
 
     const accepted = await fetch(`${base}/api/workspaces`, {

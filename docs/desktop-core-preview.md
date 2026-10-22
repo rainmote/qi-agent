@@ -43,6 +43,13 @@ npm run desktop:verify-preview
 不制作/挂载 DMG、不发布、不自动安装，不使用签名密钥或公证服务。
 用户试用应直接打开交付的 `.app`，无需重走构建；本机 ad-hoc 包不等于已公证发行。
 
+桌面从 Tauri 页面进入本地 Host 时，认证先经过受 CSP 限制的同源落地页，再移除 URL 中的
+token；保留 `HttpOnly + SameSite=Strict`，避免 WebKit 在跨站 303 链中未发送 Cookie 而显示 401。
+原生验收使用 schema 2：两个独立进程共享私有 fixture 的 state 和专用持久 WebKit store。
+必须同时观察到无 token 的地址、真实可输入 App DOM，以及 WebKit 自身仅通过 Cookie 的
+`/api/bootstrap` 成功；`PageLoadFinished` 和 Rust Bearer 探针不再单独构成启动通过。
+第一阶段清理未知时不启动第二阶段，测试不复用用户应用状态或凭据。
+
 ChatGPT 登录复用本机 Codex 的正常凭据读取路径，不把登录信息写入应用包。
 含可选参数的内置工具使用 `strict: false`；两个 Responses 适配器对未声明的
 `strict` 也明确发送 `false`，避免服务端将可选字段改为必填。显式且兼容的

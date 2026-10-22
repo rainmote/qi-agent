@@ -27,7 +27,9 @@ bb web
 
 默认从 `127.0.0.1:3080` 开始监听；端口已占用时会逐一尝试后续端口，直至成功或到达端口
 范围上限。启动日志会打印一个只使用一次的带 token URL；首次打开后，
-Host 把随机 token 换成 `HttpOnly + SameSite=Strict` Cookie，并重定向到不含 token 的地址。
+Host 把随机 token 换成 `HttpOnly + SameSite=Strict` Cookie，先提交仅允许固定脚本的同源落地页，
+再导航到不含 token 的地址。落地页禁止缓存和 Referrer，不反射请求参数；它避免 WebKit
+在跨站 HTTP 重定向链中扣留 Strict Cookie，认证和 Origin 检查保持不变。
 可以显式选择首个工作区或端口：
 
 ```bash
