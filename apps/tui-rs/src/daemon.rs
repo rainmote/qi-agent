@@ -2459,10 +2459,10 @@ impl Runtime {
                 descriptor_path.display()
             )
         })?;
-        if self.desktop_owned {
-            if let Some(worker) = &previous_worker {
-                retain_worker_identity(&mut descriptor, &worker.descriptor)?;
-            }
+        if self.desktop_owned
+            && let Some(worker) = &previous_worker
+        {
+            retain_worker_identity(&mut descriptor, &worker.descriptor)?;
         }
         let mut spawned_pid = None;
         let startup = (|| -> Result<_> {
@@ -3172,16 +3172,16 @@ impl Runtime {
                     }));
                     continue;
                 }
-                if self.desktop_owned {
-                    if let Err(error) = retire_orphaned_worker(
+                if self.desktop_owned
+                    && let Err(error) = retire_orphaned_worker(
                         &worker.descriptor,
                         true,
                         &self.paths.worker_descriptor(&worker.descriptor.worker_id),
-                    ) {
-                        outcomes.push(json!({"worker_id":worker.descriptor.worker_id,
-                            "evicted":false,"pin_reasons":[format!("cleanup-unknown:{error}")]}));
-                        continue;
-                    }
+                    )
+                {
+                    outcomes.push(json!({"worker_id":worker.descriptor.worker_id,
+                        "evicted":false,"pin_reasons":[format!("cleanup-unknown:{error}")]}));
+                    continue;
                 }
                 let _residency = self
                     .residency
@@ -3369,10 +3369,10 @@ impl Runtime {
                             None
                         }
                     });
-                if self.desktop_owned {
-                    if let Some(worker) = &worker {
-                        retain_worker_identity(&mut descriptor, &worker.descriptor)?;
-                    }
+                if self.desktop_owned
+                    && let Some(worker) = &worker
+                {
+                    retain_worker_identity(&mut descriptor, &worker.descriptor)?;
                 }
                 if let Some(worker) = worker {
                     // Archiving must also interrupt a long-running RPC. New
@@ -3575,10 +3575,10 @@ impl Runtime {
             worker.alive.store(false, Ordering::SeqCst);
         }
         if let Some(mut descriptor) = descriptor {
-            if self.desktop_owned {
-                if let Some(worker) = &worker {
-                    retain_worker_identity(&mut descriptor, &worker.descriptor)?;
-                }
+            if self.desktop_owned
+                && let Some(worker) = &worker
+            {
+                retain_worker_identity(&mut descriptor, &worker.descriptor)?;
             }
             if !wait_for_worker_stop(&descriptor_path, descriptor.pid, Duration::from_secs(5)) {
                 if self.desktop_owned {
@@ -5628,12 +5628,11 @@ fn retire_orphaned_worker(
         if alive(descriptor.child_pid)? {
             bail!("orphan worker has no recorded process group")
         }
-        if strict {
-            if let Some(group) = descriptor.child_process_group {
-                if group_alive(group)? {
-                    bail!("orphan worker group remains without a recorded proxy identity");
-                }
-            }
+        if strict
+            && let Some(group) = descriptor.child_process_group
+            && group_alive(group)?
+        {
+            bail!("orphan worker group remains without a recorded proxy identity");
         }
     }
     let deadline = std::time::Instant::now() + Duration::from_secs(5);

@@ -411,10 +411,12 @@ pub fn serve(descriptor_path: &Path) -> Result<()> {
     let shutdown_requested = Arc::new(AtomicBool::new(false));
     let mut child = start_babashka(
         &live_descriptor,
-        Arc::clone(&active),
-        Arc::clone(&event_buffer),
-        Arc::clone(&sequence),
-        Arc::clone(&stdin),
+        BabashkaStreams {
+            active: Arc::clone(&active),
+            event_buffer: Arc::clone(&event_buffer),
+            sequence: Arc::clone(&sequence),
+            stdin: Arc::clone(&stdin),
+        },
         &descriptor_path,
         Arc::clone(&watchdog),
         Arc::clone(&shutdown_requested),
@@ -624,10 +626,12 @@ pub fn serve(descriptor_path: &Path) -> Result<()> {
             thread::sleep(Duration::from_millis(delay_ms));
             child = start_babashka(
                 &live_descriptor,
-                Arc::clone(&active),
-                Arc::clone(&event_buffer),
-                Arc::clone(&sequence),
-                Arc::clone(&stdin),
+                BabashkaStreams {
+                    active: Arc::clone(&active),
+                    event_buffer: Arc::clone(&event_buffer),
+                    sequence: Arc::clone(&sequence),
+                    stdin: Arc::clone(&stdin),
+                },
                 &descriptor_path,
                 Arc::clone(&watchdog),
                 Arc::clone(&shutdown_requested),
@@ -643,16 +647,26 @@ pub fn serve(descriptor_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn start_babashka(
-    descriptor: &Arc<Mutex<WorkerDescriptor>>,
+struct BabashkaStreams {
     active: ActiveWriter,
     event_buffer: Arc<Mutex<VecDeque<Value>>>,
     sequence: Arc<AtomicU64>,
     stdin: ActiveStdin,
+}
+
+fn start_babashka(
+    descriptor: &Arc<Mutex<WorkerDescriptor>>,
+    streams: BabashkaStreams,
     descriptor_path: &Path,
     watchdog: SharedWatchdog,
     closing: Arc<AtomicBool>,
 ) -> Result<std::process::Child> {
+    let BabashkaStreams {
+        active,
+        event_buffer,
+        sequence,
+        stdin,
+    } = streams;
     let snapshot = descriptor
         .lock()
         .expect("descriptor mutex poisoned")
