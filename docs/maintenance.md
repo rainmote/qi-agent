@@ -26,7 +26,7 @@ Web 写入 claim、Codex run 与真实 preflight 都复核同一回执。未知�
 
 每次检查使用新容器，产物不跨检查共享。镜像须包含该任务的工具和离线依赖；`maintenance/image/Dockerfile` 提供 Rust、Babashka、Node 和 Chromium 的固定工具链配方，启动时从只读缓存初始化工作目录。镜像构建成功与完整容器验收分别记录，缺少环境的检查会阻断，不能标成不适用。空间受限时可按 [远程宿主验证](remote-maintenance.md) 将 CI 导出的固定镜像加载到飞牛等 ARM64 宿主。
 
-`node maintenance/build-image.mjs /absolute/image.json [EXACT_BASELINE_SHA]` 从干净提交构建镜像。历史基线与当前源码的 Cargo 锁文件不同时，显式提供基线 SHA，将两套依赖预取到镜像；构建回执同时记录 source_sha 和 baseline_sha。历史基线仍按原锁文件执行，不用当前依赖覆盖旧证据。两者的 npm 锁文件必须相同，否则构建会拒绝，需要分别制作精确依赖镜像。
+`node maintenance/build-image.mjs /absolute/image.json [EXACT_BASELINE_SHA]` 从干净提交构建镜像。显式提供基线 SHA 时，镜像分别从当前源码和固定基线准备独立的 npm、Rust target、Chromium 缓存；构建回执同时记录 source_sha 和 baseline_sha。运行入口以 package-lock.json、TUI Cargo.lock 及存在时的 desktop supervisor Cargo.lock 的完整 SHA256 组合选择同一缓存槽的全部依赖，拒绝混搭或未知锁组合。旧基线没有 supervisor 锁时记录其缺席；不能借此注入未准备的桌面 Rust 依赖。历史基线保留自己的 npm/Playwright 版本，不用当前依赖覆盖旧证据；即使两份 npm 锁不同也不共享 node_modules 或浏览器版本。构建及完整离线验收仍必须在 Docker/CI 实际运行，单元 fixture 通过不能冒充镜像通过。
 
 ## 手动使用
 

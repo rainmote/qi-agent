@@ -201,7 +201,7 @@ test("production Web trust, cancellation, recovery and composer E2E", { timeout:
       await approval.getByRole("button", { name: "停止运行", exact: true }).click();
       await until(async () => calls.filter(call => call.body.method === "turn.abort").length === before + 1, "Stop was not sent");
       assert.equal(await approval.getByRole("button", { name: "正在停止…", exact: true }).isDisabled(), true);
-      assert.equal(await approval.getByRole("button", { name: "仅允许一次", exact: true }).isDisabled(), true);
+      assert.equal(await approval.getByRole("button", { name: "Allow once", exact: true }).isDisabled(), true);
       release(); holdStop = null;
       await approval.waitFor({ state: "hidden" });
       await until(async () => (await rpc<SessionSnapshot>(session.id, "session.snapshot")).state.phase === "idle", "Runtime did not stop");
@@ -291,11 +291,11 @@ test("production Web trust, cancellation, recovery and composer E2E", { timeout:
       assert.equal(existsSync(join(child, "approval.txt")), false);
       await input.fill("确认操作后继续编辑的草稿");
       rejectApproval = true;
-      await approval.getByRole("button", { name: "仅允许一次", exact: true }).click();
+      await approval.getByRole("button", { name: "Allow once", exact: true }).click();
       await approval.getByRole("alert").filter({ hasText: "Injected approval failure" }).waitFor();
       assert.equal((await rpc<SessionSnapshot>(session.id, "session.snapshot")).interactions.length, 1);
       assert.equal(existsSync(join(child, "approval.txt")), false);
-      await approval.getByRole("button", { name: "仅允许一次", exact: true }).click();
+      await approval.getByRole("button", { name: "Allow once", exact: true }).click();
       await p.locator(".timeline").getByText("Offline continuation complete.", { exact: true }).waitFor();
       assert.equal(await readFile(join(child, "approval.txt"), "utf8"), "approved by browser");
       assert.equal(existsSync(join(project, "approval.txt")), false);

@@ -13,6 +13,7 @@ import { providerConfig } from '../../maintenance/lib/provider.mjs';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const runtimeFiles = { 'src/qi/kernel.clj':'src/qi/kernel.clj', 'src/qi/generation.clj':'src/qi/generation.clj',
+  'src/qi/context_summary.clj':'src/qi/context_summary.clj', 'src/qi/tool_images.clj':'src/qi/tool_images.clj',
   'worker.clj':'evals/experiments/memory_worker.clj', 'relay.mjs':'maintenance/relay.mjs' };
 const inside = (child, parent) => child === parent || child.startsWith(parent + path.sep);
 async function regular(file, limit = 16 * 1024 * 1024) {

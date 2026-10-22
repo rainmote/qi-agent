@@ -2459,10 +2459,10 @@ impl Runtime {
                 descriptor_path.display()
             )
         })?;
-        if self.desktop_owned {
-            if let Some(worker) = &previous_worker {
-                retain_worker_identity(&mut descriptor, &worker.descriptor)?;
-            }
+        if self.desktop_owned
+            && let Some(worker) = &previous_worker
+        {
+            retain_worker_identity(&mut descriptor, &worker.descriptor)?;
         }
         let mut spawned_pid = None;
         let startup = (|| -> Result<_> {
@@ -3172,13 +3172,16 @@ impl Runtime {
                     }));
                     continue;
                 }
-                if self.desktop_owned {
-                    if let Err(error) = retire_orphaned_worker(&worker.descriptor, true,
-                        &self.paths.worker_descriptor(&worker.descriptor.worker_id)) {
-                        outcomes.push(json!({"worker_id":worker.descriptor.worker_id,
-                            "evicted":false,"pin_reasons":[format!("cleanup-unknown:{error}")]}));
-                        continue;
-                    }
+                if self.desktop_owned
+                    && let Err(error) = retire_orphaned_worker(
+                        &worker.descriptor,
+                        true,
+                        &self.paths.worker_descriptor(&worker.descriptor.worker_id),
+                    )
+                {
+                    outcomes.push(json!({"worker_id":worker.descriptor.worker_id,
+                        "evicted":false,"pin_reasons":[format!("cleanup-unknown:{error}")]}));
+                    continue;
                 }
                 let _residency = self
                     .residency
@@ -3366,10 +3369,10 @@ impl Runtime {
                             None
                         }
                     });
-                if self.desktop_owned {
-                    if let Some(worker) = &worker {
-                        retain_worker_identity(&mut descriptor, &worker.descriptor)?;
-                    }
+                if self.desktop_owned
+                    && let Some(worker) = &worker
+                {
+                    retain_worker_identity(&mut descriptor, &worker.descriptor)?;
                 }
                 if let Some(worker) = worker {
                     // Archiving must also interrupt a long-running RPC. New
@@ -3572,10 +3575,10 @@ impl Runtime {
             worker.alive.store(false, Ordering::SeqCst);
         }
         if let Some(mut descriptor) = descriptor {
-            if self.desktop_owned {
-                if let Some(worker) = &worker {
-                    retain_worker_identity(&mut descriptor, &worker.descriptor)?;
-                }
+            if self.desktop_owned
+                && let Some(worker) = &worker
+            {
+                retain_worker_identity(&mut descriptor, &worker.descriptor)?;
             }
             if !wait_for_worker_stop(&descriptor_path, descriptor.pid, Duration::from_secs(5)) {
                 if self.desktop_owned {
@@ -5529,11 +5532,17 @@ fn check_desktop_process_observations(descriptor: &WorkerDescriptor) -> Result<(
     Ok(())
 }
 
-fn final_retired_identity(mut latest: WorkerDescriptor, known: &WorkerDescriptor) -> Result<WorkerDescriptor> {
+fn final_retired_identity(
+    mut latest: WorkerDescriptor,
+    known: &WorkerDescriptor,
+) -> Result<WorkerDescriptor> {
     // An absent/cleared PID is expected on normal stop. A different/new PID
     // has not been proven absent and must never pass a stale cleanup snapshot.
-    for (observed, recorded) in [(latest.pid, known.pid), (latest.child_pid, known.child_pid),
-        (latest.child_process_group, known.child_process_group)] {
+    for (observed, recorded) in [
+        (latest.pid, known.pid),
+        (latest.child_pid, known.child_pid),
+        (latest.child_process_group, known.child_process_group),
+    ] {
         if observed.is_some() && observed != recorded {
             bail!("final desktop worker process identity changed; cleanup UNKNOWN");
         }
@@ -5542,7 +5551,11 @@ fn final_retired_identity(mut latest: WorkerDescriptor, known: &WorkerDescriptor
     Ok(latest)
 }
 
-fn retire_orphaned_worker(descriptor: &WorkerDescriptor, strict: bool, descriptor_path: &Path) -> Result<()> {
+fn retire_orphaned_worker(
+    descriptor: &WorkerDescriptor,
+    strict: bool,
+    descriptor_path: &Path,
+) -> Result<()> {
     let alive = |pid: Option<u32>| -> Result<bool> {
         if strict {
             match pid {
@@ -5572,10 +5585,15 @@ fn retire_orphaned_worker(descriptor: &WorkerDescriptor, strict: bool, descripto
     // an earlier stop/archive snapshot cannot close this registration race.
     let final_descriptor;
     let descriptor = if strict {
-        final_descriptor = final_retired_identity(read_descriptor(descriptor_path)
-            .context("final desktop worker descriptor unavailable; cleanup UNKNOWN")?, descriptor)?;
+        final_descriptor = final_retired_identity(
+            read_descriptor(descriptor_path)
+                .context("final desktop worker descriptor unavailable; cleanup UNKNOWN")?,
+            descriptor,
+        )?;
         &final_descriptor
-    } else { descriptor };
+    } else {
+        descriptor
+    };
     if let Some(group) = descriptor.pid {
         let child_group = descriptor.child_process_group.unwrap_or(group);
         if descriptor.child_process_group.is_some()
@@ -5610,12 +5628,11 @@ fn retire_orphaned_worker(descriptor: &WorkerDescriptor, strict: bool, descripto
         if alive(descriptor.child_pid)? {
             bail!("orphan worker has no recorded process group")
         }
-        if strict {
-            if let Some(group) = descriptor.child_process_group {
-                if group_alive(group)? {
-                    bail!("orphan worker group remains without a recorded proxy identity");
-                }
-            }
+        if strict
+            && let Some(group) = descriptor.child_process_group
+            && group_alive(group)?
+        {
+            bail!("orphan worker group remains without a recorded proxy identity");
         }
     }
     let deadline = std::time::Instant::now() + Duration::from_secs(5);

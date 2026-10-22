@@ -80,7 +80,7 @@ try {
   assert.equal(await page.getByRole('tab',{name:'Trajectory',exact:true}).count(),0);
   const saved=await page.evaluate(key=>JSON.parse(localStorage.getItem(key)),preferenceKey);
   assert.equal(saved.busyEnter,'steer');assert.equal(saved.codeFontSize,16);assert.equal(saved.terminalFontSize,19);assert.equal(saved.shortcuts.files.code,'KeyG');assert.equal(saved.locale,'en');
-  await page.keyboard.press('Alt+Shift+KeyG');await page.getByRole('button',{name:'Close files panel',exact:true}).click();const draft=page.getByRole('textbox',{name:'Message the agent',exact:true});await draft.fill('unsent draft');await draft.press('Meta+A');assert.deepEqual(await draft.evaluate(el=>[el.selectionStart,el.selectionEnd]),[0,12],'native Select All remains available');assert.equal(await draft.inputValue(),'unsent draft');
+  await page.keyboard.press('Alt+Shift+KeyG');await page.getByRole('button',{name:'Close files panel',exact:true}).click();const draft=page.getByRole('textbox',{name:'Message the agent',exact:true});await draft.fill('unsent draft');await draft.press('ControlOrMeta+A');assert.deepEqual(await draft.evaluate(el=>[el.selectionStart,el.selectionEnd]),[0,12],'native Select All remains available');assert.equal(await draft.inputValue(),'unsent draft');
   await settings(page);await page.getByRole('switch',{name:'Show coding view',exact:true}).click();
   await page.getByRole('button',{name:'Close settings',exact:true}).click();await page.getByRole('tab',{name:'Trajectory',exact:true}).waitFor();
   await page.setViewportSize({width:320,height:844});await settings(page);

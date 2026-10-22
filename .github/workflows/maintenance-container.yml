@@ -1,11 +1,20 @@
 name: Maintenance container
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - 'maintenance/**'
+      - 'apps/tui-rs/**'
+      - 'apps/web/tests/**'
+      - 'src/qi/generation.clj'
+      - 'src/qi/plugins/context_manager.clj'
+      - '.github/workflows/maintenance-container.yml'
   push:
     branches: [main, feat/unattended-readiness]
     paths:
       - 'maintenance/**'
       - 'apps/tui-rs/**'
+      - 'apps/web/tests/**'
       - 'src/qi/generation.clj'
       - 'src/qi/plugins/context_manager.clj'
       - '.github/workflows/maintenance-container.yml'
