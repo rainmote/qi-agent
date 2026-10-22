@@ -28,6 +28,51 @@ receipts = module("pty_receipts", "test/pty_receipt.py")
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_tty_ioctl_rule_is_literal_and_contains_only_required_commands(self):
+        rule = getattr(terminal, "TTY_IOCTL_PROFILE", None)
+        self.assertIsInstance(rule, str, "native commands need an explicit owned-TTY ioctl rule")
+        self.assertIn('(literal (param "TTY"))', rule)
+        self.assertIn('(require-all', rule)
+        required = (0x40487413, 0x4004741a, 0x40087468, 0x40047477, 0x80047476,
+                    0x80487414, 0x80487415, 0x80487416, 0x2000745e)
+        for number in required:
+            self.assertIn(f'(ioctl-command #x{number:08x})', rule)
+        self.assertEqual(rule.count('(ioctl-command '), len(required))
+        self.assertNotIn('file-write', rule)
+        self.assertNotIn('subpath', rule)
+        self.assertNotIn('prefix', rule)
+
+    def test_owned_tty_identity_is_derived_from_descriptor_and_rejects_aliases(self):
+        identity = getattr(terminal, "owned_tty_identity", None)
+        self.assertTrue(callable(identity), "TTY authority must come from a kernel descriptor")
+        device = Mock(st_mode=terminal.stat.S_IFCHR | 0o620, st_dev=1, st_ino=2,
+                      st_rdev=123, st_uid=501)
+        with patch.object(terminal.os, 'ttyname', return_value='/dev/ttys123'), \
+             patch.object(terminal.os, 'fstat', return_value=device), \
+             patch.object(terminal.os, 'lstat', return_value=device), \
+             patch.object(terminal.os, 'getuid', return_value=501), \
+             patch.object(terminal.os.path, 'realpath', side_effect=lambda value: value):
+            self.assertEqual(identity(0), {'path': '/dev/ttys123', 'rdev': 123})
+            with patch.object(terminal.os, 'ttyname', return_value='/dev/tty'):
+                with self.assertRaises(ValueError): identity(0)
+            with patch.object(terminal.os, 'lstat', return_value=Mock(st_mode=device.st_mode,
+                         st_dev=1, st_ino=3, st_rdev=124, st_uid=501)):
+                with self.assertRaises(ValueError): identity(0)
+            master = Mock(st_mode=device.st_mode, st_rdev=999)
+            with patch.object(terminal.os, 'fstat', return_value=master), \
+                 patch.object(terminal.fcntl, 'ioctl', return_value=b'/dev/ttys123\0'+bytes(114)) as ioctl:
+                self.assertEqual(identity(9, master=True), {'path': '/dev/ttys123', 'rdev': 123})
+                ioctl.assert_called_once_with(9, 0x40807453, bytes(128))
+
+    def test_failed_startup_retains_only_a_bounded_diagnostic_output(self):
+        instance = terminal.Terminal('/fixture', 12345, 'native-process-group')
+        instance.output.append(b'x' * 5000)
+        self.assertIsNone(instance.state().get('startup_error_output'))
+        instance.record_failure(RuntimeError('sandbox_ready_unconfirmed'), 'sandbox-ready')
+        self.assertEqual(instance.state().get('startup_error_output'), 'x' * 4096)
+        instance.sandbox_ready = True
+        self.assertIsNone(instance.state().get('startup_error_output'))
+
     def test_guardian_restores_waitable_child_policy_before_constructing_terminal(self):
         events = []; owned = Mock()
         owned.parent_alive.return_value = False
@@ -63,22 +108,25 @@ class ProtocolTests(unittest.TestCase):
         config = {"root": "/fixture", "runtime": "/runtime", "profile": "fixture verified policy",
                   "python": "/runtime/python", "helper": "/runtime/src/qi/terminal_helper.py"}
         nonce = str(uuid.uuid4())
-        args = command(config, 12345, 9, nonce)
-        self.assertEqual(args[:7], ["/usr/bin/sandbox-exec", "-D", "WORKSPACE=/fixture", "-D", "RUNTIME=/runtime", "-p", config["profile"]])
-        self.assertEqual(args[7:12], [config["python"], "-I", "-B", config["helper"], "--sandbox-shell"])
-        self.assertEqual(args[12:], ["--parent", "12345", "--ack-fd", "9", "--ack-nonce", nonce])
+        args = command(config, 12345, 9, nonce, {'path': '/dev/ttys123', 'rdev': 123})
+        self.assertEqual(args[:9], ["/usr/bin/sandbox-exec", "-D", "WORKSPACE=/fixture", "-D", "RUNTIME=/runtime",
+                                   '-D', 'TTY=/dev/ttys123', "-p", config["profile"] + terminal.TTY_IOCTL_PROFILE])
+        self.assertEqual(args[9:14], [config["python"], "-I", "-B", config["helper"], "--sandbox-shell"])
+        self.assertEqual(args[14:], ["--parent", "12345", "--ack-fd", "9", "--ack-nonce", nonce])
 
     def test_allocator_readiness_rejects_trailing_errors_and_other_session_identity(self):
         check = getattr(terminal, "validate_ready", None)
         self.assertTrue(callable(check), "readiness must validate the whole private channel through EOF")
-        expected = {"pid": 12346, "parent": 12345, "nonce": str(uuid.uuid4())}
+        expected = {"pid": 12346, "parent": 12345, "nonce": str(uuid.uuid4()), 'tty_path': '/dev/ttys123', 'tty_rdev': 123}
         value = {**expected, "ready": True, "session": 12346, "group": 12346}
         raw = (json.dumps(value) + "\n").encode()
         self.assertEqual(check(raw, expected), value)
         for payload in [b"", raw + b'{"ready":false}\n', b"x" * 4097,
                         (json.dumps({**value, "nonce": str(uuid.uuid4())}) + "\n").encode(),
                         (json.dumps({**value, "pid": 12347}) + "\n").encode(),
-                        (json.dumps({**value, "session": 12345}) + "\n").encode()]:
+                        (json.dumps({**value, "session": 12345}) + "\n").encode(),
+                        (json.dumps({**value, 'tty_path': '/dev/ttys124'}) + '\n').encode(),
+                        (json.dumps({**value, 'tty_rdev': 124}) + '\n').encode()]:
             with self.assertRaises((ValueError, RuntimeError)):
                 check(payload, expected)
 
@@ -302,6 +350,38 @@ class ProtocolTests(unittest.TestCase):
              patch.object(terminal.os, "getpgrp", return_value=11111):
             with self.assertRaisesRegex(RuntimeError, "group_identity_changed"):
                 instance.group_members(98765)
+
+    def test_exited_shell_with_empty_foreground_does_not_block_reaping(self):
+        for shell in (None, {**self.native_fixture()[1], "zombie": True}):
+            with self.subTest(shell_missing=shell is None):
+                instance, _ = self.native_fixture()
+                instance.master = 9
+                with patch.object(terminal, "process_info", return_value=shell), \
+                     patch.object(terminal, "process_ids", return_value=[]), \
+                     patch.object(terminal.os, "getuid", return_value=501), \
+                     patch.object(terminal.os, "tcgetpgrp", return_value=0), \
+                     patch.object(terminal.os, "killpg") as kill:
+                    failure = None
+                    try:
+                        instance.remember_groups()
+                    except RuntimeError as error:
+                        failure = str(error)
+                    self.assertIsNone(failure, "an exited shell with no foreground group must reach waitpid")
+                    self.assertEqual(instance.groups, {98765})
+                    self.assertFalse(instance.reaped)
+                    kill.assert_not_called()
+
+    def test_live_shell_with_empty_foreground_still_fails_closed(self):
+        instance, info = self.native_fixture()
+        instance.master = 9
+        with patch.object(terminal, "process_info", return_value=info), \
+             patch.object(terminal, "process_ids", return_value=[]), \
+             patch.object(terminal.os, "getuid", return_value=501), \
+             patch.object(terminal.os, "tcgetpgrp", return_value=0), \
+             patch.object(terminal.os, "killpg") as kill:
+            with self.assertRaisesRegex(RuntimeError, "unsafe_process_group"):
+                instance.remember_groups()
+            kill.assert_not_called()
 
 
 class ArchiveTests(unittest.TestCase):

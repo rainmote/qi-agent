@@ -1,7 +1,7 @@
 """Opt-in REAL macOS PTY component tests, never part of the ordinary unit suite.
 
-Uses a trusted session allocator and the unchanged command-child Seatbelt
-profile, with pinned portable Python. No fake manifest or host-Python fallback. Only fixed
+Uses a trusted session allocator, original file/network Seatbelt and an explicit
+owned-TTY ioctl rule, with pinned portable Python. No fake manifest or host-Python fallback. Only fixed
 synthetic commands in new private fixtures; fail fast on any failure/denial.
 Detached fixture descendants release themselves or expire after six seconds.
 """
@@ -34,9 +34,12 @@ profile_source = (REPO / "src/qi/plugins/execution_world.clj").read_text()
 block = profile_source.split("(def ^:private seatbelt-profile", 1)[1].split("(defn- real-path", 1)[0]
 PROFILE = "".join(json.loads(s) for s in re.findall(r'"(?:[^"\\]|\\.)*"', block))
 PROFILE += '\n(allow file-read* (subpath (param "RUNTIME")))\n'
-EVIDENCE = {"scope": "trusted session PTY allocator; command child uses original Seatbelt; component only, not full App/resolver/model/LCU",
+EVIDENCE = {"scope": "trusted session PTY allocator; original file/network policy plus owned-TTY ioctl allowlist; component only, not full App/resolver/model/LCU",
             "python": str(PYTHON), "python_sha256": PYTHON_PIN,
-            "profile_sha256": hashlib.sha256(PROFILE.encode()).hexdigest(), "sessions": [], "accepted_limitations": []}
+            "profile_sha256": hashlib.sha256(PROFILE.encode()).hexdigest(),
+            "tty_rule_sha256": hashlib.sha256(helper.TTY_IOCTL_PROFILE.encode()).hexdigest(),
+            "effective_profile_sha256": hashlib.sha256((PROFILE + helper.TTY_IOCTL_PROFILE).encode()).hexdigest(),
+            "tty_ioctl_commands": list(helper.TTY_IOCTL_COMMANDS), "sessions": [], "accepted_limitations": []}
 
 
 class Session:
@@ -88,7 +91,9 @@ class Session:
         while True:
             value = self.line()
             if value.get("event") == "terminal.closed":
-                self.final = value["result"]; continue
+                self.final = value["result"]
+                self.record["final_receipt"] = self.final
+                continue
             if value.get("id") != request["id"]: raise RuntimeError("response_identity_changed")
             result = value["result"]
             if op == "open" and value["ok"]:
@@ -125,7 +130,9 @@ class Session:
         self.buffer.extend(tail)
         for raw in self.buffer.splitlines():
             value = json.loads(raw)
-            if value.get("event") == "terminal.closed": self.final = value["result"]
+            if value.get("event") == "terminal.closed":
+                self.final = value["result"]
+                self.record["final_receipt"] = self.final
         self.buffer.clear(); self.stderr.close(); self.process.stdout.close()
         raw = (self.root / "guardian.stderr").read_bytes()
         self.record.update(guardian_exit=self.process.returncode, stderr_bytes=len(raw), stderr_sha256=hashlib.sha256(raw).hexdigest())
@@ -165,8 +172,40 @@ class NativePTY(unittest.TestCase):
         self.assertFalse(value["descendant_containment"])
         self.assertTrue(value["sandbox_ready"])
         self.assertEqual(value["command_sandbox"], "seatbelt")
+        self.assertEqual(value['command_profile_sha256'], EVIDENCE['effective_profile_sha256'])
+        self.assertRegex(value['tty_path'], r'^/dev/ttys[0-9]{3,6}$')
         self.assertEqual(value["registered_groups"], [value["child_pid"]])
         return session
+
+    def test_00_0_owned_tty_allowlist_and_other_owned_session_rejection(self):
+        first, second = self.session(), self.session()
+        other_tty = second.record['events'][0]['tty_path']
+        code = f'''import errno,fcntl,os,struct,termios
+line=fcntl.ioctl(0,termios.TIOCGETD,bytes(4))
+fcntl.ioctl(0,termios.TIOCGWINSZ,bytes(8))
+termios.tcsetattr(0,termios.TCSANOW,termios.tcgetattr(0))
+os.tcsetpgrp(0,os.getpgrp())
+print('OWN_IOCTL_ALLOWED')
+fd=os.open({other_tty!r},os.O_RDONLY|os.O_NOCTTY)
+print('OTHER_TTY_OPENED')
+try:
+ try: fcntl.ioctl(fd,termios.TIOCGETD,bytes(4))
+ except PermissionError as error:
+  assert error.errno==errno.EPERM
+  print('OTHER_TTY_IOCTL_DENIED')
+ else: raise AssertionError('other TTY ioctl unexpectedly allowed')
+finally: os.close(fd)
+try: fcntl.ioctl(0,0x8004741b,line)
+except PermissionError as error:
+ assert error.errno==errno.EPERM
+ print('UNLISTED_SETD_DENIED')
+else: raise AssertionError('unlisted same-value SETD unexpectedly allowed')
+'''
+        first.call('input', text=f'{shlex.quote(str(PYTHON))} -I -B -c {shlex.quote(code)}\n')
+        first.read_until(lambda _: all('\r\n'+value+'\r\n' in first.output for value in
+                         ['OWN_IOCTL_ALLOWED', 'OTHER_TTY_OPENED', 'OTHER_TTY_IOCTL_DENIED', 'UNLISTED_SETD_DENIED']))
+        second.call('input', text="printf '\\161\\151-other-tty-alive\\n'\n")
+        second.read_until(lambda _: 'qi-other-tty-alive' in second.output)
 
     def test_00_real_input_output_and_resize(self):
         session = self.session()

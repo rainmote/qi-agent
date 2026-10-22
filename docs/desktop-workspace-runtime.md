@@ -91,8 +91,9 @@ Office kit/engine 声明 MPL-2.0。除许可证外，重新分发前还须核验
 不可淘汰的取消记录；取消先于手动请求准入时，原 open/input/resize 请求不会进入
 审批或进程准入。手动传输编号不暴露为模型工具参数；模型不能复用该编号重做请求。
 记录满额时关闭本会话的新请求准入，状态提供明确原因；已有终端仍可经原入口检查、
-中断和关闭，不能通过清空取消记录恢复输入。这里的回归使用 mock 终端，不表示
-下述生产 PTY 门槛已解除。
+中断和关闭，不能通过清空取消记录恢复输入。原有回归使用 mock 终端；本轮另有
+真实原生组件 RPC 覆盖取消先到、重复取消、并发关闭、信任撤销和跨会话控制拒绝，
+仍不能外推为完整 App 交互验收。
 
 用户于 2026-10-21 23:25 UTC 明确选择“参考codex实现 注册进程组清理就行
 其他的先容忍 继续做”（Sentinel_33c5b01c94b88191b4d2d042fe3d8878）。这是原生
@@ -117,9 +118,10 @@ Office kit/engine 声明 MPL-2.0。除许可证外，重新分发前还须核验
 隐式宿主读取。它没有任意文件、程序、设备路径、PID 或 socket 接口；`-I/-B`、
 清空环境、封存运行时和专有匿名管道仍是必要边界，不能称为 OS 强隔离的分配器。
 
-命令子进程必须通过固定 sandbox-exec 和私有 bootstrap 进入逐字保留的原 profile；
-只增加原有 payload 只读 grant，不给命令环境增加 `/dev` 写。有效 profile 的 SHA256
-固定校验，native 与 `:none` 组合明确拒绝，不能用配置绕过子进程 Seatbelt。
+命令子进程必须通过固定 sandbox-exec 和私有 bootstrap 进入逐字保留的原文件/网络
+规则及原有 payload 只读 grant；基线 profile 的 SHA256 固定校验。另有下文明确批准
+的自有 TTY ioctl 规则，不给整个 `/dev` 增加写权限。native 与 `:none` 组合明确拒绝，
+不能用配置绕过子进程 Seatbelt。
 fork 后先经私有注册门核对本代身份；就绪 ACK 必须在原策略内发出，完整读到 EOF、
 核对代次/父子身份及非 zombie 后才返回 open。仅就绪 fd 跨过启动 exec，shell exec
 时关闭；JSON 控制、注册门及其他会话 fd 均不进入 shell。没有新增持久服务或凭据。
@@ -132,7 +134,7 @@ fork 后先经私有注册门核对本代身份；就绪 ACK 必须在原策略�
 不再投递终止信号。close/撤销/取消共享同一次有界清理，重复调用不重发输入或信号。
 原生分配只调用一次 `os.forkpty()`，不走标准库隐藏的 openpty/旧设备回退；错误回执
 保留首个 `failure_stage`/`failure_errno`，后续清理错误不能覆盖最初失败。它不增加
-命令子进程设备写权限，也不跳过其原 Seatbelt；受信分配层的边界见上。未通过真实
+整个命令环境的设备写权限，也不跳过其 Seatbelt；受信分配层的边界见上。未通过真实
 分配和命令边界测试时不能称终端已可用。
 
 受信分配器两次真实合成组件测试均创建 PTY、确认原策略内的 shell 就绪，但第 00
@@ -140,8 +142,46 @@ fork 后先经私有注册门核对本代身份；就绪 ACK 必须在原策略�
 直接记录 `stty size` 返回 `TIOCGETD: Operation not permitted`，并观察到 ASCII
 命令输入及 Unicode 输出。两次均已确认自有 guardian 退出、shell 回收和登记组消失；
 没有改变判定或策略。每轮 fail-fast 结果仍是 1 项失败、其余 9 项未运行，尺寸/前台
-中断等整体验收保持 OPEN。命令子进程需要的终端 ioctl 权限须另行审查，不能用受信
-分配器的批准自行放宽原策略。
+中断等在那一轮保持 OPEN；原失败收据保留。后续 ioctl 权限使用独立批准，见下文，
+没有用受信分配器的批准自行放宽原策略。
+
+### 自有 TTY ioctl 与实际组件验证（2026-10-22）
+
+用户于 01:36–01:37 UTC 明确“直接放开”“功能优先”“先把功能做出来 再加强安全”，
+对应范围为本会话自有 TTY 的必要控制操作，不是整个 `/dev` 或其他会话。
+guardian 从自己 master 的 `TIOCPTYGNAME` 推导精确 `/dev/ttysNNN` literal；子进程
+核对 0/1/2 的字符设备身份，ACK 绑定同代 path/rdev。模型和 RPC 均不能指定设备路径、
+策略或编号。追加规则用 `require-all` 同时限制 literal 和九个固定编号：
+`TIOCGETA/TIOCGETD/TIOCGWINSZ/TIOCGPGRP/TIOCSPGRP/TIOCSETA/TIOCSETAW/TIOCSETAF/TIOCDRAIN`。
+基线 profile SHA256 为 `22c5ff30de2a60a7a27f673c1af67a4aa08a182328c3409a901417c59a82d6c3`；
+规则 SHA256 为 `02565159f3646afeb5f4051924d5e571491e506e03343cf5335e0f06f52076ba`；
+合成规则 SHA256 为 `b2a08fadc92a83e9aec6c32ad35fad3bfe35d5f0ca2527252ff6abbdfaff2624`。
+
+同一 macOS arm64 执行环境已实际证明编号和路径组合受支持：A 会话必要操作成功；
+A 先成功只读打开 B 的自有设备，再对其 GETD 得到 EPERM；A 同一 fd 上未列出的
+SETD（使用原值）也得到 EPERM。未静默退成全部 ioctl。
+
+首个新权限候选通过前四项后，在 200KB 末尾输出用例超时，保留 FAIL/UNKNOWN。
+只读现场观察到 guardian 与未回收的 zombie shell；当时最终通知未被测试保存，
+不能断言现场准确异常。独立复核找到“退出 shell 的前台组为 0 仍进入组校验”这条
+可达路径，纯测试得到两个有效目标断言失败；最小修复仅在 shell 缺失或 zombie 且
+前台组为 0 时跳过空组发现，继续原 waitpid 和登记组缺席验证。活跃 shell 的 0、
+非法组和其他会话成员仍拒绝。真实测试现在即时保留最终同代通知。
+
+修复候选指纹 `4a74a1874bca555b675075da41c79f15a5b8a731c13a9cb09139ce19456dce44`
+已通过 40 项纯/mock、21 项终端 mock（368 assertions）及全部 11 项真实组件测试：
+输入输出、resize、前台 SIGINT、后台任务及并发隔离、200KB 尾输出/exit 7、异常退出、
+原文件/网络拒绝、脱组限制反例、真实取消/撤销 RPC、FD 不继承和策略篡改提前拒绝。
+这是提交前候选证据；最终提交的独立收据位于原任务目录
+`native-tty-ioctl-20261022/checks/final-owned-tty-*.json`，不能借用候选绿灯。
+组件使用已 pin 的真实 portable Python，未伪造完整桌面 manifest，未运行真实模型、
+LCU 或完整 App，也没有解除许可证/Office/打包门禁。
+
+遵照用户“遇到不确定卡住看看 deepseek harness 怎么实现的”，另读回相同参考 SHA 的
+`packages/subprocess/subprocess-local/src/index.ts:290–328`（node-pty 分配）、
+`terminal.ts:107–128`（输出/退出独立事件）、`:147–160`（resize 与无前台组状态）
+及前台组信号实现。采用职责分离与退出后允许无前台任务的语义；已查路径未找到
+可照搬的 macOS 精细 ioctl 策略，没有臆测 Harness 权限或执行新的参考程序。
 
 `interrupt` 是向当前已核对前台组请求 SIGINT；TERM/KILL 投递、shell exit 和清理
 观察是不同事实。状态提供 `last_interrupt`、`termination`、`shell_exit_observed`、
@@ -153,7 +193,9 @@ fork 后先经私有注册门核对本代身份；就绪 ACK 必须在原策略�
 **已知限制**：double-fork/setsid 脱离会话或进程组的后代可能残留；快进快出的未登记
 后代也可能未被发现。macOS 身份检查与 killpg 之间没有原子 pidfd 操作，这仍是有
 校验的 best effort，不能对恶意并发逃逸或任意后代作绝对保证。UI 持续显示该范围。
-需要严格隔离的场景应保持 `:strict`，不能因原生模式通过而放宽严格门槛。
+需要严格隔离的场景应保持 `:strict`，不能因原生模式通过而放宽严格门槛。TTY literal
+也不是永久可撤销的对象 capability：master/slave 都关闭后设备编号可复用，存活的
+脱组后代可能保留路径规则。本轮未证明这种复用攻击或严格撤销；状态如实给出限制。
 
 保留的守护进程协议不把未知清理变成成功；超时/权限错误后 sticky UNKNOWN，后续
 close 不重做本机观测/发信号。未确认的 guardian 保留身份。Native 私有 ACK 仅使用

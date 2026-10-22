@@ -38,7 +38,9 @@ JVM REPL, LSP, and an LCU installation are not supplied. The workspace-runtime
 preparer now additionally requires all 37 pinned Python/wheel/pnpm/Office/xterm
 archives described in `workspace-runtime-sources.json`, under the cache's
 `workspace/<name>` paths. It performs no network requests or package installs.
-They are missing in this execution, so a new full package cannot be produced.
+All 37 archives have been downloaded and rechecked against their original pins;
+missing publisher notices and Office source accounting still block complete
+preparation, so a current full package has not been produced.
 See [runtime and PTY boundaries](../../docs/desktop-workspace-runtime.md).
 
 After independent review and a clean local commit:

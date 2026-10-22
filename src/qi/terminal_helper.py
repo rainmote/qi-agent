@@ -2,7 +2,8 @@
 
 No socket, credential discovery, login files or arbitrary executable argument.
 The trusted native guardian allocates only its own PTY outside the command
-Seatbelt. Its fixed bootstrap and shell enter the original policy before ready.
+Seatbelt. Its fixed bootstrap and shell retain the original file/network policy
+and add only an explicit owned-TTY ioctl rule before ready.
 It owns a separate session so worker-group shutdown leaves it alive long enough
 to close registered terminal groups. Native mode is best effort:
 detached descendants are outside its cleanup promise; strict mode stays closed.
@@ -17,6 +18,7 @@ import hashlib
 import json
 import os
 import pty
+import re
 import selectors
 import signal
 import stat
@@ -37,6 +39,30 @@ LAUNCH_TIMEOUT = 1.5
 # Original ExecutionWorld policy plus its unchanged payload read-only grant.
 # A policy change requires explicit source review, never an RPC/env override.
 NATIVE_PROFILE_SHA256 = "22c5ff30de2a60a7a27f673c1af67a4aa08a182328c3409a901417c59a82d6c3"
+# Darwin arm64 SDK ttycom.h/termios.h. No model/RPC-selected operation or path.
+TTY_IOCTL_COMMANDS = (0x40487413, 0x4004741a, 0x40087468, 0x40047477, 0x80047476,
+                      0x80487414, 0x80487415, 0x80487416, 0x2000745e)
+TTY_IOCTL_PROFILE = ('\n(allow file-ioctl\n  (require-all (literal (param "TTY"))\n    (require-any\n'
+                     + ''.join(f'      (ioctl-command #x{command:08x})\n' for command in TTY_IOCTL_COMMANDS)
+                     + '    )))\n')
+TIOCPTYGNAME = 0x40807453  # _IOC(IOC_OUT, 't', 83, 128), master only.
+
+
+def owned_tty_identity(fd, master=False):
+    opened = os.fstat(fd)
+    if master:
+        path = fcntl.ioctl(fd, TIOCPTYGNAME, bytes(128)).split(b'\0', 1)[0].decode('ascii')
+    else:
+        path = os.ttyname(fd)
+    if not re.fullmatch(r'/dev/ttys[0-9]{3,6}', path) or os.path.realpath(path) != path:
+        raise ValueError('owned_tty_path_changed')
+    device = os.lstat(path)
+    if (not stat.S_ISCHR(opened.st_mode) or not stat.S_ISCHR(device.st_mode)
+            or device.st_uid != os.getuid()
+            or (not master and (opened.st_dev, opened.st_ino, opened.st_rdev)
+                != (device.st_dev, device.st_ino, device.st_rdev))):
+        raise ValueError('owned_tty_device_changed')
+    return {'path': path, 'rdev': device.st_rdev}
 
 
 def native_config(root, runtime_root, profile):
@@ -54,9 +80,10 @@ def native_config(root, runtime_root, profile):
     return {"root": root, "runtime": runtime_root, "profile": profile, "python": python, "helper": helper}
 
 
-def sandbox_shell_command(config, parent, ack_fd, nonce):
+def sandbox_shell_command(config, parent, ack_fd, nonce, tty):
     return ["/usr/bin/sandbox-exec", "-D", "WORKSPACE=" + config["root"],
-            "-D", "RUNTIME=" + config["runtime"], "-p", config["profile"],
+            "-D", "RUNTIME=" + config["runtime"], "-D", "TTY=" + tty['path'],
+            "-p", config["profile"] + TTY_IOCTL_PROFILE,
             config["python"], "-I", "-B", config["helper"], "--sandbox-shell",
             "--parent", str(parent), "--ack-fd", str(ack_fd), "--ack-nonce", nonce]
 
@@ -94,7 +121,7 @@ def validate_ready(raw, expected):
     if packets and isinstance(packets[-1], dict):
         failed = packets[-1]
         if (failed.get("error") == "sandbox_shell_failed"
-                and all(failed.get(k) == v for k, v in expected.items())
+                and all(failed.get(k) == expected[k] for k in ('pid', 'parent', 'nonce'))
                 and failed.get("stage") in ("sandbox-exec", "sandbox-shell-exec")):
             error = OSError(failed.get("errno") or errno.EIO, "sandbox_shell_failed")
             error.qi_failure_stage = failed["stage"]
@@ -102,9 +129,9 @@ def validate_ready(raw, expected):
     if len(packets) != 1 or not isinstance(packets[0], dict):
         raise ValueError("sandbox_ready_channel_changed")
     value = packets[0]
-    if (set(value) != {"ready", "pid", "parent", "session", "group", "nonce"} or value["ready"] is not True
+    if (set(value) != {"ready", "pid", "parent", "session", "group", "nonce", "tty_path", "tty_rdev"} or value["ready"] is not True
             or not all(value.get(k) == v for k, v in expected.items())
-            or any(type(value.get(k)) is not int for k in ("pid", "parent", "session", "group"))
+            or any(type(value.get(k)) is not int for k in ("pid", "parent", "session", "group", "tty_rdev"))
             or value["session"] != expected["pid"] or value["group"] != expected["pid"]):
         raise ValueError("sandbox_ready_identity_changed")
     return value
@@ -118,8 +145,12 @@ def sandbox_shell(parent, ack_fd, nonce):
                 or fcntl.fcntl(ack_fd, fcntl.F_GETFL) & os.O_ACCMODE != os.O_WRONLY):
             raise RuntimeError("sandbox_shell_identity_changed")
         close_unrelated_fds({ack_fd})
+        tty = owned_tty_identity(0)
+        if any(owned_tty_identity(fd) != tty for fd in (1, 2)):
+            raise RuntimeError('terminal_stdio_identity_changed')
         value = {"ready": True, "pid": os.getpid(), "parent": parent,
-                 "session": os.getsid(0), "group": os.getpgrp(), "nonce": nonce}
+                 "session": os.getsid(0), "group": os.getpgrp(), "nonce": nonce,
+                 "tty_path": tty['path'], "tty_rdev": tty['rdev']}
         raw = (json.dumps(value) + "\n").encode()
         if os.write(ack_fd, raw) != len(raw):
             raise RuntimeError("sandbox_ready_write_unknown")
@@ -279,6 +310,8 @@ class Terminal:
         self.fork_owned = False
         self.gate_release_attempted = False
         self.startup_aborted = False
+        self.tty_identity = None
+        self.command_profile_sha256 = None
 
     def record_failure(self, error, stage):
         # Retain the first cause even when subsequent cleanup also fails.
@@ -329,9 +362,12 @@ class Terminal:
                                 raise RuntimeError("terminal_registration_gate_closed")
                         os.close(gate_read)
                         os.chdir(config["root"])
+                        tty = owned_tty_identity(0)
+                        if any(owned_tty_identity(fd) != tty for fd in (1, 2)):
+                            raise RuntimeError('terminal_stdio_identity_changed')
                         # Only ACK crosses sandbox-exec and Python bootstrap.
                         os.set_inheritable(write_exec, True)
-                        os.execve("/usr/bin/sandbox-exec", sandbox_shell_command(config, guardian, write_exec, self.generation), dict(os.environ))
+                        os.execve("/usr/bin/sandbox-exec", sandbox_shell_command(config, guardian, write_exec, self.generation, tty), dict(os.environ))
                     except BaseException as error:
                         child_failure(write_exec, self.generation, "sandbox-exec", error)
                 os.close(read_exec)
@@ -348,6 +384,9 @@ class Terminal:
                 os.close(gate_read); gate_read = None
                 self.operation_stage = "shell-registration"
                 self.register_shell()
+                self.operation_stage = 'tty-binding'
+                self.tty_identity = owned_tty_identity(self.master, master=True)
+                self.command_profile_sha256 = hashlib.sha256((config['profile'] + TTY_IOCTL_PROFILE).encode()).hexdigest()
             os.set_blocking(self.master, False)
             self.operation_stage = "pty-configure"
             self.resize(cols, rows)
@@ -412,7 +451,8 @@ class Terminal:
                     continue
                 value = os.read(fd, MAX_READY + 1)
                 if not value:
-                    validate_ready(bytes(raw), {"pid": self.pid, "parent": os.getpid(), "nonce": self.generation})
+                    validate_ready(bytes(raw), {"pid": self.pid, "parent": os.getpid(), "nonce": self.generation,
+                                               "tty_path": self.tty_identity['path'], "tty_rdev": self.tty_identity['rdev']})
                     return
                 raw.extend(value)
                 if len(raw) > MAX_READY:
@@ -480,7 +520,12 @@ class Terminal:
                 if not ((self.pid not in rows or rows[self.pid]["zombie"]) and error.errno in (errno.EIO, errno.ENOTTY)):
                     raise
             else:
-                for info in self.group_members(group):
+                # Darwin may report no foreground group after the shell has
+                # exited. This is not a group to signal; retain the waitable
+                # child until close_groups confirms reap and group absence.
+                exited = self.pid not in rows or rows[self.pid]["zombie"]
+                members = [] if group == 0 and exited else self.group_members(group)
+                for info in members:
                     rows[info["pid"]] = info
                     self.known[info["pid"]] = info["identity"]
                     self.groups.add(group)
@@ -714,8 +759,14 @@ class Terminal:
                 "command_sandbox": "seatbelt" if self.cleanup_mode == "native-process-group" else None,
                 "sandbox_ready": self.sandbox_ready,
                 "startup_aborted": self.startup_aborted,
+                "tty_path": self.tty_identity['path'] if self.tty_identity else None,
+                "tty_rdev": self.tty_identity['rdev'] if self.tty_identity else None,
+                "command_profile_sha256": self.command_profile_sha256,
+                "startup_error_output": (bytes(self.output.buffer[-4096:]).decode('utf-8', 'replace')
+                                         if self.failure_code and not self.sandbox_ready else None),
                 "shell_exit_observed": self.reaped,
-                "limitations": ["Detached descendants may survive; group absence is not full descendant containment."] if self.cleanup_mode == "native-process-group" else [],
+                "limitations": ["Detached descendants may survive; group absence is not full descendant containment.",
+                                "Owned TTY path rules are not permanently revocable object capabilities; a detached process may retain the rule after device-path reuse."] if self.cleanup_mode == "native-process-group" else [],
                 "exit_code": self.exit_code, "reason": self.reason}
 
     def request(self, request):
