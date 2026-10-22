@@ -152,16 +152,28 @@ class Session:
 
     def stop(self):
         if self.finished: return self.final
+        first_error = None
         if self.process.poll() is None:
             try:
                 if not self.unknown: self.final = self.call("close")
+            except (OSError, RuntimeError) as error:
+                first_error = error
+                self.record["close_error_category"] = type(error).__name__
             finally:
-                self.process.stdin.close()  # EOF never repeats input or signals.
+                try: self.process.stdin.close()  # EOF never repeats input or signals.
+                except OSError as error:
+                    if first_error is None: first_error = error
             try: self.process.wait(timeout=4)
             except subprocess.TimeoutExpired:
                 self.unknown = True; self.record["outcome"] = "UNKNOWN_RETAINED"
+                if first_error is not None: raise first_error
                 raise RuntimeError("owned_guardian_exit_UNKNOWN_no_force_kill")
-        return self.finish()
+        try: result = self.finish()
+        except (OSError, RuntimeError) as error:
+            if first_error is not None: raise first_error from error
+            raise
+        if first_error is not None: raise first_error
+        return result
 
 
 class NativePTY(unittest.TestCase):

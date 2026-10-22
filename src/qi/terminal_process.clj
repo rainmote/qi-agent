@@ -84,7 +84,7 @@
                                                             :cleanup_mode :descendant_containment :limitations :generation
                                                             :registered_groups :termination :last_interrupt :shell_exit_observed
                                                             :detached_observed :child_pid :guardian_pid :exit_code :reason
-                                                            :failure_code :failure_errno :failure_stage :operation_stage
+                                                            :failure_code :failure_errno :failure_stage :failure_trace :operation_stage
                                                             :command_sandbox :sandbox_ready :startup_aborted
                                                             :tty_path :tty_rdev :command_profile_sha256 :startup_error_output
                                                             :has_more :end :cursor :truncated]))))

@@ -187,8 +187,19 @@ LCU 或完整 App，也没有解除许可证/Office/打包门禁。
 观察是不同事实。状态提供 `last_interrupt`、`termination`、`shell_exit_observed`、
 `cleanup_observed`、`cleanup_scope`、`registered_groups` 与本代身份。
 原生模式中兼容字段 `cleanup_confirmed=true` **只确认登记组已观察为空且直接子进程
-已回收**，`descendant_containment` 始终 false。权限错误、身份变化、超时等保持
-`cleanup_unknown`，不重复观察/发信号；不是把 killpg 成功或 shell 退出当作强回收。
+已回收**，`descendant_containment` 始终 false。身份变化、观测失败、超时等保持
+`cleanup_unknown`，终态不会重放关闭/发信号；不是把 killpg 成功或 shell 退出当作强回收。
+
+2026-10-22 预览最终回归曾在文件/网络拒绝用例关闭时返回 EPERM。新增有界首错
+trace 精确定位到 `killpg(group, 0)`，原失败证据保留。该零信号探测的 EPERM 只表示
+缺席尚未确认：现于原一秒回收循环中保持 pending，继续 waitpid 与零信号观测，
+只有 ESRCH 才确认该组不存在；持续 EPERM 仍 UNKNOWN，不增加终止信号或扩大权限。
+[Apple XNU 的 killpg1 实现](https://raw.githubusercontent.com/apple-oss-distributions/xnu/main/bsd/kern/kern_sig.c)
+会过滤 zombie 并可在无可投递成员时返回 EPERM，支持这一保守处理；公开 main
+不是本机精确内核版本。相同参考 Harness 的 `process-inspector.ts:494–539` 分离
+存活与前台组观察，未照搬其全局 ps 扫描。测试 harness 也修复 close 抛错后跳过
+有界 wait 的缺陷，错误不重放、UNKNOWN 不改成通过；trace 仅保存最多八帧函数名
+与行号，不包含宿主路径、locals 或原始异常文本。
 
 **已知限制**：double-fork/setsid 脱离会话或进程组的后代可能残留；快进快出的未登记
 后代也可能未被发现。macOS 身份检查与 killpg 之间没有原子 pidfd 操作，这仍是有

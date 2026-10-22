@@ -304,6 +304,7 @@ class Terminal:
         self.failure_code = None
         self.failure_errno = None
         self.failure_stage = None
+        self.failure_trace = []
         self.operation_stage = "not-started"
         self.profile, self.runtime_root = profile, runtime_root
         self.sandbox_ready = False
@@ -319,6 +320,11 @@ class Terminal:
             self.failure_code = str(error) if isinstance(error, RuntimeError) else type(error).__name__
             self.failure_errno = getattr(error, "errno", None)
             self.failure_stage = getattr(error, "qi_failure_stage", stage)
+            frame = error.__traceback__
+            while frame is not None:
+                self.failure_trace.append({"function": frame.tb_frame.f_code.co_name, "line": frame.tb_lineno})
+                self.failure_trace = self.failure_trace[-8:]
+                frame = frame.tb_next
 
     def parent_alive(self):
         return os.getppid() == self.parent
@@ -581,6 +587,7 @@ class Terminal:
             return self.state()
         if self.fork_owned and not self.gate_release_attempted:
             return self.abort_unreleased_child()
+        observation_error = None
         try:
             # The unreaped direct child reserves the shell PID/session identity
             # until every group signal has finished. Never signal after reap.
@@ -615,6 +622,15 @@ class Terminal:
                         groups_alive = True
                     except ProcessLookupError:
                         pass
+                    except PermissionError as error:
+                        if error.errno != errno.EPERM:
+                            raise
+                        # Darwin can report EPERM for a still-existing group
+                        # containing only zombies. It proves no absence. Keep
+                        # the group pending in this same bounded reap loop;
+                        # never repeat termination signals after child reap.
+                        groups_alive = True
+                        if observation_error is None: observation_error = error
                 if self.reaped and not groups_alive:
                     self.cleanup = self.closed = True
                     break
@@ -623,6 +639,8 @@ class Terminal:
             self.record_failure(error, "registered-group-cleanup")
             self.reason = "cleanup_unknown"
         if not self.cleanup:
+            if observation_error is not None:
+                self.record_failure(observation_error, "registered-group-observation")
             self.reason = "cleanup_unknown"
         if self.master is not None:
             os.close(self.master)
@@ -755,7 +773,8 @@ class Terminal:
                 "registered_groups": sorted(self.groups), "detached_observed": sorted(self.detached),
                 "termination": self.termination, "last_interrupt": self.last_interrupt,
                 "failure_code": self.failure_code, "failure_errno": self.failure_errno,
-                "failure_stage": self.failure_stage, "operation_stage": self.operation_stage,
+                "failure_stage": self.failure_stage, "failure_trace": self.failure_trace,
+                "operation_stage": self.operation_stage,
                 "command_sandbox": "seatbelt" if self.cleanup_mode == "native-process-group" else None,
                 "sandbox_ready": self.sandbox_ready,
                 "startup_aborted": self.startup_aborted,

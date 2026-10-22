@@ -1,5 +1,6 @@
 """Pure protocol/archive fixtures. Never calls PTY/fork, ps, sandbox or Office."""
 import importlib.util
+import ast
 import errno
 import hashlib
 import io
@@ -7,6 +8,7 @@ import json
 from pathlib import Path
 import tarfile
 import tempfile
+import subprocess
 import unittest
 import uuid
 import zipfile
@@ -28,6 +30,64 @@ receipts = module("pty_receipts", "test/pty_receipt.py")
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_failure_trace_is_bounded_private_and_retains_the_first_cause(self):
+        instance = terminal.Terminal('/fixture', 12345, 'native-process-group')
+        def raise_fixture(depth):
+            secret_local = 'fixture-sensitive-value'
+            if depth:
+                return raise_fixture(depth - 1)
+            raise PermissionError(errno.EPERM, secret_local)
+        try:
+            raise_fixture(16)
+        except PermissionError as error:
+            instance.record_failure(error, 'registered-group-cleanup')
+        trace = instance.state().get('failure_trace')
+        self.assertIsInstance(trace, list)
+        self.assertEqual(len(trace), 8)
+        self.assertTrue(all(set(frame) == {'function', 'line'} for frame in trace))
+        self.assertEqual(trace[-1]['function'], 'raise_fixture')
+        self.assertTrue(all(isinstance(frame['line'], int) for frame in trace))
+        self.assertNotIn('fixture-sensitive-value', json.dumps(trace))
+        instance.record_failure(RuntimeError('later-error'), 'later-stage')
+        self.assertEqual(instance.state()['failure_trace'], trace)
+        self.assertEqual(instance.state()['failure_errno'], errno.EPERM)
+
+    def harness_stop(self):
+        # Extract just this method: importing the native test allocates fixture
+        # state and requires opt-in runtime variables. No native code executes.
+        tree = ast.parse((ROOT / 'test/native_pty_test.py').read_text())
+        session = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == 'Session')
+        stop = next(node for node in session.body if isinstance(node, ast.FunctionDef) and node.name == 'stop')
+        namespace = {'subprocess': subprocess}
+        exec(compile(ast.Module(body=[stop], type_ignores=[]), '<native-harness-stop>', 'exec'), namespace)
+        return namespace['stop']
+
+    def test_harness_close_error_still_waits_and_collects_receipt_without_replay(self):
+        for eof_error in (None, BrokenPipeError('fixture-eof')):
+            session = Mock(finished=False, unknown=False, record={})
+            session.process.poll.return_value = None
+            first = RuntimeError('fixture-close-unknown')
+            session.call.side_effect = first
+            session.process.stdin.close.side_effect = eof_error
+            with self.assertRaises(RuntimeError) as caught:
+                self.harness_stop()(session)
+            self.assertIs(caught.exception, first)
+            session.call.assert_called_once_with('close')
+            session.process.stdin.close.assert_called_once_with()
+            session.process.wait.assert_called_once_with(timeout=4)
+            session.finish.assert_called_once_with()
+
+    def test_harness_unknown_timeout_does_not_block_read_or_retry_close(self):
+        session = Mock(finished=False, unknown=True, record={})
+        session.process.poll.return_value = None
+        session.process.wait.side_effect = subprocess.TimeoutExpired('fixture', 4)
+        with self.assertRaisesRegex(RuntimeError, 'UNKNOWN_no_force_kill'):
+            self.harness_stop()(session)
+        self.assertEqual(session.record['outcome'], 'UNKNOWN_RETAINED')
+        session.call.assert_not_called()
+        session.process.stdin.close.assert_called_once_with()
+        session.finish.assert_not_called()
+
     def test_tty_ioctl_rule_is_literal_and_contains_only_required_commands(self):
         rule = getattr(terminal, "TTY_IOCTL_PROFILE", None)
         self.assertIsInstance(rule, str, "native commands need an explicit owned-TTY ioctl rule")
@@ -342,6 +402,34 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(instance.close()["reason"], "cleanup_unknown")
             self.assertEqual(observe.call_count, 1)
             kill.assert_not_called()
+
+    def test_group_probe_eperm_stays_pending_until_reap_and_explicit_absence(self):
+        instance, _ = self.native_fixture()
+        with patch.object(instance, 'remember_groups'), patch.object(instance, 'signal_group', return_value=False), \
+             patch.object(terminal, 'process_info', return_value=None), patch.object(instance, 'drain'), \
+             patch.object(terminal.time, 'sleep'), \
+             patch.object(terminal.os, 'waitpid', side_effect=[(0, 0), (98765, 0)]) as wait, \
+             patch.object(terminal.os, 'killpg', side_effect=[PermissionError(errno.EPERM, 'pending'),
+                                                           ProcessLookupError(errno.ESRCH, 'absent')]) as probe:
+            state = instance.close()
+            self.assertTrue(state['cleanup_observed'], 'EPERM is pending, not absence; allow the existing bounded reap loop to finish')
+            self.assertTrue(state['shell_exit_observed'])
+            self.assertEqual(wait.call_count, 2)
+            self.assertEqual(probe.call_args_list, [((98765, 0),), ((98765, 0),)])
+
+    def test_persistent_group_probe_eperm_never_claims_absence_or_repeats_signals(self):
+        instance, _ = self.native_fixture()
+        with patch.object(instance, 'remember_groups'), \
+             patch.object(instance, 'signal_group', return_value=False) as signal_group, \
+             patch.object(terminal, 'process_info', return_value=None), patch.object(instance, 'drain'), \
+             patch.object(terminal.time, 'sleep'), patch.object(terminal.time, 'monotonic', side_effect=[0, 0, .5, 1.1]), \
+             patch.object(terminal.os, 'waitpid', return_value=(98765, 0)), \
+             patch.object(terminal.os, 'killpg', side_effect=PermissionError(errno.EPERM, 'pending')):
+            state = instance.close()
+            self.assertFalse(state['cleanup_observed'])
+            self.assertEqual(state['status'], 'unknown')
+            self.assertEqual(state['failure_errno'], errno.EPERM)
+            self.assertEqual(signal_group.call_count, 2)
 
     def test_native_group_refuses_members_in_another_session(self):
         instance, info = self.native_fixture()
