@@ -36,10 +36,10 @@ In WebUI or the desktop app, create a **new session** and select **电脑操作*
 ChatGPT login by default; OpenAI API and Web-managed model providers are also
 available. Native app consent appears separately when LCU first accesses an app.
 
-For the Rust TUI, start with the same profile:
+For the Rust TUI, create a new session with the same preset:
 
 ```sh
-qi-agent --config /absolute/qi-agent/presets/computer-use/agent.edn
+qi-agent new --preset computer-use
 ```
 
 Then review `/trust` and use `/computer connect`. This is a dedicated desktop
