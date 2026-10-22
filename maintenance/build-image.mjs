@@ -21,9 +21,8 @@ try {
   if (baseline) {
     const seed = path.join(directory, '.qi-image-baseline');
     await snapshot(repo, baseline, seed);
-    if (!(await fs.readFile(path.join(seed, 'package-lock.json'))).equals(await fs.readFile(path.join(directory, 'package-lock.json')))) {
-      throw new Error('Baseline npm lock differs; build a separate image with its exact Node dependencies');
-    }
+    // Docker prepares a separate dependency slot from this exact snapshot.
+    // The entrypoint admits only complete, matching npm/Cargo lock pairs.
   }
   execFileSync('docker', ['build', '--progress=plain', '--iidfile', path.join(directory, 'image.id'), '-f', 'maintenance/image/Dockerfile', '.'],
     { cwd: directory, stdio: 'inherit' });
