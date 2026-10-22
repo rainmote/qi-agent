@@ -1378,25 +1378,29 @@ impl Database {
     }
 
     fn mark_interrupted_agent_work_uncertain(&self, agent_id: &str) -> Result<()> {
+        self.mark_interrupted_work_uncertain(Some(agent_id))
+    }
+
+    fn mark_interrupted_work_uncertain(&self, agent_id: Option<&str>) -> Result<()> {
         let connection = self.connection()?;
         connection.execute_batch("BEGIN IMMEDIATE")?;
         let result = (|| -> Result<()> {
             connection.execute(
                 "UPDATE tasks SET status='uncertain',updated_at_ms=?2
-                 WHERE agent_id=?1 AND status='running'",
+                 WHERE (?1 IS NULL OR agent_id=?1) AND status='running'",
                 params![agent_id, now_ms_i64()],
             )?;
             connection.execute(
                 "UPDATE goal_runs SET status='uncertain',completed_at_ms=?2
                  WHERE status='running' AND goal_id IN
-                   (SELECT goal_id FROM goals WHERE agent_id=?1)",
+                   (SELECT goal_id FROM goals WHERE (?1 IS NULL OR agent_id=?1))",
                 params![agent_id, now_ms_i64()],
             )?;
             connection.execute(
                 "UPDATE goals SET status='uncertain',
                    last_error='machine restart interrupted a run; inspect side effects before continuing',
                    updated_at_ms=?2,revision=revision+1
-                 WHERE agent_id=?1 AND status IN ('active','paused')",
+                 WHERE (?1 IS NULL OR agent_id=?1) AND status IN ('active','paused')",
                 params![agent_id, now_ms_i64()],
             )?;
             Ok(())
@@ -3636,7 +3640,11 @@ impl Runtime {
                 // Closing the desktop stops processes, not the saved session.
                 // Publish resumability only after confirmed cleanup and durable
                 // reconciliation; a concurrent explicit stop takes precedence.
-                self.database.mark_interrupted_agent_work_uncertain(agent_id)?;
+                // This private database belongs to the entire closing desktop.
+                // Children have distinct agent ids, so include their unfinished
+                // work too. This is reconciliation, not cleanup proof for the
+                // other roots; each still passes its own retirement gate.
+                self.database.mark_interrupted_work_uncertain(None)?;
                 let mut resumed = agent.clone();
                 resumed.status = "inactive".into();
                 resumed.lifecycle = lifecycle;

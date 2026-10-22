@@ -320,6 +320,25 @@ fn desktop_shutdown_preserves_sessions_but_not_explicit_stops_or_archives() {
     rusqlite::Connection::open(&database).unwrap().execute(
         "INSERT INTO tasks(task_id,agent_id,run_id,status,created_at_ms,updated_at_ms) VALUES('unfinished',?1,'unfinished','running',1,1)",
         [id]).unwrap();
+    {
+        // Child work has its own agent id in the private desktop database.
+        let connection = rusqlite::Connection::open(&database).unwrap();
+        for (owner, status) in [(id.as_str(), "active"), ("child-fixture", "paused")] {
+            connection.execute(
+                "INSERT INTO tasks(task_id,agent_id,run_id,status,created_at_ms,updated_at_ms) VALUES(?1,?1,?1,'running',1,1)",
+                [owner]).unwrap();
+            connection.execute(
+                "INSERT INTO goals(goal_id,agent_id,objective,status,max_continuations,created_at_ms,updated_at_ms) VALUES(?1,?1,'fixture',?2,2,1,1)",
+                [owner, status]).unwrap();
+            connection.execute(
+                "INSERT INTO goal_runs(request_id,goal_id,status,created_at_ms) VALUES(?1,?1,'running',1)",
+                [owner]).unwrap();
+        }
+        connection.execute_batch(
+            "INSERT INTO tasks(task_id,agent_id,status,created_at_ms,updated_at_ms) VALUES('done','child-fixture','completed',1,1);
+             INSERT INTO goals(goal_id,agent_id,objective,status,max_continuations,created_at_ms,updated_at_ms) VALUES('done','child-fixture','fixture','completed',2,1,1);
+             INSERT INTO goal_runs(request_id,goal_id,status,created_at_ms) VALUES('done','done','completed',1);").unwrap();
+    }
     client
         .call(None, "daemon.shutdown", json!({}), Some("desktop-shutdown"))
         .unwrap();
@@ -421,6 +440,17 @@ fn desktop_shutdown_preserves_sessions_but_not_explicit_stops_or_archives() {
         )
         .unwrap();
     assert_eq!(status, "uncertain");
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    for owner in [id.as_str(), "child-fixture"] {
+        for query in ["SELECT status FROM tasks WHERE task_id=?1",
+                      "SELECT status FROM goals WHERE goal_id=?1",
+                      "SELECT status FROM goal_runs WHERE request_id=?1"] {
+            let status: String = connection.query_row(query, [owner], |row| row.get(0)).unwrap();
+            assert_eq!(status, "uncertain", "unfinished root/child work must not be replayed: {owner}");
+            let done: String = connection.query_row(query, ["done"], |row| row.get(0)).unwrap();
+            assert_eq!(done, "completed", "terminal work must remain settled");
+        }
+    }
 }
 
 #[test]
