@@ -109,6 +109,22 @@ Office kit/engine 声明 MPL-2.0。除许可证外，重新分发前还须核验
   显式选择时写入此值；显式 `:strict` 保留。仍须完整 runtime 清单与原沙箱可用。
   OrbStack、Docker、VM 都不是其依赖，没有为了终端创建或启动这些服务。
 
+用户于 2026-10-22 00:29 UTC 明确批准最小受信 PTY 分配器方案
+（Sentinel_f8c299cb25448191a31893c9a8f4a998）。旧实现的实际日志已定位
+`python3.12(28995) deny(1) file-write-data /dev/ptmx`，不是 OrbStack 缺失。
+新的分界让受信 guardian 以 Host 同一 UID 在原命令 Seatbelt 外只分配和控制自己
+的会话 PTY；**guardian 本身不受原文件/网络沙箱约束**，Python/系统运行时可能有
+隐式宿主读取。它没有任意文件、程序、设备路径、PID 或 socket 接口；`-I/-B`、
+清空环境、封存运行时和专有匿名管道仍是必要边界，不能称为 OS 强隔离的分配器。
+
+命令子进程必须通过固定 sandbox-exec 和私有 bootstrap 进入逐字保留的原 profile；
+只增加原有 payload 只读 grant，不给命令环境增加 `/dev` 写。有效 profile 的 SHA256
+固定校验，native 与 `:none` 组合明确拒绝，不能用配置绕过子进程 Seatbelt。
+fork 后先经私有注册门核对本代身份；就绪 ACK 必须在原策略内发出，完整读到 EOF、
+核对代次/父子身份及非 zombie 后才返回 open。仅就绪 fd 跨过启动 exec，shell exec
+时关闭；JSON 控制、注册门及其他会话 fd 均不进入 shell。没有新增持久服务或凭据。
+启动失败、取消、父退出和清理未知仍有界并保留原始错误；实际结果须看精确收据。
+
 原生 guardian 登记本代 shell PID/PGID/SID 和微秒启动身份，使用 libproc 仅追踪
 自己的子进程树与该 PTY 的前台组，不读取宿主命令行、环境或全局 ps。交互 shell
 的前台/后台作业可有不同 PGID，分别登记；投递前再次核对 UID、启动身份、SID/PGID。
@@ -116,7 +132,8 @@ Office kit/engine 声明 MPL-2.0。除许可证外，重新分发前还须核验
 不再投递终止信号。close/撤销/取消共享同一次有界清理，重复调用不重发输入或信号。
 原生分配只调用一次 `os.forkpty()`，不走标准库隐藏的 openpty/旧设备回退；错误回执
 保留首个 `failure_stage`/`failure_errno`，后续清理错误不能覆盖最初失败。它不增加
-设备写权限，也不跳过原 Seatbelt；未通过真实分配测试时不能称终端已可用。
+命令子进程设备写权限，也不跳过其原 Seatbelt；受信分配层的边界见上。未通过真实
+分配和命令边界测试时不能称终端已可用。
 
 `interrupt` 是向当前已核对前台组请求 SIGINT；TERM/KILL 投递、shell exit 和清理
 观察是不同事实。状态提供 `last_interrupt`、`termination`、`shell_exit_observed`、

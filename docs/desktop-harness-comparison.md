@@ -19,7 +19,7 @@
 | Chrome computer use | 仍是明确 opt-in，扩展与 origin 未安装/注册 | OPEN，需要独立批准与实际能力验证；不等于侧栏 Browser |
 | Harness 侧栏 Browser 的租约/隔离分区 | 已编写 macOS WK 原生子视图、工作区非持久分区、会话页签保留/显式恢复、前后导航与菜单、弹出请求需明确准备及打开；不向模型暴露网页工具 | 源码与纯单元/编译检查，不等于原生验收。真实分区、导航、焦点、弹层、窄屏、取消与清理 E2E OPEN；详见 `desktop-browser.md` |
 | Platform 登录、内嵌账号文档 | qi 无对应 Platform 账号/文档凭据隔离后端 | OPEN；不能冒充同名服务或复制账户凭据，需要产品决定 |
-| 终端与 CLI | 随包 Rust CLI；侧栏输入/取消/状态、会话协议和审批；新增显式 native-process-group 有限模式，严格模式保持拒绝 | 用户明确接受脱离组后代残留；仅承诺登记组和直接子进程的有界观察。真实组件结果须看精确收据，不等于完整 App E2E；OPEN。系统 PATH 注册未授权 |
+| 终端与 CLI | 随包 Rust CLI；侧栏输入/取消/状态、会话协议和审批；显式 native-process-group，受信单会话分配器与原 Seatbelt 命令子进程分开，严格模式保持拒绝 | 用户明确接受脱离组后代残留，并批准最小分配器边界；仅承诺登记组和直接子进程的有界观察。真实组件结果须看精确收据，不等于完整 App E2E；OPEN。系统 PATH 注册未授权 |
 | 独立 Python/Office/Node/pnpm 工作区运行时 | 已锁定 37 项官方输入、无安装执行的准备器、随包 PATH/私有 HOME、审批内 Office→新 PDF 工具及文件面板明确生成后预览、全 Mach-O 验证源码 | 用户授权正式本机开发入口后，37 项缓存均已按原 hash 重算；12 个 wheel 来自 TUNA，其余官方。完整准备仍被 fontkit/dfa/brotli 的实际许可证正文缺口阻断，未用模板通过门禁。实际导入、转换、pnpm、预览/取消/重载和离线 smoke OPEN；MPL 对应源/许可证须核验。qi 明确保留新 PDF 副本，未冒称 Harness 无用户副本预览等价。详见 `desktop-workspace-runtime.md` |
 | 自动更新/强更、签名公证、发布交接 | 明确禁用；本地包仅 ad-hoc，不新建密钥、签约公证或发布 | OPEN，需要更新服务、产品配置及独立签名/发布授权 |
 | 版本与运行时闭包 | core/壳版本、源码 SHA、资源逐文件哈希、目标架构、原生依赖检查 | 最终包与签名后字节验证、离开源码目录及离线 smoke OPEN |

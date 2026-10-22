@@ -10,7 +10,7 @@ import tempfile
 import unittest
 import uuid
 import zipfile
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -28,15 +28,79 @@ receipts = module("pty_receipts", "test/pty_receipt.py")
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_guardian_restores_waitable_child_policy_before_constructing_terminal(self):
+        events = []; owned = Mock()
+        owned.parent_alive.return_value = False
+        owned.cleanup = True
+        owned.state.return_value = {"status": "closed"}
+        def construct(*_):
+            events.append("constructed")
+            return owned
+        def disposition(sig, handler):
+            if sig == terminal.signal.SIGCHLD and handler == terminal.signal.SIG_DFL:
+                events.append("SIGCHLD-default")
+        with patch.object(terminal, "Terminal", side_effect=construct), \
+             patch.object(terminal.os, "getppid", return_value=12345), \
+             patch.object(terminal.os.path, "realpath", side_effect=lambda value: value), \
+             patch.object(terminal.os, "setsid"), patch.object(terminal.os, "set_blocking"), \
+             patch.object(terminal.os, "forkpty") as fork, \
+             patch.object(terminal.signal, "signal", side_effect=disposition), patch.object(terminal, "emit"):
+            terminal.main("/fixture", 12345, "native-process-group", "fixture profile", "/runtime")
+            self.assertEqual(events[:2], ["SIGCHLD-default", "constructed"], "an ignored SIGCHLD must not permit automatic reaping and PID reuse")
+            fork.assert_not_called()
+
+    def test_allocator_rejects_changed_profile_before_any_native_operation(self):
+        configure = getattr(terminal, "native_config", None)
+        self.assertTrue(callable(configure), "native allocator must validate fixed policy before allocating")
+        with patch.object(terminal.os, "forkpty") as fork:
+            with self.assertRaisesRegex(ValueError, "profile"):
+                configure("/fixture", "/runtime", "(allow default)")
+            fork.assert_not_called()
+
+    def test_allocator_exec_is_fixed_to_original_child_sandbox_and_bootstrap(self):
+        command = getattr(terminal, "sandbox_shell_command", None)
+        self.assertTrue(callable(command), "allocator must retain the original sandbox on the command child")
+        config = {"root": "/fixture", "runtime": "/runtime", "profile": "fixture verified policy",
+                  "python": "/runtime/python", "helper": "/runtime/src/qi/terminal_helper.py"}
+        nonce = str(uuid.uuid4())
+        args = command(config, 12345, 9, nonce)
+        self.assertEqual(args[:7], ["/usr/bin/sandbox-exec", "-D", "WORKSPACE=/fixture", "-D", "RUNTIME=/runtime", "-p", config["profile"]])
+        self.assertEqual(args[7:12], [config["python"], "-I", "-B", config["helper"], "--sandbox-shell"])
+        self.assertEqual(args[12:], ["--parent", "12345", "--ack-fd", "9", "--ack-nonce", nonce])
+
+    def test_allocator_readiness_rejects_trailing_errors_and_other_session_identity(self):
+        check = getattr(terminal, "validate_ready", None)
+        self.assertTrue(callable(check), "readiness must validate the whole private channel through EOF")
+        expected = {"pid": 12346, "parent": 12345, "nonce": str(uuid.uuid4())}
+        value = {**expected, "ready": True, "session": 12346, "group": 12346}
+        raw = (json.dumps(value) + "\n").encode()
+        self.assertEqual(check(raw, expected), value)
+        for payload in [b"", raw + b'{"ready":false}\n', b"x" * 4097,
+                        (json.dumps({**value, "nonce": str(uuid.uuid4())}) + "\n").encode(),
+                        (json.dumps({**value, "pid": 12347}) + "\n").encode(),
+                        (json.dumps({**value, "session": 12345}) + "\n").encode()]:
+            with self.assertRaises((ValueError, RuntimeError)):
+                check(payload, expected)
+
+    def test_allocator_closes_all_unrelated_inherited_descriptors(self):
+        close = getattr(terminal, "close_unrelated_fds", None)
+        self.assertTrue(callable(close), "shell must not inherit control or sibling-session descriptors")
+        with patch.object(terminal.os, "listdir", return_value=["0", "1", "2", "3", "4", "9", "9999"]), \
+             patch.object(terminal.os, "close") as closed:
+            close({4, 9})
+            self.assertEqual([args.args[0] for args in closed.call_args_list], [3, 9999])
+
     def test_real_harness_requires_final_matching_cleanup_receipt_even_after_exit(self):
         expected = {"generation": "fixture-generation", "child_pid": 12345, "guardian_pid": 12344}
         result = {**expected, "status": "closed", "cleanup_confirmed": True, "cleanup_observed": True,
                   "shell_exit_observed": True, "cleanup_scope": "registered-process-groups", "descendant_containment": False,
-                  "cleanup_mode": "native-process-group", "registered_groups": [12345]}
+                  "cleanup_mode": "native-process-group", "registered_groups": [12345],
+                  "command_sandbox": "seatbelt", "sandbox_ready": True}
         self.assertTrue(receipts.cleanup_receipt_matches(result, expected, 0))
         for mutation in [{"generation": "old"}, {"child_pid": 12346}, {"guardian_pid": 12343},
                          {"cleanup_observed": False}, {"cleanup_confirmed": False}, {"shell_exit_observed": False},
-                         {"registered_groups": []}, {"registered_groups": [12346]}, {"registered_groups": [12345, 12345]}]:
+                         {"registered_groups": []}, {"registered_groups": [12346]}, {"registered_groups": [12345, 12345]},
+                         {"sandbox_ready": False}, {"command_sandbox": "none"}]:
             self.assertFalse(receipts.cleanup_receipt_matches({**result, **mutation}, expected, 0))
         for code in [None, -9, 71]: self.assertFalse(receipts.cleanup_receipt_matches(result, expected, code))
         self.assertFalse(receipts.cleanup_receipt_matches(None, expected, 0))
@@ -111,6 +175,7 @@ class ProtocolTests(unittest.TestCase):
         instance = terminal.Terminal("/fixture", 12345)
         instance.cleanup_mode = "native-process-group"
         with patch.object(instance, "parent_alive", return_value=True), \
+             patch.object(terminal, "native_config", return_value={"root": "/fixture"}), \
              patch.object(terminal, "census", return_value={}), \
              patch.object(terminal.os, "forkpty", side_effect=RuntimeError("fixture-fork-boundary")):
             with self.assertRaisesRegex(RuntimeError, "fixture-fork-boundary"):
@@ -121,6 +186,7 @@ class ProtocolTests(unittest.TestCase):
         # Both boundaries are mocked: this is never a real PTY probe. The
         # stdlib fallback would otherwise discard the first permission error.
         with patch.object(instance, "parent_alive", return_value=True), \
+             patch.object(terminal, "native_config", return_value={"root": "/fixture"}), \
              patch.object(terminal, "census", return_value={}), \
              patch.object(terminal.os, "pipe", return_value=(31, 32)), \
              patch.object(terminal.os, "close"), \
@@ -140,6 +206,7 @@ class ProtocolTests(unittest.TestCase):
     def test_native_preflight_failure_identifies_stage_before_any_allocation(self):
         instance = terminal.Terminal("/fixture", 12345, "native-process-group")
         with patch.object(instance, "parent_alive", return_value=True), \
+             patch.object(terminal, "native_config", return_value={"root": "/fixture"}), \
              patch.object(terminal, "census", side_effect=OSError("fixture library unavailable")), \
              patch.object(terminal.os, "pipe") as pipe, \
              patch.object(terminal.os, "forkpty") as first, \
@@ -166,6 +233,35 @@ class ProtocolTests(unittest.TestCase):
         info = {"pid": 98765, "parent": 12345, "group": 98765, "session": 98765,
                 "identity": instance.shell_identity, "zombie": False}
         return instance, info
+
+    def test_unreleased_owned_child_is_reaped_without_repeating_failed_identity_lookup(self):
+        instance = terminal.Terminal("/fixture", 12345, "native-process-group")
+        instance.pid = 98765; instance.fork_owned = True; instance.gate_release_attempted = False
+        instance.record_failure(PermissionError(errno.EACCES, "fixture registration denied"), "shell-registration")
+        with patch.object(instance, "remember_groups", side_effect=PermissionError("must not repeat denied lookup")) as lookup, \
+             patch.object(terminal.os, "waitpid", return_value=(98765, 0)) as wait, \
+             patch.object(terminal.os, "kill") as kill, patch.object(terminal.os, "killpg") as killpg:
+            state = instance.close()
+            self.assertTrue(state["cleanup_observed"], "a waitable pre-release child must not leak behind missing metadata")
+            self.assertTrue(state["shell_exit_observed"])
+            self.assertFalse(state["sandbox_ready"])
+            self.assertEqual(state["failure_stage"], "shell-registration")
+            wait.assert_called_once_with(98765, terminal.os.WNOHANG)
+            lookup.assert_not_called(); kill.assert_not_called(); killpg.assert_not_called()
+
+    def test_unreleased_child_that_is_not_waitable_stays_unknown_and_never_signals(self):
+        instance = terminal.Terminal("/fixture", 12345, "native-process-group")
+        instance.pid = 98765; instance.fork_owned = True; instance.gate_release_attempted = False
+        with patch.object(instance, "remember_groups", side_effect=PermissionError("fixture denied")) as lookup, \
+             patch.object(terminal.os, "waitpid", side_effect=ChildProcessError()) as wait, \
+             patch.object(terminal.os, "kill") as kill, patch.object(terminal.os, "killpg") as killpg:
+            self.assertFalse(instance.close()["cleanup_observed"])
+            count = wait.call_count
+            self.assertFalse(instance.close()["cleanup_observed"])
+            self.assertEqual(wait.call_count, count)
+            wait.assert_called_once_with(98765, terminal.os.WNOHANG)
+            lookup.assert_not_called()
+            kill.assert_not_called(); killpg.assert_not_called()
 
     def test_group_signal_rechecks_birth_identity_and_never_signals_a_reused_pid(self):
         instance, info = self.native_fixture()

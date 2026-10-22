@@ -99,7 +99,7 @@
                                "resize" {:op "resize" :cols (or cols 90) :rows (or rows 24)}
                                "interrupt" {:op "interrupt"}))) :terminal_id terminal_id)
                    (finally (dispose-cancel))))))
-           tool {:name "terminal" :description "Open/read/control a session-owned PTY in the existing execution sandbox. No login startup, automatic input retry or host-Python fallback. Unknown cleanup retains its identity."
+           tool {:name "terminal" :description "Open/read/control a session-owned PTY with a trusted allocator and the original command-child sandbox. No login startup, automatic input retry or host-Python fallback. Unknown cleanup retains its identity."
                  :parameters parameters :requires-trust true :requires-approval true
                  :execution-mode :sequential :uncertain-on-cancel true :stop-batch-on-error true
                  :execute execute}

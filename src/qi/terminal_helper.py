@@ -1,8 +1,10 @@
 """Private JSON-lines PTY guardian; invoked only by ExecutionWorld.
 
 No socket, credential discovery, login files or arbitrary executable argument.
-The guardian owns a separate session so worker-group shutdown leaves it alive
-long enough to close registered terminal groups. Native mode is best effort:
+The trusted native guardian allocates only its own PTY outside the command
+Seatbelt. Its fixed bootstrap and shell enter the original policy before ready.
+It owns a separate session so worker-group shutdown leaves it alive long enough
+to close registered terminal groups. Native mode is best effort:
 detached descendants are outside its cleanup promise; strict mode stays closed.
 """
 import collections
@@ -17,6 +19,7 @@ import os
 import pty
 import selectors
 import signal
+import stat
 import struct
 import subprocess
 import sys
@@ -29,6 +32,102 @@ MAX_INPUT = 16384
 MAX_REQUEST = 131072
 MAX_PROCESSES = 4096
 MAX_GROUPS = 256
+MAX_READY = 4096
+LAUNCH_TIMEOUT = 1.5
+# Original ExecutionWorld policy plus its unchanged payload read-only grant.
+# A policy change requires explicit source review, never an RPC/env override.
+NATIVE_PROFILE_SHA256 = "22c5ff30de2a60a7a27f673c1af67a4aa08a182328c3409a901417c59a82d6c3"
+
+
+def native_config(root, runtime_root, profile):
+    if not isinstance(profile, str) or hashlib.sha256(profile.encode()).hexdigest() != NATIVE_PROFILE_SHA256:
+        raise ValueError("native_profile_changed")
+    for path in (root, runtime_root):
+        if not isinstance(path, str) or not os.path.isabs(path) or os.path.realpath(path) != path or not os.path.isdir(path):
+            raise ValueError("native_runtime_or_root_invalid")
+    python, helper = os.path.abspath(sys.executable), os.path.abspath(__file__)
+    if (os.path.realpath(python) != python or os.path.realpath(helper) != helper
+            or os.path.commonpath((runtime_root, python)) != runtime_root):
+        raise ValueError("native_runtime_identity_changed")
+    # Production callers supply sealed payload assets. Component tests bind a
+    # byte-identical helper copy explicitly; no helper path exists in JSON.
+    return {"root": root, "runtime": runtime_root, "profile": profile, "python": python, "helper": helper}
+
+
+def sandbox_shell_command(config, parent, ack_fd, nonce):
+    return ["/usr/bin/sandbox-exec", "-D", "WORKSPACE=" + config["root"],
+            "-D", "RUNTIME=" + config["runtime"], "-p", config["profile"],
+            config["python"], "-I", "-B", config["helper"], "--sandbox-shell",
+            "--parent", str(parent), "--ack-fd", str(ack_fd), "--ack-nonce", nonce]
+
+
+def close_unrelated_fds(keep):
+    for name in os.listdir("/dev/fd"):
+        fd = int(name)
+        if fd > 2 and fd not in keep:
+            try:
+                os.close(fd)
+            except OSError as error:
+                if error.errno != errno.EBADF:
+                    raise
+
+
+def restore_child_signals():
+    for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT, signal.SIGPIPE):
+        signal.signal(sig, signal.SIG_DFL)
+
+
+def child_failure(fd, nonce, stage, error):
+    packet = {"ready": False, "error": "sandbox_shell_failed", "pid": os.getpid(),
+              "parent": os.getppid(), "nonce": nonce, "stage": stage, "errno": getattr(error, "errno", None)}
+    try:
+        os.write(fd, (json.dumps(packet) + "\n").encode())
+    except OSError:
+        pass
+    os._exit(126)
+
+
+def validate_ready(raw, expected):
+    if not raw or len(raw) > MAX_READY:
+        raise RuntimeError("sandbox_ready_unconfirmed")
+    packets = [json.loads(line) for line in raw.splitlines()]
+    if packets and isinstance(packets[-1], dict):
+        failed = packets[-1]
+        if (failed.get("error") == "sandbox_shell_failed"
+                and all(failed.get(k) == v for k, v in expected.items())
+                and failed.get("stage") in ("sandbox-exec", "sandbox-shell-exec")):
+            error = OSError(failed.get("errno") or errno.EIO, "sandbox_shell_failed")
+            error.qi_failure_stage = failed["stage"]
+            raise error
+    if len(packets) != 1 or not isinstance(packets[0], dict):
+        raise ValueError("sandbox_ready_channel_changed")
+    value = packets[0]
+    if (set(value) != {"ready", "pid", "parent", "session", "group", "nonce"} or value["ready"] is not True
+            or not all(value.get(k) == v for k, v in expected.items())
+            or any(type(value.get(k)) is not int for k in ("pid", "parent", "session", "group"))
+            or value["session"] != expected["pid"] or value["group"] != expected["pid"]):
+        raise ValueError("sandbox_ready_identity_changed")
+    return value
+
+
+def sandbox_shell(parent, ack_fd, nonce):
+    try:
+        if (parent <= 1 or os.getppid() != parent or ack_fd < 3
+                or str(uuid.UUID(nonce)) != nonce or os.getsid(0) != os.getpid() or os.getpgrp() != os.getpid()
+                or not stat.S_ISFIFO(os.fstat(ack_fd).st_mode)
+                or fcntl.fcntl(ack_fd, fcntl.F_GETFL) & os.O_ACCMODE != os.O_WRONLY):
+            raise RuntimeError("sandbox_shell_identity_changed")
+        close_unrelated_fds({ack_fd})
+        value = {"ready": True, "pid": os.getpid(), "parent": parent,
+                 "session": os.getsid(0), "group": os.getpgrp(), "nonce": nonce}
+        raw = (json.dumps(value) + "\n").encode()
+        if os.write(ack_fd, raw) != len(raw):
+            raise RuntimeError("sandbox_ready_write_unknown")
+        os.set_inheritable(ack_fd, False)  # Closed only by successful bash exec.
+        restore_child_signals()
+        os.execve("/bin/bash", ["/bin/bash", "--noprofile", "--norc", "-i"], dict(os.environ))
+    except BaseException as error:
+        child_failure(ack_fd, nonce, "sandbox-shell-exec", error)
 
 
 def descendant_containment_available():
@@ -151,7 +250,7 @@ def census():
 
 
 class Terminal:
-    def __init__(self, root, parent, cleanup_mode="strict"):
+    def __init__(self, root, parent, cleanup_mode="strict", profile=None, runtime_root=None):
         self.root, self.parent = root, parent
         self.pid = None
         self.master = None
@@ -175,6 +274,11 @@ class Terminal:
         self.failure_errno = None
         self.failure_stage = None
         self.operation_stage = "not-started"
+        self.profile, self.runtime_root = profile, runtime_root
+        self.sandbox_ready = False
+        self.fork_owned = False
+        self.gate_release_attempted = False
+        self.startup_aborted = False
 
     def record_failure(self, error, stage):
         # Retain the first cause even when subsequent cleanup also fails.
@@ -191,6 +295,10 @@ class Terminal:
             raise RuntimeError("invalid_cleanup_mode")
         if self.cleanup_mode == "strict" and not descendant_containment_available():
             raise RuntimeError("terminal_descendant_containment_unavailable")
+        config = None
+        if self.cleanup_mode == "native-process-group":
+            self.operation_stage = "allocator-config"
+            config = native_config(self.root, self.runtime_root, self.profile)
         self.operation_stage = "owner-check"
         if not self.parent_alive():
             raise RuntimeError("parent_changed")
@@ -198,13 +306,34 @@ class Terminal:
         census()  # Fail before forking any shell when ownership cannot be read.
         self.operation_stage = "control-pipe"
         read_exec, write_exec = os.pipe()
+        gate_read = gate_write = None
+        guardian = os.getpid()
         try:
+            if config:
+                gate_read, gate_write = os.pipe()
             self.operation_stage = "pty-allocate"
             # macOS forkpty already acquires a controlling terminal/session.
             # pty.fork() silently retries openpty/legacy devices after OSError,
             # masking the first refusal and its errno. Native mode never does.
             self.pid, self.master = os.forkpty() if self.cleanup_mode == "native-process-group" else pty.fork()
             if self.pid == 0:
+                if config:
+                    try:
+                        restore_child_signals()
+                        # forkpty replaced 0/1/2 with this child's TTY. No JSON
+                        # control pipe or other session descriptor may survive.
+                        close_unrelated_fds({gate_read, write_exec})
+                        with selectors.DefaultSelector() as poll:
+                            poll.register(gate_read, selectors.EVENT_READ)
+                            if not poll.select(2) or os.read(gate_read, 2) != b"1" or os.getppid() != guardian:
+                                raise RuntimeError("terminal_registration_gate_closed")
+                        os.close(gate_read)
+                        os.chdir(config["root"])
+                        # Only ACK crosses sandbox-exec and Python bootstrap.
+                        os.set_inheritable(write_exec, True)
+                        os.execve("/usr/bin/sandbox-exec", sandbox_shell_command(config, guardian, write_exec, self.generation), dict(os.environ))
+                    except BaseException as error:
+                        child_failure(write_exec, self.generation, "sandbox-exec", error)
                 os.close(read_exec)
                 try:
                     os.chdir(self.root)
@@ -212,27 +341,40 @@ class Terminal:
                 except BaseException:
                     os.write(write_exec, b"exec_failed")
                     os._exit(126)
+            self.fork_owned = True  # Only the parent of this unreaped fork PID.
             os.close(write_exec)
             write_exec = None
+            if config:
+                os.close(gate_read); gate_read = None
+                self.operation_stage = "shell-registration"
+                self.register_shell()
             os.set_blocking(self.master, False)
             self.operation_stage = "pty-configure"
             self.resize(cols, rows)
             self.operation_stage = "shell-exec-confirm"
-            with selectors.DefaultSelector() as poll:
-                poll.register(read_exec, selectors.EVENT_READ)
-                if not poll.select(2) or os.read(read_exec, 128):
-                    raise RuntimeError("terminal_exec_unconfirmed")
+            if config:
+                # A write failure can have an uncertain release outcome; only
+                # a gate never attempted is eligible for pre-execution abort.
+                self.gate_release_attempted = True
+                if os.write(gate_write, b"1") != 1:
+                    raise RuntimeError("terminal_registration_gate_unknown")
+                os.close(gate_write); gate_write = None
+                self.operation_stage = "sandbox-ready"
+                self.wait_ready(read_exec)
+            else:
+                with selectors.DefaultSelector() as poll:
+                    poll.register(read_exec, selectors.EVENT_READ)
+                    if not poll.select(2) or os.read(read_exec, 128):
+                        raise RuntimeError("terminal_exec_unconfirmed")
             if not self.parent_alive():
                 raise RuntimeError("parent_changed")
             self.operation_stage = "shell-registration"
             if self.cleanup_mode == "native-process-group":
                 info = process_info(self.pid)
-                if (info is None or info["parent"] != os.getpid() or info["group"] != self.pid
-                        or info["session"] != self.pid or info["identity"][0] != os.getuid()):
+                if (info is None or info["zombie"] or info["parent"] != os.getpid() or info["group"] != self.pid
+                        or info["session"] != self.pid or info["identity"] != self.shell_identity):
                     raise RuntimeError("shell_registration_unknown")
-                self.shell_identity = info["identity"]
-                self.known[self.pid] = self.shell_identity
-                self.groups.add(self.pid)
+                self.sandbox_ready = True
             self.operation_stage = "group-registration"
             self.remember()
             self.operation_stage = "running"
@@ -240,6 +382,42 @@ class Terminal:
             os.close(read_exec)
             if write_exec is not None:
                 os.close(write_exec)
+            for fd in (gate_read, gate_write):
+                if fd is not None:
+                    os.close(fd)
+
+    def register_shell(self):
+        deadline = time.monotonic() + LAUNCH_TIMEOUT
+        while time.monotonic() < deadline and self.parent_alive():
+            info = process_info(self.pid)
+            if info is None or info["zombie"] or info["parent"] != os.getpid() or info["identity"][0] != os.getuid():
+                raise RuntimeError("shell_registration_unknown")
+            if self.shell_identity is not None and self.shell_identity != info["identity"]:
+                raise RuntimeError("shell_identity_changed")
+            self.shell_identity = info["identity"]
+            self.known[self.pid] = self.shell_identity
+            if info["session"] == self.pid and info["group"] == self.pid:
+                self.groups.add(self.pid)
+                return
+            time.sleep(0.005)
+        raise RuntimeError("shell_registration_deadline")
+
+    def wait_ready(self, fd):
+        raw = bytearray(); deadline = time.monotonic() + LAUNCH_TIMEOUT
+        os.set_blocking(fd, False)
+        with selectors.DefaultSelector() as poll:
+            poll.register(fd, selectors.EVENT_READ)
+            while time.monotonic() < deadline and self.parent_alive():
+                if not poll.select(min(0.05, max(0, deadline - time.monotonic()))):
+                    continue
+                value = os.read(fd, MAX_READY + 1)
+                if not value:
+                    validate_ready(bytes(raw), {"pid": self.pid, "parent": os.getpid(), "nonce": self.generation})
+                    return
+                raw.extend(value)
+                if len(raw) > MAX_READY:
+                    raise RuntimeError("sandbox_ready_limit")
+        raise RuntimeError("sandbox_ready_deadline")
 
     def remember(self):
         if self.cleanup_mode == "native-process-group":
@@ -356,6 +534,8 @@ class Terminal:
         if self.pid is None:
             self.closed = self.cleanup = True
             return self.state()
+        if self.fork_owned and not self.gate_release_attempted:
+            return self.abort_unreleased_child()
         try:
             # The unreaped direct child reserves the shell PID/session identity
             # until every group signal has finished. Never signal after reap.
@@ -402,6 +582,59 @@ class Terminal:
         if self.master is not None:
             os.close(self.master)
             self.master = None
+        return self.state()
+
+    def abort_unreleased_child(self):
+        # The trusted child never received permission to exec. EOF already
+        # closed its registration gate. A successful WNOHANG wait proves this
+        # is still our waitable direct child; no other code reaps it, so the
+        # PID cannot be reused before our wait. Never signal an unknown PGID.
+        def reap():
+            waited, status = os.waitpid(self.pid, os.WNOHANG)
+            if waited == self.pid:
+                self.reaped = True
+                self.exit_code = os.waitstatus_to_exitcode(status)
+                return True
+            if waited != 0:
+                raise RuntimeError("unreleased_child_wait_identity_changed")
+            return False
+        try:
+            for sig in (None, signal.SIGTERM, signal.SIGKILL):
+                if reap():
+                    break
+                if sig is not None:
+                    try:
+                        os.kill(self.pid, sig)
+                        self.termination = signal.Signals(sig).name
+                    except ProcessLookupError:
+                        pass  # Still require waitpid, never infer cleanup.
+                deadline = time.monotonic() + (0.1 if sig is None else 0.3)
+                while time.monotonic() < deadline:
+                    if reap():
+                        break
+                    time.sleep(0.01)
+                if self.reaped:
+                    break
+            if not self.reaped:
+                raise RuntimeError("unreleased_child_exit_unconfirmed")
+            for group in self.groups:
+                try:
+                    os.killpg(group, 0)  # Only absence observation after reap.
+                except ProcessLookupError:
+                    continue
+                raise RuntimeError("unreleased_group_absence_unconfirmed")
+            self.startup_aborted = self.closed = self.cleanup = True
+        except (OSError, RuntimeError) as error:
+            self.record_failure(error, "unreleased-child-cleanup")
+            self.reason = "cleanup_unknown"
+        finally:
+            if self.master is not None:
+                try:
+                    os.close(self.master)
+                except OSError as error:
+                    self.record_failure(error, "unreleased-master-close")
+                    self.reason = "cleanup_unknown"; self.cleanup = False
+                self.master = None
         return self.state()
 
     def resize(self, cols, rows):
@@ -478,6 +711,9 @@ class Terminal:
                 "termination": self.termination, "last_interrupt": self.last_interrupt,
                 "failure_code": self.failure_code, "failure_errno": self.failure_errno,
                 "failure_stage": self.failure_stage, "operation_stage": self.operation_stage,
+                "command_sandbox": "seatbelt" if self.cleanup_mode == "native-process-group" else None,
+                "sandbox_ready": self.sandbox_ready,
+                "startup_aborted": self.startup_aborted,
                 "shell_exit_observed": self.reaped,
                 "limitations": ["Detached descendants may survive; group absence is not full descendant containment."] if self.cleanup_mode == "native-process-group" else [],
                 "exit_code": self.exit_code, "reason": self.reason}
@@ -525,11 +761,15 @@ def emit(value):
     sys.stdout.flush()
 
 
-def main(root, parent, cleanup_mode="strict"):
+def main(root, parent, cleanup_mode="strict", profile=None, runtime_root=None):
     if not os.path.isabs(root) or os.path.realpath(root) != root or os.getppid() != parent:
         raise RuntimeError("invalid_terminal_owner")
+    # This single-threaded guardian is the sole waiter for its direct child.
+    # Undo an inherited SIG_IGN so an unreaped child reserves its PID until
+    # waitpid consumes it, including failures before identity registration.
+    signal.signal(signal.SIGCHLD, signal.SIG_DFL)
     os.setsid()
-    terminal = Terminal(root, parent, cleanup_mode)
+    terminal = Terminal(root, parent, cleanup_mode, profile, runtime_root)
     stopping = [False]
     for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
         signal.signal(sig, lambda *_: stopping.__setitem__(0, True))
@@ -609,6 +849,11 @@ def main(root, parent, cleanup_mode="strict"):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 7 or sys.argv[1] != "--parent" or sys.argv[3] != "--root" or sys.argv[5] != "--cleanup-mode" or sys.argv[6] not in ("strict", "native-process-group"):
+    if len(sys.argv) == 8 and sys.argv[1:3] == ["--sandbox-shell", "--parent"] and sys.argv[4] == "--ack-fd" and sys.argv[6] == "--ack-nonce":
+        sandbox_shell(int(sys.argv[3]), int(sys.argv[5]), sys.argv[7])
+    elif (len(sys.argv) in (7, 11) and sys.argv[1] == "--parent" and sys.argv[3] == "--root" and sys.argv[5] == "--cleanup-mode"
+          and ((len(sys.argv) == 7 and sys.argv[6] == "strict")
+               or (len(sys.argv) == 11 and sys.argv[6] == "native-process-group" and sys.argv[7] == "--seatbelt-profile" and sys.argv[9] == "--runtime-root"))):
+        main(sys.argv[4], int(sys.argv[2]), sys.argv[6], *(sys.argv[8::2] if len(sys.argv) == 11 else ()))
+    else:
         raise SystemExit("invalid terminal invocation")
-    main(sys.argv[4], int(sys.argv[2]), sys.argv[6])

@@ -524,6 +524,9 @@
      (let [workspace-root (real-path root)
            mode (sandbox/resolve-mode sandbox)
            assets (runtime/describe)
+           terminal-capability (cond-> (terminal/capability terminal-cleanup-mode)
+                                 (and (= terminal-cleanup-mode :native-process-group) (not= mode :seatbelt))
+                                 (assoc :available? false :reason "Native PTY requires the original Seatbelt on its command child."))
            output-root (lexical-path workspace-root output-dir)
            _ (when (Files/exists output-root (make-array LinkOption 0))
                (secure/protect-tree! output-root))
@@ -537,8 +540,8 @@
             :max-timeout-ms max-timeout-ms
             :process-group-enabled (boolean (process-groups-available?))
             :workspace-runtime (select-keys assets [:available? :reason :python-version])
-            :terminal-capability (terminal/capability terminal-cleanup-mode)
-            :terminal-controller (when (and (:available? (terminal/capability terminal-cleanup-mode))
+            :terminal-capability terminal-capability
+            :terminal-controller (when (and (:available? terminal-capability)
                                             (:available? assets) (not= :unavailable mode))
                                    #(terminal/controller workspace-root (runtime/describe) mode seatbelt-profile terminal-cleanup-mode))
             :capabilities (cond-> #{:fs/read :fs/write}

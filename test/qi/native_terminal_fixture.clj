@@ -27,11 +27,14 @@
     (let [rpc (fn [method args] ((:invoke! (kernel/service ctx :remote/registry)) method args))
           cancelled (str (random-uuid))]
       (assert (:cancelled (rpc "terminal.cancel" {:request_id cancelled})))
+      (assert (:cancelled (rpc "terminal.cancel" {:request_id cancelled})))
       (assert (try (rpc "terminal.execute" {:action "open" :request_id cancelled}) false (catch Exception _ true)))
       (assert (and (zero? @factories) (empty? @admissions)))
       (let [opened (rpc "terminal.execute" {:action "open" :request_id (str (random-uuid))}) id (:terminal_id opened)
             input-cancelled (str (random-uuid))]
         (assert (= "running" (:status opened)))
+        (assert (true? (:sandbox_ready opened)))
+        (assert (= "seatbelt" (:command_sandbox opened)))
         (assert (= "registered-process-groups" (:cleanup_scope opened)))
         (assert (false? (:descendant_containment opened)))
         (rpc "terminal.cancel" {:request_id input-cancelled})
@@ -46,6 +49,22 @@
             (when-not (.contains output "qi-real-rpc-ok")
               (Thread/sleep 25) (recur (inc attempt) (:cursor result) output))))
         (assert (not (fs/exists? (fs/path root "must-not-exist"))))
+        (let [other (kernel/create-context)
+              other-owner (kernel/plugin-context other :test/other-session)]
+          (try
+            (kernel/register-service! other-owner :execution/world
+                                      {:root root :sandbox :seatbelt :terminal-capability (transport/capability :native-process-group)
+                                       :terminal-controller #(throw (ex-info "must not create other-session controller" {}))})
+            (kernel/register-service! other-owner :project/trust {:trusted? (constantly true)})
+            (kernel/register-service! other-owner :approval/request (constantly :allow))
+            (kernel/mark-loaded! other {:id :test/other-session})
+            (plugin/load-all! other [{:ns 'qi.plugins.remote-registry} {:ns 'qi.plugins.policy} {:ns 'qi.plugins.terminal}])
+            (let [invoke (:invoke! (kernel/service other :remote/registry))]
+              (assert (try (invoke "terminal.read" {:terminal_id id :since 0}) false (catch Exception _ true)))
+              (assert (try (invoke "terminal.execute" {:action "input" :terminal_id id :request_id (str (random-uuid))
+                                                       :text "touch must-not-cross-session\n"}) false (catch Exception _ true))))
+            (assert (not (fs/exists? (fs/path root "must-not-cross-session"))))
+            (finally (kernel/dispose-all! other))))
         (reset! trusted false) ;; In-memory fixture only, never a real trust store.
         (assert (try (rpc "terminal.execute" {:action "open"}) false (catch Exception _ true)))
         (let [one (future (rpc "terminal.stop" {:terminal_id id}))
@@ -56,6 +75,7 @@
           (assert (= 1 @factories))
           (spit (str (fs/path root "result.json"))
                 (json/generate-string {:status "REAL_COMPONENT_RPC_PASS" :cancelled_before_admission true
-                                       :input_cancelled_before_dispatch true :trust_revoked true :concurrent_close true :admissions @admissions
+                                       :input_cancelled_before_dispatch true :cancel_repeated_without_admission true
+                                       :other_session_control_rejected true :trust_revoked true :concurrent_close true :admissions @admissions
                                        :sandbox "seatbelt" :mode "native-process-group" :closed closed})))))
     (finally (kernel/dispose-all! ctx))))

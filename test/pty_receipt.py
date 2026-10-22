@@ -12,4 +12,5 @@ def cleanup_receipt_matches(result, expected, exit_code):
                 and result.get("cleanup_mode") == "native-process-group"
                 and isinstance(groups, list) and groups and all(type(g) is int and g > 1 for g in groups)
                 and len(set(groups)) == len(groups) and expected.get("child_pid") in groups
-                and result.get("descendant_containment") is False)
+                and result.get("descendant_containment") is False
+                and result.get("command_sandbox") == "seatbelt" and result.get("sandbox_ready") is True)

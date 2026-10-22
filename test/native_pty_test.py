@@ -1,7 +1,7 @@
 """Opt-in REAL macOS PTY component tests, never part of the ordinary unit suite.
 
-Uses the pinned portable Python component and unchanged production Seatbelt
-profile. No fake desktop manifest or host-Python product fallback. Only fixed
+Uses a trusted session allocator and the unchanged command-child Seatbelt
+profile, with pinned portable Python. No fake manifest or host-Python fallback. Only fixed
 synthetic commands in new private fixtures; fail fast on any failure/denial.
 Detached fixture descendants release themselves or expire after six seconds.
 """
@@ -34,30 +34,32 @@ profile_source = (REPO / "src/qi/plugins/execution_world.clj").read_text()
 block = profile_source.split("(def ^:private seatbelt-profile", 1)[1].split("(defn- real-path", 1)[0]
 PROFILE = "".join(json.loads(s) for s in re.findall(r'"(?:[^"\\]|\\.)*"', block))
 PROFILE += '\n(allow file-read* (subpath (param "RUNTIME")))\n'
-EVIDENCE = {"scope": "real PTY/guardian with portable Python and unchanged Seatbelt; component only, not full App/resolver/model/LCU",
+EVIDENCE = {"scope": "trusted session PTY allocator; command child uses original Seatbelt; component only, not full App/resolver/model/LCU",
             "python": str(PYTHON), "python_sha256": PYTHON_PIN,
             "profile_sha256": hashlib.sha256(PROFILE.encode()).hexdigest(), "sessions": [], "accepted_limitations": []}
 
 
 class Session:
-    def __init__(self):
+    def __init__(self, extra_fd=None, profile=PROFILE):
         self.root = Path(tempfile.mkdtemp(prefix="session-", dir=FIXTURES))
         self.buffer = bytearray(); self.cursor = 0; self.output = ""; self.final = None; self.unknown = False
         self.identity = None; self.finished = False; self.finish_attempted = False
         script = self.root / "terminal_helper.py"; script.write_bytes((REPO / "src/qi/terminal_helper.py").read_bytes())
         for name in ["home", "tmp"]: (self.root / name).mkdir(mode=0o700)
         self.record = {"root": str(self.root), "helper_sha256": hashlib.sha256(script.read_bytes()).hexdigest(), "events": []}
-        command = ["/usr/bin/sandbox-exec", "-D", f"WORKSPACE={self.root}", "-D", f"RUNTIME={PYTHON.parents[1]}",
-                   "-p", PROFILE, str(PYTHON), "-I", "-B", str(script), "--parent", str(os.getpid()),
-                   "--root", str(self.root), "--cleanup-mode", "native-process-group"]
+        command = [str(PYTHON), "-I", "-B", str(script), "--parent", str(os.getpid()),
+                   "--root", str(self.root), "--cleanup-mode", "native-process-group",
+                   "--seatbelt-profile", profile, "--runtime-root", str(PYTHON.parents[1])]
         env = {"HOME": str(self.root / "home"), "TMPDIR": str(self.root / "tmp"), "LANG": "en_US.UTF-8",
                "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "TERM": "xterm-256color", "HISTFILE": "/dev/null",
                "PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1"}
         self.record["command"] = command
+        self.record["command_profile_sha256"] = hashlib.sha256(profile.encode()).hexdigest()
         self.record["environment"] = env
         self.stderr = (self.root / "guardian.stderr").open("xb")
         self.process = subprocess.Popen(command, cwd=self.root, env=env, stdin=subprocess.PIPE,
-                                        stdout=subprocess.PIPE, stderr=self.stderr)
+                                        stdout=subprocess.PIPE, stderr=self.stderr,
+                                        pass_fds=() if extra_fd is None else (extra_fd,))
         self.record["guardian_pid"] = self.process.pid; EVIDENCE["sessions"].append(self.record)
 
     def line(self):
@@ -121,7 +123,7 @@ class Session:
         for raw in self.buffer.splitlines():
             value = json.loads(raw)
             if value.get("event") == "terminal.closed": self.final = value["result"]
-        self.buffer.clear(); self.stderr.close()
+        self.buffer.clear(); self.stderr.close(); self.process.stdout.close()
         raw = (self.root / "guardian.stderr").read_bytes()
         self.record.update(guardian_exit=self.process.returncode, stderr_bytes=len(raw), stderr_sha256=hashlib.sha256(raw).hexdigest())
         if not cleanup_receipt_matches(self.final, self.identity, self.process.returncode):
@@ -153,11 +155,13 @@ class Session:
 
 
 class NativePTY(unittest.TestCase):
-    def session(self):
-        session = Session(); self.addCleanup(session.stop)
+    def session(self, **options):
+        session = Session(**options); self.addCleanup(session.stop)
         value = session.call("open", cols=90, rows=24)
         self.assertEqual(value["cleanup_scope"], "registered-process-groups")
         self.assertFalse(value["descendant_containment"])
+        self.assertTrue(value["sandbox_ready"])
+        self.assertEqual(value["command_sandbox"], "seatbelt")
         self.assertEqual(value["registered_groups"], [value["child_pid"]])
         return session
 
@@ -182,11 +186,13 @@ class NativePTY(unittest.TestCase):
 
     def test_02_close_background_job_and_preserve_other_session(self):
         first, second = self.session(), self.session()
+        private = first.root / "private-note.txt"; private.write_text("first-session-private-fixture-content")
         first.call("input", text="/bin/sleep 8 &\n")
         first.read_until(lambda v: len(v["registered_groups"]) >= 2)
         self.assertTrue(first.stop()["cleanup_observed"])
-        second.call("input", text="printf '\\161\\151-other-session-alive\\n'\n")
+        second.call("input", text=f"cat {shlex.quote(str(private))}; printf '\\161\\151-other-session-alive\\n'\n")
         second.read_until(lambda _: "qi-other-session-alive" in second.output)
+        self.assertNotIn("first-session-private-fixture-content", second.output)
         self.assertNotEqual(first.record["guardian_pid"], second.record["guardian_pid"])
 
     def test_03_natural_abnormal_exit_preserves_more_than_64k_final_output(self):
@@ -275,7 +281,47 @@ os.waitpid(pid,0)
         receipt = json.loads((root / "result.json").read_text())
         self.assertEqual(receipt["status"], "REAL_COMPONENT_RPC_PASS")
         self.assertEqual(receipt["cancelled_before_admission"], True)
+        self.assertEqual(receipt["other_session_control_rejected"], True)
+        self.assertEqual(receipt["cancel_repeated_without_admission"], True)
         EVIDENCE["rpc"] = receipt
+
+    def test_08_shell_does_not_inherit_allocator_or_other_session_descriptors(self):
+        read_fd, write_fd = os.pipe()
+        try:
+            session = self.session(extra_fd=write_fd)
+            code = "import os\nopened=[]\nfor name in os.listdir('/dev/fd'):\n n=int(name)\n if n>2:\n  try:os.fstat(n);opened.append(n)\n  except OSError:pass\nprint('FD_CLEAN' if not opened else 'FD_LEAK',opened)"
+            session.call("input", text=f"{shlex.quote(str(PYTHON))} -I -B -c {shlex.quote(code)}\n")
+            session.read_until(lambda _: "\r\nFD_CLEAN []\r\n" in session.output)
+            self.assertNotIn("\r\nFD_LEAK ", session.output)
+        finally:
+            os.close(read_fd); os.close(write_fd)
+
+    def test_09_changed_policy_is_rejected_before_allocation(self):
+        # Only more restrictive test data. Even a broken validator must never
+        # receive an allow-default test policy or any user command here.
+        session = Session(profile=PROFILE + "\n(deny process-exec)\n")
+        request_id = str(uuid.uuid4())
+        request = {"id": request_id, "op": "open", "cols": 90, "rows": 24}
+        try:
+            stdout, _ = session.process.communicate((json.dumps(request) + "\n").encode(), timeout=7)
+        except subprocess.TimeoutExpired:
+            session.record["outcome"] = "UNKNOWN_RETAINED"
+            raise
+        finally:
+            session.stderr.close()
+        packets = [json.loads(line) for line in stdout.splitlines()]
+        response = next(value for value in packets if value.get("id") == request_id)
+        final = next(value["result"] for value in packets if value.get("event") == "terminal.closed")
+        self.assertEqual(session.process.returncode, 0)
+        self.assertIs(response["ok"], False)
+        self.assertEqual(response["result"]["failure_stage"], "allocator-config")
+        self.assertEqual(response["result"]["failure_code"], "ValueError")
+        self.assertIsNone(final["child_pid"])
+        self.assertEqual(final["registered_groups"], [])
+        self.assertFalse(final["sandbox_ready"])
+        self.assertTrue(final["cleanup_observed"])
+        session.record.update(outcome="EXPECTED_POLICY_REJECTION_BEFORE_ALLOCATION", guardian_exit=session.process.returncode,
+                              rejected_result=response["result"], final=final)
 
 
 if __name__ == "__main__":

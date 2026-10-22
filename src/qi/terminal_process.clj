@@ -33,21 +33,26 @@
               path)) root parts))
 
 (defn command
-  "Use the world's selected sandbox unchanged. A payload grant is read-only;
-  workspace-only writes and the original network deny remain in force."
+  "Native allocation is trusted and session-local; its command child must use
+  the original Seatbelt policy. JSON cannot select a program, device or policy."
   ([root assets sandbox profile] (command root assets sandbox profile :strict))
   ([root assets sandbox profile cleanup-mode]
   (capability cleanup-mode)
   (let [base [(:python assets) "-I" "-B" (:helper assets)
               "--parent" (str (.pid (java.lang.ProcessHandle/current))) "--root" (str root)
-              "--cleanup-mode" (name cleanup-mode)]]
-    (case sandbox
+              "--cleanup-mode" (name cleanup-mode)]
+        effective-profile (str profile "\n(allow file-read* (subpath (param \"RUNTIME\")))\n")]
+    (if (= cleanup-mode :native-process-group)
+      (do (when-not (= sandbox :seatbelt)
+            (throw (ex-info "Native PTY requires the original Seatbelt on its command child" {})))
+          (into base ["--seatbelt-profile" effective-profile "--runtime-root" (:root assets)]))
+      (case sandbox
       :seatbelt (into ["/usr/bin/sandbox-exec" "-D" (str "WORKSPACE=" root)
                        "-D" (str "RUNTIME=" (:root assets)) "-p"
-                       (str profile "\n(allow file-read* (subpath (param \"RUNTIME\")))\n")]
+                       effective-profile]
                       base)
       :none base
-      (throw (ex-info "No safe terminal execution world is available" {}))))))
+      (throw (ex-info "No safe terminal execution world is available" {})))))))
 
 (defn- read-line-bounded! [reader]
   (let [buffer (StringBuilder.)]
@@ -79,6 +84,7 @@
                                                             :registered_groups :termination :last_interrupt :shell_exit_observed
                                                             :detached_observed :child_pid :guardian_pid :exit_code :reason
                                                             :failure_code :failure_errno :failure_stage :operation_stage
+                                                            :command_sandbox :sandbox_ready :startup_aborted
                                                             :has_more :end :cursor :truncated]))))
         status (fn []
                  (let [process @child]

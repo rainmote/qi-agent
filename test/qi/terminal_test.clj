@@ -165,23 +165,36 @@
               capability (:terminal-capability world)]
           (is (= (name mode) (:cleanup-mode capability)))
           (is (false? (:descendant-containment capability)))
-          (is (= (= mode :native-process-group) (boolean (:terminal-controller world))))
+          (is (nil? (:terminal-controller world)) "native allocation never makes an unsandboxed command world available")
           (when (= mode :native-process-group)
             (is (= "registered-process-groups" (:cleanup-scope capability)))
             (is (seq (:limitations capability)))))
         (finally (kernel/dispose-all! ctx) (fs/delete-tree root))))))
 
-(deftest native-mode-never-changes-sandbox-or-model-parameters
+(deftest native-mode-keeps-command-policy-and-model-parameters-fixed
   (let [args (transport/command "/fixture" {:python "/bundle/python" :helper "/bundle/helper" :root "/bundle"}
                                 :seatbelt "(deny default)" :native-process-group)]
-    (is (= "/usr/bin/sandbox-exec" (first args)))
-    (is (= ["--cleanup-mode" "native-process-group"] (vec (take-last 2 args)))))
+    ;; Architecture change: trusted allocator precedes the original command
+    ;; policy. The policy is a fixed argv value, never a model/RPC parameter.
+    (is (= "/bundle/python" (first args)))
+    (is (= ["--cleanup-mode" "native-process-group"] (vec (take 2 (drop 8 args)))))
+    (is (some #{"--seatbelt-profile"} args)))
   (is (thrown? Exception (transport/capability :unsupported)))
   (let [{:keys [ctx rpc calls]} (fixture {})]
     (try
       (is (thrown? Exception (rpc "terminal.execute" {:action "open" :cleanup_mode "native-process-group"})))
       (is (empty? @calls))
       (finally (kernel/dispose-all! ctx)))))
+
+(deftest native-allocator-requires-seatbelt-on-the-command-child
+  (let [assets {:python "/bundle/python" :helper "/bundle/helper" :root "/bundle"}
+        policy "(deny default)"
+        args (transport/command "/fixture" assets :seatbelt policy :native-process-group)]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Seatbelt"
+                         (transport/command "/fixture" assets :none policy :native-process-group)))
+    (is (= "/bundle/python" (first args)) "trusted allocator starts before the command child's fixed sandbox")
+    (is (= ["--seatbelt-profile" (str policy "\n(allow file-read* (subpath (param \"RUNTIME\")))\n")
+            "--runtime-root" "/bundle"] (vec (take-last 4 args))))))
 
 (deftest desktop-profile-selects-limited-native-mode-without-overriding-explicit-strict
   (doseq [requested [nil :strict]]
