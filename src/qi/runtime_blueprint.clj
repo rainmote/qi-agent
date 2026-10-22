@@ -724,7 +724,7 @@
          (cond-> {:name (:name tool)
                   :description (:description tool)
                   :parameters (:parameters tool)
-                  :strict true
+                  :strict false
                   :execution-mode :sequential
                   :execute (fn [arguments execution]
                              (bounded-value! arguments (:limits blueprint)

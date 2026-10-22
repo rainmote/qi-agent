@@ -79,13 +79,13 @@
         {:name "preset_guide"
          :description "Read the required workflow and safety boundaries before creating or changing an Agent preset."
          :strict true
-         :parameters {:type "object" :properties {} :additionalProperties false}
+         :parameters {:type "object" :properties {} :required [] :additionalProperties false}
          :execute (fn [_ _] (guide))})
        (kernel/register-tool!
         ctx
         {:name "preset_inspect"
          :description "List Agent presets, read one preset's exact EDN source, or structurally validate it."
-         :strict true
+         :strict false
          :parameters {:type "object"
                       :additionalProperties false
                       :properties
@@ -101,7 +101,7 @@
          :description (str "Copy, atomically update, or delete a user Agent preset. "
                            "System presets cannot be changed. Updates accept a complete "
                            "agent.edn EDN string and validate it before publication.")
-         :strict true
+         :strict false
          :execution-mode :sequential
          :approval-target (fn [{:keys [action id from]}]
                             {:provider :agent-presets

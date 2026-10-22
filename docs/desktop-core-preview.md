@@ -43,6 +43,12 @@ npm run desktop:verify-preview
 不制作/挂载 DMG、不发布、不自动安装，不使用签名密钥或公证服务。
 用户试用应直接打开交付的 `.app`，无需重走构建；本机 ad-hoc 包不等于已公证发行。
 
+ChatGPT 登录复用本机 Codex 的正常凭据读取路径，不把登录信息写入应用包。
+含可选参数的内置工具使用 `strict: false`；两个 Responses 适配器对未声明的
+`strict` 也明确发送 `false`，避免服务端将可选字段改为必填。显式且兼容的
+`strict: true` 保留，执行前仍使用原 schema 做本地参数校验并经过原权限流程。
+协议依据见 [OpenAI function calling](https://developers.openai.com/api/docs/guides/function-calling#strict-mode)。
+
 原生终端沿用 [明确的清理与权限范围](desktop-workspace-runtime.md)：登记进程组与
 直接子进程回收，脱组后代和 TTY 路径复用风险仍存在。它的组件验收已完成；本包还
 须实际验证启动、配置/会话、合成命令/终端、关闭和再次启动。Office、Platform、
