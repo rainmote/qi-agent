@@ -1,6 +1,8 @@
 (ns qi.presets-test
   (:require [qi.kernel :as kernel]
             [qi.plugin :as plugin]
+            [qi.presets :as presets]
+            [qi.mcp-stdio :as mcp]
             [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.test :refer [deftest is testing]]))
@@ -431,7 +433,7 @@
                           (:plugins creator))
         creator-runtime (some #(when (= 'qi.plugins.runtime (:ns %)) %)
                               (:plugins creator))]
-    (is (= ["standard" "creator" "production"] (mapv :id listed)))
+    (is (= ["standard" "creator" "production" "computer-use"] (mapv :id listed)))
     (is (every? nil? (map :broken listed)))
     (is (= (into (set standard-ns)
                  ['qi.plugins.runtime-inspect 'qi.plugins.runtime-lab
@@ -504,3 +506,41 @@
       (finally
         (System/setProperty "user.dir" original)
         (delete-tree! elsewhere)))))
+
+(deftest shipped-computer-use-preset-is-discoverable-and-starts-without-desktop-access
+  (let [registry (presets/create-registry {:system-roots ["presets"]})
+        entry (some #(when (= "computer-use" (:id %)) %) (presets/list-presets registry))]
+    (is (some? entry) "A new session must be able to select the LCU computer-use preset")
+    (when entry
+      (is (nil? (:broken entry)))
+      (is (:valid (presets/validate-preset! registry "computer-use")))
+      (let [root (.toFile (java.nio.file.Files/createTempDirectory
+                           "qi-computer-preset-" (make-array java.nio.file.attribute.FileAttribute 0)))
+            config (presets/read-preset registry "computer-use")
+            effective (update config :plugins
+                              (fn [entries]
+                                (mapv (fn [entry]
+                                        (case (:ns entry)
+                                          qi.plugins.session (assoc entry :config {:path nil :ephemeral true})
+                                          qi.plugins.execution-world (assoc-in entry [:config :root] (str root))
+                                          qi.plugins.trust (update entry :config assoc :root (str root)
+                                                                  :trust-file (str (io/file root "trust.edn")))
+                                          entry)) entries)))]
+        (try
+          (with-redefs [mcp/connect! (fn [& _] (throw (ex-info "Unexpected desktop launch" {})))]
+            (let [ctx (plugin/boot! effective)]
+              (try
+                (let [status ((:status (kernel/require-service ctx :computer-use/runtime)))
+                      command (:execute (kernel/command ctx "computer"))]
+                  (is (:enabled status))
+                  (is (false? (:connected status)))
+                  (is (= :untrusted (:state status)))
+                  (is (= ["computer"] (get-in status [:capabilities :surfaces])))
+                  (is (empty? (filter #(clojure.string/starts-with? (:name %) "computer_") (kernel/tools ctx))))
+                  (is (thrown-with-msg? Exception #"trusted project" (command "connect" {})))
+                  (is (kernel/service ctx :remote/registry))
+                  (is (kernel/service ctx :agent/session))
+                  (is (not (.exists (io/file root "trust.edn")))))
+                (finally (kernel/dispose-all! ctx)))))
+          (finally
+            (doseq [file (reverse (file-seq root))] (.delete file))))))))

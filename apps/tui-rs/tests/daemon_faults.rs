@@ -253,7 +253,7 @@ fn preset_list_exposes_safe_display_metadata_for_mode_selection() {
             .iter()
             .map(|preset| preset.get("id").and_then(Value::as_str).unwrap())
             .collect::<Vec<_>>(),
-        vec!["standard", "creator", "production"]
+        vec!["standard", "creator", "production", "computer-use"]
     );
     assert_eq!(
         presets[0].get("name").and_then(Value::as_str),
@@ -262,6 +262,10 @@ fn preset_list_exposes_safe_display_metadata_for_mode_selection() {
     assert_eq!(
         presets[1].get("name").and_then(Value::as_str),
         Some("创造模式")
+    );
+    assert_eq!(
+        presets[3].get("name").and_then(Value::as_str),
+        Some("电脑操作")
     );
     assert!(presets.iter().all(|preset| {
         preset.get("description").and_then(Value::as_str).is_some()

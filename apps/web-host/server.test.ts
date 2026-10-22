@@ -303,6 +303,41 @@ test("workspace registry rejects a symbolic-link state directory", async () => {
   }
 });
 
+test("computer-use preset opens a real worker with explicit connection controls", async () => {
+  const root = await temporaryRoot();
+  const workspace = join(root, "workspace");
+  await mkdir(workspace);
+  const host = await startWebHost({ port: 0, workspace,
+    stateDirectory: join(root, "state"), token: "computer-preset-test" });
+  const base = `http://${host.host}:${host.port}`;
+  const headers = { Authorization: "Bearer computer-preset-test",
+    "Content-Type": "application/json", Origin: base };
+  try {
+    const response = await fetch(`${base}/api/sessions`, { method: "POST", headers,
+      body: JSON.stringify({ workspaceId: host.workspaces.list()[0].id, presetId: "computer-use" }) });
+    const created = await response.json();
+    assert.equal(response.status, 201, JSON.stringify(created));
+    assert.equal(created.result.session.presetId, "computer-use");
+    const rpc = await fetch(`${base}/api/sessions/${created.result.session.id}/rpc`, {
+      method: "POST", headers, body: JSON.stringify({ method: "runtime.status", params: {} }),
+    });
+    const status = await rpc.json();
+    assert.equal(status.ok, true, JSON.stringify(status));
+    const computer = status.result["computer-use"];
+    assert.equal(computer["configured-provider"], "lcu");
+    assert.equal(computer.enabled, true);
+    assert.equal(computer.connected, false);
+    assert.equal(computer["local-desktop"], true);
+    assert.equal(computer["image-model"], true);
+    assert.deepEqual(computer.tools, []);
+    assert.deepEqual(computer.capabilities.surfaces, ["computer"]);
+    assert.ok(status.result.commands.some((command: { name: string }) => command.name === "computer"));
+  } finally {
+    await host.close();
+    await removeTemporaryRoot(root);
+  }
+});
+
 test("web host authenticates, catalogs, creates a real worker, and invokes RPC", async () => {
   const root = await temporaryRoot();
   const workspace = join(root, "workspace");
@@ -341,8 +376,9 @@ test("web host authenticates, catalogs, creates a real worker, and invokes RPC",
       result: Array<{ id: string; name: string; broken?: boolean }>;
     };
     assert.equal(agentPresetsResponse.status, 200, JSON.stringify(agentPresets));
-    assert.deepEqual(agentPresets.result.map((preset) => preset.id), ["standard", "creator", "production"]);
+    assert.deepEqual(agentPresets.result.map((preset) => preset.id), ["standard", "creator", "production", "computer-use"]);
     assert.equal(agentPresets.result[1]?.name, "创造模式");
+    assert.equal(agentPresets.result[3]?.name, "电脑操作");
     assert.equal(JSON.stringify(agentPresets).includes("config_path"), false);
     assert.equal(JSON.stringify(agentPresets).includes("directory"), false);
 

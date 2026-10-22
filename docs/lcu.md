@@ -28,7 +28,30 @@ startup. Integration was exercised with **LCU 0.11.2**. The installed release mu
 include `adapters/client.mjs` and its dependencies, `bin/lcu`, and preferably the
 installer's `node-path` file.
 
-The default profile includes a **disabled** LCU provider. To enable it, use
+### Built-in desktop session
+
+In WebUI or the desktop app, create a **new session** and select **电脑操作**
+(`computer-use`). Review project trust, select an image-capable model, then open
+**Settings → Tools → Computer use → Connect**. The preset uses your existing
+ChatGPT login by default; OpenAI API and Web-managed model providers are also
+available. Native app consent appears separately when LCU first accesses an app.
+
+For the Rust TUI, start with the same profile:
+
+```sh
+qi-agent --config /absolute/qi-agent/presets/computer-use/agent.edn
+```
+
+Then review `/trust` and use `/computer connect`. This is a dedicated desktop
+mode: opening the session starts no LCU process, and desktop tools are registered
+only after an explicit successful connection. It does not include the Standard
+preset's shell, file editing or subagent tools. LCU must already be installed on
+the machine running the worker. Existing sessions keep their saved profiles;
+selecting this mode requires a new session. A first task can be: “Observe the
+target app and describe its current window; do not change anything yet.”
+
+The default profile includes a **disabled** LCU provider. For a minimal API-only
+profile, use
 [`examples/lcu.edn`](../examples/lcu.edn) or add these entries to your profile after
 session, model registry, execution world, trust, approval and policy:
 
@@ -119,9 +142,9 @@ Web Settings → Tools displays this same status and explicit connection control
 through the existing journaled `command.execute` path. Connecting verifies
 tool discovery only, not OS permission or successful screenshot/input. The
 default configuration remains disabled, and existing Standard/Creator session
-presets do not acquire desktop access. Start a new session using an explicitly
-configured, reviewed runtime profile (for CLI: `bb qi-agent --config examples/lcu.edn`);
-a Web user preset must include the documented services in dependency order.
+presets do not acquire desktop access. The built-in **电脑操作** preset supplies
+the required services in dependency order and defers connection until requested.
+Custom Web presets must include these services too.
 Neither the panel nor this repository change trusts an actual project or
 changes OS accessibility, recording, credentials, extension or site permissions.
 

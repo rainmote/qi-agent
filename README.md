@@ -67,7 +67,7 @@ interface without replacing its core.
 | Model adapters | OpenAI Responses, OpenAI-compatible APIs such as DeepSeek, and an experimental ChatGPT subscription adapter |
 | Local runtime | Resident workers, durable sessions, detach and reattach, forks, checkpoints, compaction, and recovery |
 | Coding tools | Read, write, edit, shell, search, anchored hash edits, persistent Clojure REPLs, and optional LSP queries |
-| Computer use | Opt-in LCU desktop control, native app consent, screenshot-aware models and turn cleanup; [setup](docs/lcu.md) (Cua Driver also supported) |
+| Computer use | Select the **电脑操作** (`computer-use`) session mode, then connect LCU in Settings → Tools; native app consent, screenshots and turn cleanup; [setup](docs/lcu.md) (Cua Driver also supported) |
 | Agent workflows | Streaming, cancellation, steering, follow-ups, background subagents, model switching, and skills |
 | Interfaces | Native Rust/Ratatui TUI, local Web UI, JSON event stream, stdin/stdout RPC, and a Clojure embedding API |
 | Safety | User-owned trust store, per-action approval, path-aware policy, execution-world isolation, and fail-closed process tools |
