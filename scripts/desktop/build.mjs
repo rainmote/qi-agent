@@ -180,6 +180,7 @@ async function licenses(root) {
 
 async function prepare() {
   await assertSource();
+  await mkdir(join(desktop, 'stage'), { recursive: true });
   const workspaceStage = join(desktop, 'stage', `workspace-${randomUUID()}`);
   // Every edition has a complete explicit closure. The preview genuinely omits
   // Office/pnpm/wheels; full keeps its original license and native requirements.
