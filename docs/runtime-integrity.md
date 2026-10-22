@@ -154,7 +154,9 @@ as uncertain. Reopening or losing acknowledgement after a repair append does
 not duplicate results. Clear retires old calls; retained checkpoint messages
 reuse original provenance only when the match is unique. Conflicting ownership,
 closed dangling history or unprovable checkpoint ownership blocks recovery for
-reconciliation rather than rewriting history. Offline subprocess fixtures verify
+reconciliation rather than rewriting history. Identical tool messages from
+multiple historical batches can also make retained checkpoint ownership ambiguous.
+Offline subprocess fixtures verify
 that an effect followed by process exit is not executed again after reopen.
 
 Web and TUI project the same native outcomes into one history row per run ID,
@@ -195,9 +197,13 @@ provider-specific wire formatting can differ.
 
 ## Compaction commits
 
-Automatic compaction keeps the latest user instruction and its following
-messages verbatim. The session's safe split keeps tool calls with their results.
-The discarded prefix is rendered in full, including tool IDs and arguments.
+Automatic compaction keeps the latest user instruction verbatim and normally
+retains a recent tail. Under budget pressure or an explicit forced compaction,
+earlier completed tool batches in the same user turn can be summarized too.
+Pending batches stay intact, including existing results; calls and results are
+never split across the boundary. The selected historical messages are rendered
+in full, including tool IDs and arguments. The summary is an assistant message
+labelled untrusted historical context, never a new system instruction.
 Images become explicit omission markers; their original bytes remain in the
 append-only history and must be recaptured when needed by the model.
 
@@ -208,11 +214,14 @@ messages may span fragments; UTF-16 surrogate pairs are never split.
 
 All fragments must return complete, nonempty text. Their summaries are combined
 without another truncation. The checkpoint includes `coverage` with source
-character ranges, SHA-256 hashes, message count, and image omission metadata.
+character ranges, SHA-256 hashes, source message indexes, snapshot revision,
+message count, and image omission metadata.
 Coverage proves which text was submitted; it does not prove semantic fidelity
 of an LLM summary or preserve pixel content.
 
-Before committing, the session rechecks its snapshot, cancellation, and the
+Before generating, the retained instruction and pending work must fit the pinned
+provider budget even with an empty summary. Before committing, the session
+rechecks its snapshot and context revision, cancellation, and the
 replacement's full request budget under its write lock. Failed/incomplete
 summaries and oversized replacements leave the original history active.
 Manual deterministic compaction returns `summary-too-large` rather than
@@ -230,9 +239,9 @@ An unfit immutable prefix or current instruction, exhausted compaction call
 limit, or unavailable safe split returns structured `code: context_unfit` with
 `retryable: false`. Summary generation failure returns `reason: summary-failed`.
 Provider overflow retries at most once, and only after a committed compaction.
-A single long current turn can therefore stop instead of silently compressing
-its exact instruction and current tool work; use a larger-window provider or
-start a new explicit task with the needed state.
+A single long current turn can compact completed work and continue. If the exact
+instruction or pending work itself cannot fit, the request still stops with a
+structured budget error; it does not silently truncate either.
 
 ## Regression checks
 

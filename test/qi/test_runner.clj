@@ -16,6 +16,7 @@
             [qi.openai-integrity-test]
             [qi.tool-recovery-test]
             [qi.context-integrity-test]
+            [qi.midturn-compaction-test]
             [qi.generation-test]
             [qi.provenance-test]
             [qi.remote-snapshot-test]
@@ -1940,7 +1941,8 @@
                   fork ((:fork! store) (str destination))]
               (is (true? (:compacted compaction)))
               (is (= 3 (count ((:messages store)))))
-              (is (= "system" (:role (first ((:messages store))))))
+              (is (= "assistant" (:role (first ((:messages store))))))
+              (is (str/includes? (:content (first ((:messages store)))) "Untrusted historical context"))
               (is (.isFile destination))
               (is (not= (:session-id store) (:session-id fork)))
               (is (thrown? clojure.lang.ExceptionInfo
@@ -3276,7 +3278,7 @@
               runtime-request (last @requests)]
           (is (= "done" (:content result)))
           (is (some #(= "session/compaction" (:type %)) events))
-          (is (= "system" (get-in runtime-request [:messages 0 :role])))
+          (is (= "assistant" (get-in runtime-request [:messages 0 :role])))
           (is (str/includes? (get-in runtime-request [:messages 0 :content])
                              "Goal: preserve")))
         (finally (kernel/dispose-all! ctx)))))
@@ -4281,7 +4283,7 @@
 
 (defn -main []
   (let [{:keys [fail error]}
-        (run-tests 'qi.test-runner 'qi.run-outcome-test 'qi.openai-integrity-test 'qi.tool-recovery-test 'qi.context-integrity-test 'qi.generation-test 'qi.provenance-test
+        (run-tests 'qi.test-runner 'qi.run-outcome-test 'qi.openai-integrity-test 'qi.tool-recovery-test 'qi.context-integrity-test 'qi.midturn-compaction-test 'qi.generation-test 'qi.provenance-test
                    'qi.web-test 'qi.presets-test
                    'qi.runtime-inspect-test 'qi.runtime-lab-test
                    'qi.session-title-test 'qi.runtime-recovery-test

@@ -140,6 +140,26 @@
      :dropped (subvec messages 0 boundary)
      :retained (subvec messages boundary)}))
 
+(defn protected-compaction-plan
+  "Keep the exact latest user instruction while summarizing complete earlier
+  batches, including those in its current turn. Never split a tool batch."
+  [messages retain]
+  (let [{:keys [messages dropped] :as plan} (compaction-plan messages retain)
+        boundary (count dropped)
+        user-index (last (keep-indexed #(when (= "user" (:role %2)) %1) messages))
+        protect? (and user-index (< user-index boundary))
+        dropped-indexes (vec (remove #(and protect? (= % user-index)) (range boundary)))
+        retained-indexes (cond-> [] protect? (conj user-index))
+        retained-indexes (into retained-indexes (range boundary (count messages)))]
+    (assoc plan :dropped (mapv messages dropped-indexes) :retained (mapv messages retained-indexes)
+                :dropped-message-indexes dropped-indexes :retained-message-indexes retained-indexes
+                :protected-user-index user-index)))
+
+(defn- context-revision [events]
+  (or (some #(when (contains? #{"message" :message "session/clear" :session/clear
+                                "session/compaction" :session/compaction} (:type %)) (:seq %))
+            (rseq (vec events))) 0))
+
 (defn- write-events-atomically! [destination events]
   (ensure-parent! destination)
   (let [target (.getCanonicalFile (io/file destination))
@@ -222,6 +242,7 @@
                           (swap! events conj item)
                           (notify! item)))))
            messages #(effective-messages @events)
+           snapshot (fn [] (locking lock {:messages (messages) :revision (context-revision @events)}))
            compact-body!
            (fn [{:keys [summary retain plan coverage validate! cancel-token]
                  :or {retain retain-messages}}]
@@ -231,10 +252,13 @@
               (locking lock
                (let [current (messages)
                      {:keys [dropped retained] :as plan}
-                     (or plan (compaction-plan current (max retain (summary/protected-retain current))))
+                     (or plan (assoc (protected-compaction-plan current retain)
+                                     :snapshot-revision (context-revision @events)))
                      source (when (str/blank? summary) (summary/source dropped))]
                 (cond
-                  (not= current (:messages plan))
+                  (or (not= current (:messages plan))
+                      (and (contains? plan :snapshot-revision)
+                           (not= (:snapshot-revision plan) (context-revision @events))))
                   {:compacted false :reason :context-changed
                    :message-count (count current)}
 
@@ -250,8 +274,10 @@
                         _ (when validate! (validate! replacement))
                         _ (cancellation/throw-if-cancelled! cancel-token)
                         coverage (or coverage (when source
-                                                (summary/coverage dropped source
-                                                                  [{:start 0 :end (count source)}])))
+                                                (assoc (summary/coverage dropped source
+                                                                         [{:start 0 :end (count source)}])
+                                                       :source-message-indexes (:dropped-message-indexes plan)
+                                                       :snapshot-revision (:snapshot-revision plan))))
                         item (append!
                               "session/compaction"
                               {:original_message_count (count current)
@@ -366,6 +392,7 @@
                       (swap! listeners assoc id listener)
                       (fn [] (swap! listeners dissoc id))))
                   :messages messages
+                  :snapshot snapshot
                   :diagnostics (fn [] (vec @diagnostics))
                   :session-id session-id
                   :path (some-> path io/file .getAbsolutePath)
