@@ -146,7 +146,7 @@
   [messages retain]
   (let [{:keys [messages dropped] :as plan} (compaction-plan messages retain)
         boundary (count dropped)
-        user-index (last (keep-indexed #(when (= "user" (:role %2)) %1) messages))
+        user-index (last (keep-indexed #(when (summary/user-instruction? %2) %1) messages))
         protect? (and user-index (< user-index boundary))
         dropped-indexes (vec (remove #(and protect? (= % user-index)) (range boundary)))
         retained-indexes (cond-> [] protect? (conj user-index))

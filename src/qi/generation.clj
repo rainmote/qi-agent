@@ -1,6 +1,7 @@
 (ns qi.generation
   "Write-ahead accounting for logical model requests, including failed attempts."
-  (:require [qi.kernel :as kernel]))
+  (:require [qi.kernel :as kernel]
+            [qi.context-summary :as summary]))
 
 (def ^:dynamic *run* nil)
 
@@ -133,7 +134,8 @@
     ;; If this write fails, no paid operation has been admitted.
     (append! (assoc common :status :started))
     (let [{:keys [response error]}
-          (try {:response ((kernel/require-service ctx :llm/generate) (assoc request :accounting common))}
+          (try {:response ((kernel/require-service ctx :llm/generate)
+                           (assoc (summary/wire-request request) :accounting common))}
                (catch Throwable error {:error error}))]
       (append! (assoc common :status (if error :failed :completed)
                             :duration_ms (- (System/currentTimeMillis) started)

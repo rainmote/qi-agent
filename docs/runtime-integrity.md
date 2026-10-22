@@ -202,8 +202,12 @@ retains a recent tail. Under budget pressure or an explicit forced compaction,
 earlier completed tool batches in the same user turn can be summarized too.
 Pending batches stay intact, including existing results; calls and results are
 never split across the boundary. The selected historical messages are rendered
-in full, including tool IDs and arguments. The summary is an assistant message
-labelled untrusted historical context, never a new system instruction.
+in full, including tool IDs and arguments. The checkpoint is JSON-quoted
+untrusted historical data in a user-role message before the exact real user
+instruction. An internal marker excludes it from user-instruction selection and
+is removed before provider dispatch. It never becomes a system instruction or a
+fabricated assistant response. This also avoids inventing reasoning for DeepSeek
+thinking/tool requests; remaining real assistant reasoning is replayed unchanged.
 Images become explicit omission markers; their original bytes remain in the
 append-only history and must be recaptured when needed by the model.
 

@@ -212,7 +212,7 @@
           content)))
 
 (defn- normalize-message [replay-reasoning? message]
-  (let [message (cond-> (dissoc message :images :is-error)
+  (let [message (cond-> (dissoc message :images :is-error :context-summary)
                   (not replay-reasoning?) (dissoc :reasoning_content))]
     (if (= "user" (:role message))
       (update message :content chat-content)

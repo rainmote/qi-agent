@@ -1,6 +1,7 @@
 (ns qi.plugins.session-title
   "Automatic, deterministic session titles derived from the first completed turn."
   (:require [qi.kernel :as kernel]
+            [qi.context-summary :as summary]
             [clojure.string :as str]))
 
 (def ^:private request-prefix
@@ -61,7 +62,7 @@
        (empty? (:tool_calls message))))
 
 (defn- first-user-message [messages]
-  (some #(when (= "user" (some-> (:role %) name)) %) messages))
+  (some #(when (summary/user-instruction? %) %) messages))
 
 (def plugin
   {:id :session/auto-title

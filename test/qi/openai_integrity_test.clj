@@ -224,3 +224,60 @@
           (is (nil? (ex-cause error)))
           (is (not (str/includes? (str (ex-message error) (ex-data error)) "synthetic-private")))))
       (finally (kernel/dispose-all! ctx)))))
+
+(deftest deepseek-thinking-tools-can-continue-through-compaction-and-reopen
+  (let [dir (fs/create-temp-dir {:prefix "qi-thinking-compaction-"})
+        path (str (fs/path dir "session.jsonl")) main (atom []) summaries (atom 0) effects (atom 0)
+        boot (fn []
+               (let [ctx (plugin/boot! {:plugins [{:ns 'qi.plugins.session :config {:path path}}
+                                                 {:ns 'qi.plugins.model-registry}
+                                                 {:ns 'qi.plugins.openai :config (-> config
+                                                   (assoc :context-window 2048)
+                                                   (assoc-in [:extra-body :thinking :type] "enabled"))}
+                                                 {:ns 'qi.plugins.context-manager :config {:context-window 2048 :reserve-tokens 128
+                                                                                         :retain-messages 12 :max-source-chars 4000}}
+                                                 {:ns 'qi.plugins.runtime :config {:max-retries 0 :max-steps 6}}]})]
+                 (kernel/register-tool! (kernel/plugin-context ctx :fixture/combined)
+                                        {:name "probe" :description "Offline thinking and compaction effect" :parameters {:type "object"}
+                                         :execute (fn [_ _] (if (= 1 (swap! effects inc)) "first completed"
+                                                               (apply str (repeat 18000 "x"))))}) ctx))]
+    (try
+      (with-redefs [http/post
+                    (fn [_ options]
+                      (let [body (json/parse-string (:body options) true)]
+                        (if (seq (:tools body))
+                          (do
+                            (swap! main conj body)
+                            ;; Model the documented tools+thinking requirement,
+                            ;; including prior assistant answers without calls.
+                            (if (some #(and (= "assistant" (:role %)) (not (string? (:reasoning_content %)))) (:messages body))
+                              {:status 400 :body (json/generate-string {:error {:message "Missing reasoning_content"}})}
+                              {:status 200 :body
+                               (case (count @main)
+                                 1 (str (delta {:reasoning_content "original-r1" :tool_calls [call]}) (terminal "tool_calls"))
+                                 2 (str (delta {:reasoning_content "original-r2" :tool_calls [(assoc call :id "call-2")]}) (terminal "tool_calls"))
+                                 (str (delta {:reasoning_content "original-final" :content "done"}) (terminal "stop")))}))
+                          (do (swap! summaries inc)
+                              {:status 200 :body (str (delta {:reasoning_content "summary-only" :content "Both actions completed; do not repeat them."})
+                                                     (terminal "stop"))}))))]
+        (let [ctx (boot)]
+          (try
+            (is (= "done" (:content (try ((kernel/require-service ctx :agent/run) "Do both actions once, then report.")
+                                        (catch Exception error {:fixture-error (ex-data error)})))))
+            (is (= 2 @effects))
+            (is (pos? @summaries))
+            (is (= ["original-r1"] (mapv :reasoning_content (filter #(= "assistant" (:role %)) (:messages (second @main))))))
+            (is (= {:role "user" :content "Do both actions once, then report."} (last (:messages (last @main)))))
+            (is (not-any? #(and (= "assistant" (:role %)) (nil? (:reasoning_content %))) (:messages (last @main))))
+            (is (not-any? :context-summary (:messages (last @main))))
+            (finally (kernel/dispose-all! ctx))))
+        (let [before (count @main) ctx (boot)]
+          (try
+            (is (= before (count @main)))
+            (is (= "done" (:content (try ((kernel/require-service ctx :agent/run) "Continue using saved results.")
+                                        (catch Exception error {:fixture-error (ex-data error)})))))
+            (is (= 2 @effects))
+            (is (= ["original-final"] (mapv :reasoning_content (filter #(= "assistant" (:role %)) (:messages (last @main))))))
+            (is (every? #(= "enabled" (get-in % [:thinking :type])) @main))
+            (finally (kernel/dispose-all! ctx)))))
+      (finally (fs/delete-tree dir)))))

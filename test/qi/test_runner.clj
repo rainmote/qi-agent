@@ -1941,7 +1941,8 @@
                   fork ((:fork! store) (str destination))]
               (is (true? (:compacted compaction)))
               (is (= 3 (count ((:messages store)))))
-              (is (= "assistant" (:role (first ((:messages store))))))
+              (is (= "user" (:role (first ((:messages store))))))
+              (is (true? (:context-summary (first ((:messages store))))))
               (is (str/includes? (:content (first ((:messages store)))) "Untrusted historical context"))
               (is (.isFile destination))
               (is (not= (:session-id store) (:session-id fork)))
@@ -3278,7 +3279,7 @@
               runtime-request (last @requests)]
           (is (= "done" (:content result)))
           (is (some #(= "session/compaction" (:type %)) events))
-          (is (= "assistant" (get-in runtime-request [:messages 0 :role])))
+          (is (= "user" (get-in runtime-request [:messages 0 :role])))
           (is (str/includes? (get-in runtime-request [:messages 0 :content])
                              "Goal: preserve")))
         (finally (kernel/dispose-all! ctx)))))

@@ -1,6 +1,7 @@
 (ns qi.plugins.tui
   "JLine TUI frontend using a Charm-style Model/Update/View architecture."
   (:require [qi.command :as command]
+            [qi.context-summary :as summary]
             [qi.kernel :as kernel]
             [babashka.fs :as fs]
             [babashka.terminal :as terminal]
@@ -988,7 +989,7 @@
                :agent-state ((:state (kernel/require-service
                                       ctx :agent/session)))
                :editor (make-editor)
-               :history (->> messages (filter #(= "user" (:role %)))
+               :history (->> messages (filter summary/user-instruction?)
                              (map :content) (filter string?)
                              (take-last 100) vec)
                :history-index nil

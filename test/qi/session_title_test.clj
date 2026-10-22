@@ -1,5 +1,6 @@
 (ns qi.session-title-test
   (:require [qi.kernel :as kernel]
+            [qi.context-summary :as summary]
             [qi.plugin :as plugin]
             [qi.plugins.session-title :as session-title]
             [clojure.test :refer [deftest is testing]]))
@@ -92,3 +93,14 @@
           (is (= "整理发布流程" ((:name store)))))
         (finally
           (kernel/dispose-all! ctx))))))
+
+(deftest checkpoint-data-never-becomes-the-first-user-request-for-a-title
+  (let [ctx (plugin/boot! {:plugins [{:ns 'qi.plugins.session}]})]
+    (try
+      (let [store (kernel/require-service ctx :session/store)
+            user {:role "user" :content "请检查缓存失效策略"}]
+        ((:checkpoint! store) (summary/replacement "Earlier completed work" [user]) {})
+        ((:append! store) "message" {:message {:role "assistant" :content "完成"}})
+        (plugin/load-plugin! ctx {:ns 'qi.plugins.session-title})
+        (is (= "检查缓存失效策略" ((:name store)))))
+      (finally (kernel/dispose-all! ctx)))))
