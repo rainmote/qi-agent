@@ -49,6 +49,10 @@ ChatGPT 登录复用本机 Codex 的正常凭据读取路径，不把登录信�
 `strict: true` 保留，执行前仍使用原 schema 做本地参数校验并经过原权限流程。
 协议依据见 [OpenAI function calling](https://developers.openai.com/api/docs/guides/function-calling#strict-mode)。
 
+桌面应用正常退出时，已确认清理的会话保留为可恢复的 inactive 状态；再次打开
+复用原会话、worker 身份和配置快照。显式停止、归档以及普通 daemon 的退出语义
+保持不变。清理结果未知时不会发布可恢复状态，未结算任务记录为 uncertain。
+
 原生终端沿用 [明确的清理与权限范围](desktop-workspace-runtime.md)：登记进程组与
 直接子进程回收，脱组后代和 TTY 路径复用风险仍存在。它的组件验收已完成；本包还
 须实际验证启动、配置/会话、合成命令/终端、关闭和再次启动。Office、Platform、
