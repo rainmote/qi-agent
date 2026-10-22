@@ -80,7 +80,7 @@ Office kit/engine 声明 MPL-2.0。除许可证外，重新分发前还须核验
 取消入口，不自动重做或预览未知结果。实际引擎与浏览器交互仍未验证。这与 Harness
 自动、无用户副本的内嵌 Office 预览有产品差异，界面明确说明新 PDF 会保留。
 
-## 终端源码与强制不可用边界
+## 原生终端与明确的清理范围
 
 提供了会话内租约、有限 RPC、命令幂等、审批/信任/计划、输入大小、取消和关闭、
 输出游标、UTF-8 与配额源码。Web 面板只把用户明确发送的文本提交审批；输入不随
@@ -94,12 +94,38 @@ Office kit/engine 声明 MPL-2.0。除许可证外，重新分发前还须核验
 中断和关闭，不能通过清空取消记录恢复输入。这里的回归使用 mock 终端，不表示
 下述生产 PTY 门槛已解除。
 
-**本机 production PTY 仍强制不可用。** 独立复核确认：仅以 session/process group
-或 ps 快照，不能证明 double-fork/setsid 后已 reparent 的后代退出；macOS SDK 的
-NOTE_TRACK/NOTE_TRACKERR/NOTE_CHILD 自 10.5 起已不受支持。因此 world 不提供
-terminal factory，controller 在创建状态目录/进程前拒绝，Python helper 在 census/
-fork 前拒绝。该门禁没有环境变量、配置、模型参数或用户输入覆盖开关。需要实现并
-验证可证明后代归属与销毁的执行提供者，不能靠放宽沙箱或授予 TCC 来替代。
+用户于 2026-10-21 23:25 UTC 明确选择“参考codex实现 注册进程组清理就行
+其他的先容忍 继续做”（Sentinel_33c5b01c94b88191b4d2d042fe3d8878）。这是原生
+终端生命周期承诺的产品范围变更，不改变文件、网络、信任、计划、人工审批或 LCU
+隔离。参考固定为 [Codex deede7201da27a178c39befa6b4959bb7d451645](https://github.com/openai/codex/tree/deede7201da27a178c39befa6b4959bb7d451645/codex-rs/utils/pty/src)：
+登记 PTY 直接子进程及进程组，组信号与直接子进程清理组合使用，不是完整后代容器。
+
+现在有两个独立模式，由受信 profile 中 execution-world 的
+`:terminal-cleanup-mode` 选择，模型/RPC 参数不能切换：
+
+- `:strict` 是普通 profile 的默认值。它仍在创建状态/进程前拒绝，因为本机没有完整
+  后代 containment 提供者；绝不静默回退成原生模式。
+- `:native-process-group` 是明确的 macOS 有限清理模式。桌面打包 profile 在没有
+  显式选择时写入此值；显式 `:strict` 保留。仍须完整 runtime 清单与原沙箱可用。
+  OrbStack、Docker、VM 都不是其依赖，没有为了终端创建或启动这些服务。
+
+原生 guardian 登记本代 shell PID/PGID/SID 和微秒启动身份，使用 libproc 仅追踪
+自己的子进程树与该 PTY 的前台组，不读取宿主命令行、环境或全局 ps。交互 shell
+的前台/后台作业可有不同 PGID，分别登记；投递前再次核对 UID、启动身份、SID/PGID。
+所有组终止信号完成前保留直接子进程的 wait 身份，reap 后只观察组是否不存在，
+不再投递终止信号。close/撤销/取消共享同一次有界清理，重复调用不重发输入或信号。
+
+`interrupt` 是向当前已核对前台组请求 SIGINT；TERM/KILL 投递、shell exit 和清理
+观察是不同事实。状态提供 `last_interrupt`、`termination`、`shell_exit_observed`、
+`cleanup_observed`、`cleanup_scope`、`registered_groups` 与本代身份。
+原生模式中兼容字段 `cleanup_confirmed=true` **只确认登记组已观察为空且直接子进程
+已回收**，`descendant_containment` 始终 false。权限错误、身份变化、超时等保持
+`cleanup_unknown`，不重复观察/发信号；不是把 killpg 成功或 shell 退出当作强回收。
+
+**已知限制**：double-fork/setsid 脱离会话或进程组的后代可能残留；快进快出的未登记
+后代也可能未被发现。macOS 身份检查与 killpg 之间没有原子 pidfd 操作，这仍是有
+校验的 best effort，不能对恶意并发逃逸或任意后代作绝对保证。UI 持续显示该范围。
+需要严格隔离的场景应保持 `:strict`，不能因原生模式通过而放宽严格门槛。
 
 保留的守护进程协议不把未知清理变成成功；超时/权限错误后 sticky UNKNOWN，后续
 close 不重做本机观测/发信号。未确认的 guardian 保留身份。Native 私有 ACK 仅使用
@@ -107,8 +133,12 @@ RAM 中独立一次性 UUID，不把 capability 放进可继承环境；注册�
 下一步。严格 retire 在 proxy 已证明退出后再读取最终同代 descriptor，合并所有
 已登记 helper，拒绝新/异 PID，再检查退出，不用提前快照证明清理。
 
-这些清理源码只获得 mock/纯数据/编译证据，没有运行本机 PTY 或原生进程探针。
-当前不可用状态是保留未完成功能，不能将它当作“终端验收通过”。
+自然退出后保留有界输出供分页读取；`has_more/end` 明确最后的多块输出，关闭状态
+仍可读到末尾，未确认状态不重放输入。用户主动终止进程可能截断尚未产生/接收的输出。
+`test/native_pty_test.py` 是显式启用的真实组件测试，使用已锁定便携 Python、原
+Seatbelt profile 和新临时样例；不伪造桌面 manifest 或从用户 PATH 选择产品运行时。
+它不在普通 `bb test` 中运行。具体已执行结果绑定外部收据；代码或 mock 通过本身
+仍不能作为完整 App、运行时解析器、真实模型或 LCU E2E 通过。
 
 ## 本轮验收状态
 

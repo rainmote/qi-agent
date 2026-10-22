@@ -2,12 +2,15 @@
 
 No socket, credential discovery, login files or arbitrary executable argument.
 The guardian owns a separate session so worker-group shutdown leaves it alive
-long enough to observe parent death and close the terminal's owned processes.
+long enough to close registered terminal groups. Native mode is best effort:
+detached descendants are outside its cleanup promise; strict mode stays closed.
 """
 import collections
 import codecs
+import ctypes
 import errno
 import fcntl
+import functools
 import hashlib
 import json
 import os
@@ -24,6 +27,8 @@ import uuid
 MAX_BUFFER = 262144
 MAX_INPUT = 16384
 MAX_REQUEST = 131072
+MAX_PROCESSES = 4096
+MAX_GROUPS = 256
 
 
 def descendant_containment_available():
@@ -66,39 +71,83 @@ class Output:
             del self.buffer[:extra]
             self.base += extra
 
-    def read(self, since):
+    def read(self, since, final=False):
         end = self.base + len(self.buffer)
         if since > end:
             raise ValueError("output cursor is ahead of terminal")
         start = max(since, self.base)
         chunk = self.buffer[start - self.base:start - self.base + 65536]
         decoder = codecs.getincrementaldecoder("utf-8")("replace")
-        text = decoder.decode(bytes(chunk), final=False)
+        text = decoder.decode(bytes(chunk), final=final and start + len(chunk) == end)
         pending, _ = decoder.getstate()
-        return {"output": text, "cursor": start + len(chunk) - len(pending),
+        cursor = start + len(chunk) - len(pending)
+        return {"output": text, "cursor": cursor, "end": end, "has_more": cursor < end,
                 "truncated": since < self.base}
 
 
+class BsdInfo(ctypes.Structure):
+    # macOS SDK sys/proc_info.h PROC_PIDTBSDINFO. Names are never exported.
+    _fields_ = [(name, ctypes.c_uint32) for name in
+                ("flags", "status", "xstatus", "pid", "ppid", "uid", "gid", "ruid", "rgid", "svuid", "svgid", "reserved")] + [
+        ("comm", ctypes.c_char * 16), ("name", ctypes.c_char * 32)] + [
+        (name, ctypes.c_uint32) for name in ("nfiles", "pgid", "jobc", "tty", "foreground")] + [
+        ("nice", ctypes.c_int32), ("start_sec", ctypes.c_uint64), ("start_usec", ctypes.c_uint64)]
+
+
+@functools.cache
+def native_library():
+    if sys.platform != "darwin":
+        raise RuntimeError("native_process_group_requires_macos")
+    library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+    library.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int]
+    library.proc_pidinfo.restype = ctypes.c_int
+    for name in ("proc_listchildpids", "proc_listpgrppids"):
+        getattr(library, name).argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_int]
+        getattr(library, name).restype = ctypes.c_int
+    return library
+
+
+def process_info(pid):
+    info = BsdInfo()
+    ctypes.set_errno(0)
+    count = native_library().proc_pidinfo(pid, 3, 0, ctypes.byref(info), ctypes.sizeof(info))
+    if count != ctypes.sizeof(info):
+        error = ctypes.get_errno()
+        if error == errno.ESRCH:
+            return None
+        raise OSError(error or errno.EIO, "process_identity_unavailable")
+    try:
+        session = os.getsid(pid)
+    except ProcessLookupError:
+        return None
+    return {"pid": info.pid, "parent": info.ppid, "group": info.pgid, "session": session,
+            "identity": (info.uid, info.start_sec, info.start_usec), "zombie": info.status == 5}
+
+
+def process_ids(kind, owner):
+    values = (ctypes.c_int * MAX_PROCESSES)()
+    ctypes.set_errno(0)
+    count = getattr(native_library(), kind)(owner, values, ctypes.sizeof(values))
+    error = ctypes.get_errno()
+    if count < 0 or (not count and error):
+        if error == errno.ESRCH:
+            return []
+        raise OSError(error or errno.EIO, "process_members_unavailable")
+    if count >= MAX_PROCESSES:
+        raise RuntimeError("native_registry_limit")
+    return [pid for pid in values[:count] if pid > 0]
+
+
 def census():
-    # Numeric identities/start times only; never command lines or environments.
-    result = subprocess.run(["/bin/ps", "-axo", "pid=,ppid=,pgid=,uid=,lstart="],
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=0.5)
-    if result.returncode or len(result.stdout) > 4000000:
-        raise RuntimeError("process_census_unavailable")
-    rows = {}
-    for line in result.stdout.decode("ascii", "strict").splitlines():
-        fields = line.split(None, 4)
-        if len(fields) != 5 or not all(value.isdigit() for value in fields[:4]):
-            raise RuntimeError("process_census_invalid")
-        if int(fields[3]) == os.getuid():
-            rows[int(fields[0])] = (int(fields[1]), int(fields[2]), fields[4])
-    if len(rows) > 100000:
-        raise RuntimeError("process_census_limit")
-    return rows
+    # Preflight reads only the guardian's own identity, not a host-wide ps scan.
+    value = process_info(os.getpid())
+    if value is None:
+        raise RuntimeError("guardian_identity_unavailable")
+    return {value["pid"]: (value["parent"], value["group"], value["identity"])}
 
 
 class Terminal:
-    def __init__(self, root, parent):
+    def __init__(self, root, parent, cleanup_mode="strict"):
         self.root, self.parent = root, parent
         self.pid = None
         self.master = None
@@ -109,12 +158,25 @@ class Terminal:
         self.cleanup = False
         self.exit_code = None
         self.reason = None
+        self.cleanup_mode = cleanup_mode
+        self.generation = str(uuid.uuid4())
+        self.shell_identity = None
+        self.groups = set()
+        self.observed = {}
+        self.detached = set()
+        self.reaped = False
+        self.termination = None
+        self.last_interrupt = None
+        self.failure_code = None
+        self.failure_errno = None
 
     def parent_alive(self):
         return os.getppid() == self.parent
 
     def start(self, cols, rows):
-        if not descendant_containment_available():
+        if self.cleanup_mode not in ("strict", "native-process-group"):
+            raise RuntimeError("invalid_cleanup_mode")
+        if self.cleanup_mode == "strict" and not descendant_containment_available():
             raise RuntimeError("terminal_descendant_containment_unavailable")
         if not self.parent_alive():
             raise RuntimeError("parent_changed")
@@ -140,6 +202,14 @@ class Terminal:
                     raise RuntimeError("terminal_exec_unconfirmed")
             if not self.parent_alive():
                 raise RuntimeError("parent_changed")
+            if self.cleanup_mode == "native-process-group":
+                info = process_info(self.pid)
+                if (info is None or info["parent"] != os.getpid() or info["group"] != self.pid
+                        or info["session"] != self.pid or info["identity"][0] != os.getuid()):
+                    raise RuntimeError("shell_registration_unknown")
+                self.shell_identity = info["identity"]
+                self.known[self.pid] = self.shell_identity
+                self.groups.add(self.pid)
             self.remember()
         finally:
             os.close(read_exec)
@@ -147,6 +217,8 @@ class Terminal:
                 os.close(write_exec)
 
     def remember(self):
+        if self.cleanup_mode == "native-process-group":
+            return self.remember_groups()
         rows = census()
         selected = {self.pid}
         changed = True
@@ -166,6 +238,147 @@ class Terminal:
             if owned and pid != os.getpid():
                 self.known[pid] = identity
         return rows
+
+    def remember_groups(self):
+        if self.reaped or self.shell_identity is None:
+            raise RuntimeError("shell_identity_retired_or_unknown")
+        queue = list(self.known.items())
+        seen, rows = set(), {}
+        while queue:
+            pid, identity = queue.pop()
+            if pid in seen:
+                continue
+            seen.add(pid)
+            info = process_info(pid)
+            if info is None:
+                continue
+            if identity is not None and info["identity"] != identity:
+                raise RuntimeError("process_identity_changed")
+            if info["identity"][0] != os.getuid():
+                raise RuntimeError("process_owner_changed")
+            if info["session"] != self.pid:
+                self.detached.add(pid)
+                continue
+            rows[pid] = info
+            self.known[pid] = info["identity"]
+            self.groups.add(info["group"])
+            if len(self.known) > MAX_PROCESSES or len(self.groups) > MAX_GROUPS:
+                raise RuntimeError("native_registry_limit")
+            for child in ([] if info["zombie"] else process_ids("proc_listchildpids", pid)):
+                child_info = process_info(child)
+                if child_info is not None and child_info["parent"] == pid:
+                    queue.append((child, child_info["identity"]))
+        # A foreground job can have its own PGID. TTY binding plus the pinned
+        # shell session constrains discovery; no unrelated process groups scan.
+        if self.master is not None:
+            try:
+                group = os.tcgetpgrp(self.master)
+            except OSError as error:
+                if not ((self.pid not in rows or rows[self.pid]["zombie"]) and error.errno in (errno.EIO, errno.ENOTTY)):
+                    raise
+            else:
+                for info in self.group_members(group):
+                    rows[info["pid"]] = info
+                    self.known[info["pid"]] = info["identity"]
+                    self.groups.add(group)
+        if len(self.known) > MAX_PROCESSES or len(self.groups) > MAX_GROUPS:
+            raise RuntimeError("native_registry_limit")
+        self.observed = rows
+        return {pid: (v["parent"], v["group"], v["identity"]) for pid, v in rows.items()}
+
+    def group_members(self, group):
+        if group <= 1 or group == os.getpgrp():
+            raise RuntimeError("unsafe_process_group")
+        members = []
+        for pid in process_ids("proc_listpgrppids", group):
+            info = process_info(pid)
+            if info is None or info["group"] != group:
+                continue
+            if info["session"] != self.pid or info["identity"][0] != os.getuid():
+                raise RuntimeError("process_group_identity_changed")
+            if pid in self.known and self.known[pid] != info["identity"]:
+                raise RuntimeError("process_identity_changed")
+            members.append(info)
+        return members
+
+    def signal_group(self, group, sig):
+        members = self.group_members(group)
+        anchors = [m for m in members if not m["zombie"] and self.known.get(m["pid"]) == m["identity"]]
+        if not anchors:
+            return False
+        # Fresh birth-time/session checks guard reuse. macOS does not provide
+        # an atomic pidfd+killpg operation; this remains a limited best effort.
+        live_anchor = False
+        for member in anchors:
+            current = process_info(member["pid"])
+            if current is not None and (current["identity"] != member["identity"] or current["session"] != self.pid
+                                        or current["group"] != group):
+                raise RuntimeError("process_group_identity_changed")
+            if current is not None and not current["zombie"]:
+                live_anchor = True
+        if not live_anchor:
+            return False
+        try:
+            os.killpg(group, sig)
+            return True
+        except ProcessLookupError:
+            return False
+
+    def close_groups(self, reason):
+        if self.cleanup or self.reason == "cleanup_unknown":
+            return self.state()
+        self.reason = reason
+        if self.pid is None:
+            self.closed = self.cleanup = True
+            return self.state()
+        try:
+            # The unreaped direct child reserves the shell PID/session identity
+            # until every group signal has finished. Never signal after reap.
+            for sig in (signal.SIGTERM, signal.SIGKILL):
+                self.remember_groups()
+                for group in sorted(self.groups, key=lambda g: (g == self.pid, g)):
+                    if self.signal_group(group, sig):
+                        self.termination = signal.Signals(sig).name
+                child = process_info(self.pid)
+                if child is not None:
+                    if child["identity"] != self.shell_identity or child["parent"] != os.getpid():
+                        raise RuntimeError("direct_child_identity_changed")
+                    if not child["zombie"]:
+                        try:
+                            os.kill(self.pid, sig)
+                            self.termination = signal.Signals(sig).name
+                        except ProcessLookupError:
+                            pass
+                time.sleep(0.1)
+            deadline = time.monotonic() + 1
+            while time.monotonic() < deadline:
+                self.drain()
+                if not self.reaped:
+                    waited, status = os.waitpid(self.pid, os.WNOHANG)
+                    if waited:
+                        self.reaped = True
+                        self.exit_code = os.waitstatus_to_exitcode(status)
+                groups_alive = False
+                for group in self.groups:
+                    try:
+                        os.killpg(group, 0)  # Observation only; no post-reap signalling.
+                        groups_alive = True
+                    except ProcessLookupError:
+                        pass
+                if self.reaped and not groups_alive:
+                    self.cleanup = self.closed = True
+                    break
+                time.sleep(0.025)
+        except (OSError, RuntimeError) as error:
+            self.failure_code = str(error) if isinstance(error, RuntimeError) else type(error).__name__
+            self.failure_errno = getattr(error, "errno", None)
+            self.reason = "cleanup_unknown"
+        if not self.cleanup:
+            self.reason = "cleanup_unknown"
+        if self.master is not None:
+            os.close(self.master)
+            self.master = None
+        return self.state()
 
     def resize(self, cols, rows):
         fcntl.ioctl(self.master, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
@@ -188,6 +401,8 @@ class Terminal:
         return True
 
     def close(self, reason="closed"):
+        if self.cleanup_mode == "native-process-group":
+            return self.close_groups(reason)
         if self.cleanup or self.reason == "cleanup_unknown":
             return self.state()
         self.reason = reason
@@ -232,12 +447,22 @@ class Terminal:
     def state(self):
         return {"status": "closed" if self.cleanup else "unknown" if self.reason else "running",
                 "cleanup_confirmed": self.cleanup, "child_pid": self.pid, "guardian_pid": os.getpid(),
+                "cleanup_observed": self.cleanup, "cleanup_mode": self.cleanup_mode,
+                "cleanup_scope": "registered-process-groups" if self.cleanup_mode == "native-process-group" else "all-descendants",
+                "descendant_containment": False, "generation": self.generation,
+                "registered_groups": sorted(self.groups), "detached_observed": sorted(self.detached),
+                "termination": self.termination, "last_interrupt": self.last_interrupt,
+                "failure_code": self.failure_code, "failure_errno": self.failure_errno,
+                "shell_exit_observed": self.reaped,
+                "limitations": ["Detached descendants may survive; group absence is not full descendant containment."] if self.cleanup_mode == "native-process-group" else [],
                 "exit_code": self.exit_code, "reason": self.reason}
 
     def request(self, request):
         op = request["op"]
         if op == "close":
             return self.close()
+        if op == "read" and self.cleanup and self.pid is not None:
+            return {**self.state(), **self.output.read(request["since"], final=True)}
         if self.reason or self.closed:
             raise RuntimeError("terminal_closed_or_unknown")
         if op == "open":
@@ -256,9 +481,15 @@ class Terminal:
             self.resize(request["cols"], request["rows"])
         elif op == "interrupt":
             group = os.tcgetpgrp(self.master)
-            if os.getsid(group) != self.pid:
-                raise RuntimeError("foreground_identity_unknown")
-            os.killpg(group, signal.SIGINT)
+            if self.cleanup_mode == "native-process-group":
+                self.remember_groups()
+                if os.tcgetpgrp(self.master) != group:
+                    raise RuntimeError("foreground_identity_changed")
+                self.last_interrupt = {"group": group, "signal": "SIGINT", "delivered": self.signal_group(group, signal.SIGINT)}
+            else:
+                if os.getsid(group) != self.pid:
+                    raise RuntimeError("foreground_identity_unknown")
+                os.killpg(group, signal.SIGINT)
         self.drain()
         return {**self.state(), **(self.output.read(request["since"]) if op == "read" else {})}
 
@@ -268,11 +499,11 @@ def emit(value):
     sys.stdout.flush()
 
 
-def main(root, parent):
+def main(root, parent, cleanup_mode="strict"):
     if not os.path.isabs(root) or os.path.realpath(root) != root or os.getppid() != parent:
         raise RuntimeError("invalid_terminal_owner")
     os.setsid()
-    terminal = Terminal(root, parent)
+    terminal = Terminal(root, parent, cleanup_mode)
     stopping = [False]
     for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
         signal.signal(sig, lambda *_: stopping.__setitem__(0, True))
@@ -281,6 +512,16 @@ def main(root, parent):
     os.set_blocking(0, False)
     try:
         while terminal.parent_alive() and not stopping[0]:
+            if terminal.pid is not None and not terminal.closed and not terminal.reason and cleanup_mode == "native-process-group":
+                try:
+                    terminal.remember_groups()
+                except (OSError, RuntimeError) as error:
+                    terminal.failure_code = str(error) if isinstance(error, RuntimeError) else type(error).__name__
+                    terminal.failure_errno = getattr(error, "errno", None)
+                    terminal.reason = "cleanup_unknown"
+                    break
+                if terminal.pid not in terminal.observed or terminal.observed[terminal.pid]["zombie"]:
+                    terminal.close("terminal_exited" if terminal.pid in terminal.observed else "terminal_identity_unobserved")
             if time.monotonic() - terminal.started > 3600 or time.monotonic() - terminal.last_input > 900:
                 terminal.close("terminal_deadline")
                 break
@@ -300,8 +541,9 @@ def main(root, parent):
                     else:
                         if not terminal.drain():
                             terminal.close("terminal_exited")
-                            stopping[0] = True
-                            break
+                            if not terminal.cleanup:
+                                stopping[0] = True
+                                break
             while b"\n" in requests:
                 raw, _, requests = requests.partition(b"\n")
                 request = validate(json.loads(raw))
@@ -316,13 +558,15 @@ def main(root, parent):
                     raise ValueError("terminal_request_ledger_limit")
                 try:
                     value = {"id": request["id"], "ok": True, "result": terminal.request(request)}
-                except Exception:
+                except Exception as error:
+                    terminal.failure_code = str(error) if isinstance(error, RuntimeError) else type(error).__name__
+                    terminal.failure_errno = getattr(error, "errno", None)
                     terminal.close("terminal_operation_unknown")
                     value = {"id": request["id"], "ok": False, "error": "terminal_operation_failed", "result": terminal.state()}
                 if request["op"] != "read":
                     ledger[request["id"]] = (fingerprint, value)
                 emit(value)
-                if terminal.closed or terminal.reason:
+                if request["op"] == "close" or (terminal.reason and not terminal.cleanup):
                     stopping[0] = True
                     break
     finally:
@@ -341,6 +585,6 @@ def main(root, parent):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 5 or sys.argv[1] != "--parent" or sys.argv[3] != "--root":
+    if len(sys.argv) != 7 or sys.argv[1] != "--parent" or sys.argv[3] != "--root" or sys.argv[5] != "--cleanup-mode" or sys.argv[6] not in ("strict", "native-process-group"):
         raise SystemExit("invalid terminal invocation")
-    main(sys.argv[4], int(sys.argv[2]))
+    main(sys.argv[4], int(sys.argv[2]), sys.argv[6])

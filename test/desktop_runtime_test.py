@@ -23,9 +23,23 @@ def module(name, path):
 
 terminal = module("terminal_protocol", "src/qi/terminal_helper.py")
 runtime = module("runtime_archive", "scripts/desktop/workspace-runtime.py")
+receipts = module("pty_receipts", "test/pty_receipt.py")
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_real_harness_requires_final_matching_cleanup_receipt_even_after_exit(self):
+        expected = {"generation": "fixture-generation", "child_pid": 12345, "guardian_pid": 12344}
+        result = {**expected, "status": "closed", "cleanup_confirmed": True, "cleanup_observed": True,
+                  "shell_exit_observed": True, "cleanup_scope": "registered-process-groups", "descendant_containment": False,
+                  "cleanup_mode": "native-process-group", "registered_groups": [12345]}
+        self.assertTrue(receipts.cleanup_receipt_matches(result, expected, 0))
+        for mutation in [{"generation": "old"}, {"child_pid": 12346}, {"guardian_pid": 12343},
+                         {"cleanup_observed": False}, {"cleanup_confirmed": False}, {"shell_exit_observed": False},
+                         {"registered_groups": []}, {"registered_groups": [12346]}, {"registered_groups": [12345, 12345]}]:
+            self.assertFalse(receipts.cleanup_receipt_matches({**result, **mutation}, expected, 0))
+        for code in [None, -9, 71]: self.assertFalse(receipts.cleanup_receipt_matches(result, expected, code))
+        self.assertFalse(receipts.cleanup_receipt_matches(None, expected, 0))
+
     def test_finite_input_geometry_and_request_identity(self):
         request = {"id": str(uuid.uuid4()), "op": "open", "cols": 90, "rows": 24}
         self.assertEqual(terminal.validate(request), request)
@@ -46,6 +60,22 @@ class ProtocolTests(unittest.TestCase):
         self.assertTrue(output.read(0)["truncated"])
         self.assertLessEqual(len(output.buffer), terminal.MAX_BUFFER)
         with self.assertRaises(ValueError): output.read(10 ** 10)
+
+    def test_final_output_larger_than_one_read_retains_an_explicit_drain_hint(self):
+        output = terminal.Output()
+        output.append(b"a" * 200000)
+        first = output.read(0)
+        self.assertTrue(first.get("has_more", False), "closed terminals must drain more than one 64KiB chunk")
+        self.assertEqual(first.get("end"), 200000)
+        chunks = [first["output"]]
+        while first["has_more"]:
+            first = output.read(first["cursor"], final=True)
+            chunks.append(first["output"])
+        self.assertEqual("".join(chunks), "a" * 200000)
+        output = terminal.Output(); output.append(b"\xe7\x95")
+        final = output.read(0, final=True)
+        self.assertFalse(final["has_more"])
+        self.assertEqual(final["cursor"], 2)
 
     def test_unknown_cleanup_never_retries_native_observations(self):
         instance = terminal.Terminal("/fixture", 12345)
@@ -74,6 +104,65 @@ class ProtocolTests(unittest.TestCase):
              patch.object(terminal.pty, "fork", side_effect=AssertionError("must not fork")):
             with self.assertRaisesRegex(RuntimeError, "descendant_containment_unavailable"):
                 instance.start(90, 24)
+
+    def test_explicit_native_mode_reaches_only_the_mocked_fork_boundary(self):
+        instance = terminal.Terminal("/fixture", 12345)
+        instance.cleanup_mode = "native-process-group"
+        with patch.object(instance, "parent_alive", return_value=True), \
+             patch.object(terminal, "census", return_value={}), \
+             patch.object(terminal.pty, "fork", side_effect=RuntimeError("fixture-fork-boundary")):
+            with self.assertRaisesRegex(RuntimeError, "fixture-fork-boundary"):
+                instance.start(90, 24)
+
+    def native_fixture(self):
+        instance = terminal.Terminal("/fixture", 12345, "native-process-group")
+        instance.pid = 98765
+        instance.shell_identity = (501, 100, 123456)
+        instance.known = {98765: instance.shell_identity}
+        instance.groups = {98765}
+        info = {"pid": 98765, "parent": 12345, "group": 98765, "session": 98765,
+                "identity": instance.shell_identity, "zombie": False}
+        return instance, info
+
+    def test_group_signal_rechecks_birth_identity_and_never_signals_a_reused_pid(self):
+        instance, info = self.native_fixture()
+        with patch.object(instance, "group_members", return_value=[info]), \
+             patch.object(terminal, "process_info", return_value={**info, "identity": (501, 200, 123456)}), \
+             patch.object(terminal.os, "killpg") as kill:
+            with self.assertRaisesRegex(RuntimeError, "identity_changed"):
+                instance.signal_group(98765, terminal.signal.SIGTERM)
+            kill.assert_not_called()
+
+    def test_group_signal_does_not_use_a_disappeared_anchor_or_claim_cleanup(self):
+        instance, info = self.native_fixture()
+        with patch.object(instance, "group_members", return_value=[info]), \
+             patch.object(terminal, "process_info", return_value=None), \
+             patch.object(terminal.os, "killpg") as kill:
+            self.assertFalse(instance.signal_group(98765, terminal.signal.SIGTERM))
+            kill.assert_not_called()
+        with patch.object(instance, "group_members", return_value=[info]), \
+             patch.object(terminal, "process_info", return_value=info), \
+             patch.object(terminal.os, "killpg"):
+            self.assertTrue(instance.signal_group(98765, terminal.signal.SIGTERM))
+            self.assertFalse(instance.state()["cleanup_confirmed"])
+            self.assertFalse(instance.state()["descendant_containment"])
+
+    def test_native_observation_permission_error_stays_unknown_without_retry(self):
+        instance, _ = self.native_fixture()
+        with patch.object(instance, "remember_groups", side_effect=PermissionError("fixture denied")) as observe, \
+             patch.object(terminal.os, "killpg") as kill:
+            self.assertEqual(instance.close()["reason"], "cleanup_unknown")
+            self.assertEqual(instance.close()["reason"], "cleanup_unknown")
+            self.assertEqual(observe.call_count, 1)
+            kill.assert_not_called()
+
+    def test_native_group_refuses_members_in_another_session(self):
+        instance, info = self.native_fixture()
+        with patch.object(terminal, "process_ids", return_value=[98765]), \
+             patch.object(terminal, "process_info", return_value={**info, "session": 55555}), \
+             patch.object(terminal.os, "getpgrp", return_value=11111):
+            with self.assertRaisesRegex(RuntimeError, "group_identity_changed"):
+                instance.group_members(98765)
 
 
 class ArchiveTests(unittest.TestCase):

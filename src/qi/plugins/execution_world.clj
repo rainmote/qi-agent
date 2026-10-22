@@ -491,14 +491,15 @@
    (fn [ctx {:keys [root timeout-ms max-timeout-ms
                     max-output-chars max-output-file-chars
                     max-file-bytes max-write-bytes max-walk-entries
-                    max-output-files output-dir sandbox]
+                    max-output-files output-dir sandbox terminal-cleanup-mode]
              :or {root "." timeout-ms 30000 max-output-chars 50000
                   max-timeout-ms 300000
                   max-output-file-chars 10000000 max-file-bytes 16777216
                   max-write-bytes 4194304
                   max-walk-entries 100000
                   max-output-files 1000
-                  output-dir ".qi-agent/tool-output" sandbox :auto}}]
+                  output-dir ".qi-agent/tool-output" sandbox :auto terminal-cleanup-mode :strict}}]
+     (terminal/capability terminal-cleanup-mode)
      (when-not (every? pos-int? [timeout-ms max-timeout-ms max-output-chars
                                  max-output-file-chars max-file-bytes
                                  max-write-bytes max-walk-entries
@@ -536,10 +537,10 @@
             :max-timeout-ms max-timeout-ms
             :process-group-enabled (boolean (process-groups-available?))
             :workspace-runtime (select-keys assets [:available? :reason :python-version])
-            :terminal-capability (terminal/capability)
-            :terminal-controller (when (and (:available? (terminal/capability))
+            :terminal-capability (terminal/capability terminal-cleanup-mode)
+            :terminal-controller (when (and (:available? (terminal/capability terminal-cleanup-mode))
                                             (:available? assets) (not= :unavailable mode))
-                                   #(terminal/controller workspace-root (runtime/describe) mode seatbelt-profile))
+                                   #(terminal/controller workspace-root (runtime/describe) mode seatbelt-profile terminal-cleanup-mode))
             :capabilities (cond-> #{:fs/read :fs/write}
                             (and (not= :unavailable mode)
                                  (process-groups-available?)) (conj :process))

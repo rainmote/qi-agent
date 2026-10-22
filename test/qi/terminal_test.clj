@@ -1,5 +1,6 @@
 (ns qi.terminal-test
   (:require [clojure.test :refer [deftest is]]
+            [clojure.edn :as edn]
             [babashka.fs :as fs]
             [cheshire.core :as json]
             [qi.cancellation :as cancellation]
@@ -151,6 +152,50 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"detached shell descendants"
                          ((:start! controller) (fn [_] (throw (ex-info "must not admit" {}))) 90 24)))
     (is (:cleanup_confirmed ((:status controller))))))
+
+(deftest native-process-group-mode-is-explicit-and-does-not-claim-descendant-containment
+  (doseq [mode [:strict :native-process-group]]
+    (let [root (fs/create-temp-dir {:prefix "qi-terminal-mode-unit-"})
+          ctx (kernel/create-context)]
+      (try
+        (with-redefs [runtime/describe (constantly {:available? true :python-version "fixture"})]
+          (plugin/load-all! ctx [{:ns 'qi.plugins.execution-world
+                                 :config {:root (str root) :sandbox :none :terminal-cleanup-mode mode}}]))
+        (let [world (kernel/service ctx :execution/world)
+              capability (:terminal-capability world)]
+          (is (= (name mode) (:cleanup-mode capability)))
+          (is (false? (:descendant-containment capability)))
+          (is (= (= mode :native-process-group) (boolean (:terminal-controller world))))
+          (when (= mode :native-process-group)
+            (is (= "registered-process-groups" (:cleanup-scope capability)))
+            (is (seq (:limitations capability)))))
+        (finally (kernel/dispose-all! ctx) (fs/delete-tree root))))))
+
+(deftest native-mode-never-changes-sandbox-or-model-parameters
+  (let [args (transport/command "/fixture" {:python "/bundle/python" :helper "/bundle/helper" :root "/bundle"}
+                                :seatbelt "(deny default)" :native-process-group)]
+    (is (= "/usr/bin/sandbox-exec" (first args)))
+    (is (= ["--cleanup-mode" "native-process-group"] (vec (take-last 2 args)))))
+  (is (thrown? Exception (transport/capability :unsupported)))
+  (let [{:keys [ctx rpc calls]} (fixture {})]
+    (try
+      (is (thrown? Exception (rpc "terminal.execute" {:action "open" :cleanup_mode "native-process-group"})))
+      (is (empty? @calls))
+      (finally (kernel/dispose-all! ctx)))))
+
+(deftest desktop-profile-selects-limited-native-mode-without-overriding-explicit-strict
+  (doseq [requested [nil :strict]]
+    (let [root (fs/create-temp-dir {:prefix "qi-terminal-profile-unit-"})
+          path (str (fs/path root "agent.edn"))
+          config (cond-> {:root "." :sandbox :auto} requested (assoc :terminal-cleanup-mode requested))]
+      (try
+        (spit path (pr-str {:plugins [{:ns 'qi.plugins.execution-world :config config}]}))
+        (binding [*command-line-args* [path]] (load-file "scripts/desktop/profile.clj"))
+        (let [entries (:plugins (edn/read-string (slurp path))) world (first entries)]
+          (is (= (or requested :native-process-group) (get-in world [:config :terminal-cleanup-mode])))
+          (is (= :auto (get-in world [:config :sandbox])))
+          (is (false? (get-in (first (filter #(= 'qi.plugins.lcu (:ns %)) entries)) [:config :enabled]))))
+        (finally (fs/delete-tree root))))))
 
 (defn office-fixture [options]
   (let [root (fs/create-temp-dir {:prefix "qi-office-mock-"})

@@ -7,12 +7,21 @@
             [qi.workspace-runtime :as runtime])
   (:import [java.util.concurrent TimeUnit]))
 
-(defn capability []
-  ;; Native registration proves the guardian's identity, not ownership of an
-  ;; arbitrary shell's detached descendants. Keep PTY admission closed until
-  ;; a real containment adapter is implemented and independently reviewed.
-  {:available? false
-   :reason "PTY is unavailable: this macOS adapter cannot prove cleanup of detached shell descendants. No terminal process was started."})
+(defn capability
+  ([] (capability :strict))
+  ([mode]
+   (when-not (contains? #{:strict :native-process-group} mode)
+     (throw (ex-info "Unknown terminal cleanup mode" {:mode mode})))
+   (let [native? (= mode :native-process-group)
+         available? (and native? (= "Mac OS X" (System/getProperty "os.name")))]
+     {:available? available? :cleanup-mode (name mode)
+      :cleanup-scope (if native? "registered-process-groups" "all-descendants")
+      :descendant-containment false
+      :limitations (when native? ["Detached descendants may survive; cleanup observes registered process groups and the direct child only."
+                                  "Process identity checks and group signals are best effort, not atomic containment."])
+      :reason (when-not available?
+                (if native? "Native process-group PTY currently requires macOS."
+                  "PTY is unavailable: strict mode cannot prove cleanup of detached shell descendants. No terminal process was started."))})))
 
 (defn- private-child! [root parts]
   (reduce (fn [parent part]
@@ -26,16 +35,19 @@
 (defn command
   "Use the world's selected sandbox unchanged. A payload grant is read-only;
   workspace-only writes and the original network deny remain in force."
-  [root assets sandbox profile]
+  ([root assets sandbox profile] (command root assets sandbox profile :strict))
+  ([root assets sandbox profile cleanup-mode]
+  (capability cleanup-mode)
   (let [base [(:python assets) "-I" "-B" (:helper assets)
-              "--parent" (str (.pid (java.lang.ProcessHandle/current))) "--root" (str root)]]
+              "--parent" (str (.pid (java.lang.ProcessHandle/current))) "--root" (str root)
+              "--cleanup-mode" (name cleanup-mode)]]
     (case sandbox
       :seatbelt (into ["/usr/bin/sandbox-exec" "-D" (str "WORKSPACE=" root)
                        "-D" (str "RUNTIME=" (:root assets)) "-p"
                        (str profile "\n(allow file-read* (subpath (param \"RUNTIME\")))\n")]
                       base)
       :none base
-      (throw (ex-info "No safe terminal execution world is available" {})))))
+      (throw (ex-info "No safe terminal execution world is available" {}))))))
 
 (defn- read-line-bounded! [reader]
   (let [buffer (StringBuilder.)]
@@ -47,7 +59,9 @@
           (>= (.length buffer) 524288) (throw (ex-info "Terminal response exceeds limit" {:uncertain true}))
           :else (do (.append buffer (char value)) (recur)))))))
 
-(defn controller [root assets sandbox profile]
+(defn controller
+  ([root assets sandbox profile] (controller root assets sandbox profile :strict))
+  ([root assets sandbox profile cleanup-mode]
   (let [state (atom {:status "cold" :cleanup_confirmed true :uncertain false})
         child (atom nil)
         input (atom nil)
@@ -55,11 +69,16 @@
         active (atom nil)
         closed? (atom false)
         stop-requested? (atom false)
+        stop-completion (promise)
         admission-lock (Object.)
         lock (Object.)
         observe! (fn [value]
                    (when (map? value)
-                     (swap! state merge (select-keys value [:status :cleanup_confirmed :child_pid :guardian_pid :exit_code :reason]))))
+                     (swap! state merge (select-keys value [:status :cleanup_confirmed :cleanup_observed :cleanup_scope
+                                                            :cleanup_mode :descendant_containment :limitations :generation
+                                                            :registered_groups :termination :last_interrupt :shell_exit_observed
+                                                            :detached_observed :child_pid :guardian_pid :exit_code :reason
+                                                            :failure_code :failure_errno :has_more :end :cursor :truncated]))))
         status (fn []
                  (let [process @child]
                    (cond
@@ -109,25 +128,33 @@
         (fn []
           (reset! closed? true)
           (let [process (locking admission-lock @child)]
-            (when (and process (compare-and-set! stop-requested? false true))
-              (when-not (:cleanup_confirmed @state)
-                (when-not (:uncertain @state)
-                  (try (exchange! {:op "close"}) (catch Throwable _)))
-                ;; EOF is a stop request, never a repeated terminal input.
-                ;; Bound even stream closing; do not kill an UNKNOWN guardian
-                ;; whose live registration protects native cleanup accuracy.
-                (deref (future (try (.close ^java.io.OutputStream @input) (catch Throwable _))) 500 nil))
-              (.waitFor ^Process process 5000 TimeUnit/MILLISECONDS))
-            (let [value (status)]
-              (if (and (:cleanup_confirmed value) (or (nil? process) (not (.isAlive ^Process process))))
-                (swap! state assoc :status "closed")
-                (swap! state assoc :status "unknown" :uncertain true :reason "cleanup_unconfirmed")))))]
+            (if (compare-and-set! stop-requested? false true)
+              (let [result
+                    (try
+                      (when process
+                        (when (and (not (:cleanup_confirmed @state)) (not (:uncertain @state)))
+                          (try (exchange! {:op "close"}) (catch Throwable _)))
+                        ;; EOF never repeats input. It also releases a guardian
+                        ;; which retained the naturally exited shell's output.
+                        (deref (future (try (.close ^java.io.OutputStream @input) (catch Throwable _))) 500 nil)
+                        (.waitFor ^Process process 5000 TimeUnit/MILLISECONDS))
+                      (let [value (status)]
+                        (if (and (:cleanup_confirmed value) (or (nil? process) (not (.isAlive ^Process process))))
+                          (swap! state assoc :status "closed")
+                          (swap! state assoc :status "unknown" :uncertain true :reason "cleanup_unconfirmed")))
+                      (catch Throwable _
+                        (swap! state assoc :status "unknown" :uncertain true :reason "cleanup_unconfirmed")))]
+                (deliver stop-completion result)
+                result)
+              ;; Concurrent close/revoke/cancel shares one cleanup operation;
+              ;; a second caller must not mutate the first one's live state.
+              (deref stop-completion 6000 (assoc @state :status "unknown" :uncertain true :reason "cleanup_in_progress")))))]
     {:status status :close! stop!
      :request! exchange!
      :start! (fn [admit! cols rows]
                (locking admission-lock
-               (when-not (:available? (capability))
-                 (throw (ex-info (:reason (capability)) {:reason :descendant-containment-unavailable})))
+               (when-not (:available? (capability cleanup-mode))
+                 (throw (ex-info (:reason (capability cleanup-mode)) {:reason :descendant-containment-unavailable})))
                (when @closed? (throw (ex-info "Terminal admission was closed before start" {})))
                (when-not (:available? assets) (throw (ex-info (:reason assets) {})))
                (when @child (throw (ex-info "Terminal controller cannot be restarted" {:uncertain true})))
@@ -136,7 +163,7 @@
                      environment (merge {"HOME" (str home) "TMPDIR" (str temporary) "LANG" "en_US.UTF-8"
                                          "TERM" "xterm-256color" "HISTFILE" "/dev/null"}
                                         (runtime/environment assets root))
-                     builder (doto (ProcessBuilder. (command root assets sandbox profile))
+                     builder (doto (ProcessBuilder. (command root assets sandbox profile cleanup-mode))
                                (.directory (io/file (str root))))]
                  (.clear (.environment builder))
                  (.putAll (.environment builder) environment)
@@ -157,4 +184,4 @@
                      (exchange! {:op "open" :cols cols :rows rows})
                      (catch Throwable error
                        (stop!)
-                       (throw error)))))))}))
+                       (throw error)))))))})))

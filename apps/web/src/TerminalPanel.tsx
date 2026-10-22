@@ -5,10 +5,16 @@ import { RequestScope } from "./request-scope";
 import { createTerminalEmulator, terminalRendererAvailable, type TerminalEmulator } from "./terminal-emulator";
 
 type TerminalState = { id?: string; terminal_id?: string; status: string; cleanup_confirmed: boolean; uncertain?: boolean; reason?: string;
-  output?: string; cursor?: number; truncated?: boolean };
+  output?: string; cursor?: number; truncated?: boolean; has_more?: boolean; end?: number };
 type Capability = { available: boolean; trusted: boolean; reason?: string; sandbox?: string;
+  cleanup?: { mode?: string; scope?: string; descendant_containment?: boolean; limitations?: string[] };
   runtime?: { "python-version"?: string; reason?: string }; terminals: TerminalState[]; pending_request_ids?: string[] };
 type Rpc = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
+
+export function terminalOutputPending(state?: { status: string; uncertain?: boolean; has_more?: boolean; end?: number }, localCursor = 0): boolean {
+  const unread = typeof state?.end === "number" ? localCursor < state.end : state?.has_more === true;
+  return !state?.uncertain && (state?.status === "running" || (state?.status === "closed" && unread));
+}
 
 export function TerminalPanel({ sessionId, rpc, readOnly }: { sessionId: string; rpc: Rpc; readOnly: boolean }) {
   const [capability, setCapability] = useState<Capability | null>(null);
@@ -66,7 +72,7 @@ export function TerminalPanel({ sessionId, rpc, readOnly }: { sessionId: string;
     return () => { observer.disconnect(); view?.dispose(); emulator.current = null; };
   }, [active]);
   useEffect(() => {
-    if (!active || !capability?.trusted || !running) return;
+    if (!active || !capability?.trusted || !terminalOutputPending(selected, cursors.current.get(active) || 0)) return;
     let stopped = false, timer: ReturnType<typeof setTimeout>;
     const read = async () => {
       try {
@@ -80,6 +86,8 @@ export function TerminalPanel({ sessionId, rpc, readOnly }: { sessionId: string;
           cursors.current.set(active, result.cursor);
           emulator.current?.write(result.output);
         }
+        setCapability(current => current ? { ...current, terminals: current.terminals.map(item => item.id === active ? { ...item, ...result } : item) } : current);
+        if (!terminalOutputPending(result, cursors.current.get(active) || 0)) return;
       } catch (cause) {
         if (!stopped && mounted.current) setError(cause instanceof Error ? cause.message : String(cause));
         // A failed stream does not replay input. Stop polling until the user
@@ -90,7 +98,7 @@ export function TerminalPanel({ sessionId, rpc, readOnly }: { sessionId: string;
     };
     void read();
     return () => { stopped = true; clearTimeout(timer); };
-  }, [active, capability?.trusted, running, rpc]);
+  }, [active, capability?.trusted, running, selected?.has_more, selected?.end, selected?.uncertain, rpc]);
 
   const run = async (action: string, extra: Record<string, unknown> = {}) => {
     if (locked.current || closeLock.current) return;
@@ -122,6 +130,7 @@ export function TerminalPanel({ sessionId, rpc, readOnly }: { sessionId: string;
     <p className="terminal-capability" role="status">{capability ? `${capability.sandbox || "—"} · ${capability.runtime?.["python-version"] || t("运行时未就绪")}` : t("正在核对终端能力…")}</p>
     {!terminalRendererAvailable && <p>{t("此 Web 构建未包含终端模拟器；请使用具备完整依赖的桌面包。")}</p>}
     {capability?.reason && <p>{capability.reason}</p>}
+    {capability?.cleanup?.mode === "native-process-group" && <p role="note">{t("原生终端按登记的进程组清理；脱离进程组或会话的后代可能残留，清理确认不代表所有后代都已退出。")}</p>}
     {capability && !capability.trusted && <p>{t("项目处于受限状态；查看项目信任范围后再决定，运行中的终端会请求关闭。")}</p>}
     <div className="terminal-toolbar">
       <select aria-label={t("终端会话")} value={active} disabled={busy || closing} onChange={event => { setActive(event.target.value); setError(""); setStreamNotice(""); }}>

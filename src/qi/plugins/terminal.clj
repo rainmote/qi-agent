@@ -36,6 +36,10 @@
                                               (:terminal-controller world) (kernel/service ctx :execution/process-admission)))
                      :trusted (boolean (trusted?)) :sandbox (:sandbox world)
                      :runtime (:workspace-runtime world)
+                     :cleanup {:mode (get-in world [:terminal-capability :cleanup-mode])
+                               :scope (get-in world [:terminal-capability :cleanup-scope])
+                               :descendant_containment (get-in world [:terminal-capability :descendant-containment])
+                               :limitations (get-in world [:terminal-capability :limitations])}
                      :pending_request_ids (vec (keys @pending))
                      :reason (if @admission-closed?
                                "Terminal request admission is closed; inspect or close existing terminals and use a new session."
