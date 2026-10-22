@@ -1348,7 +1348,8 @@ export function App() {
       <DesktopBrowser workspaceId={workspaceId} sessionId={activeSession?.id} newTabSerial={browserNewTabSerial} visible={workbench === "browser" && !settingsOpen && !shortcutsOpen && !workspaceDialogOpen && !fullAccessDialogOpen && !trust.dialog && !projection?.interactions.length}
         onClose={() => setWorkbench(null)} />
     </section>}
-    {workbench && workbench !== "browser" && workspaceId && <section ref={workbenchElement} className="workbench-drawer" aria-label={t("工作台")}
+    {workbench && workbench !== "browser" && workspaceId && <section ref={workbenchElement}
+      className={`workbench-drawer${workbench === "plugins" || workbench === "automation" ? " management-workbench" : ""}`} aria-label={t("工作台")}
       role={workbenchModal ? "dialog" : undefined} aria-modal={workbenchModal || undefined} onKeyDown={event => {
         if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setWorkbench(null); }
         if (event.key === "Tab") {

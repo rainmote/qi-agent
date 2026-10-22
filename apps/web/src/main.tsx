@@ -6,6 +6,7 @@ import "./workspace-panel.css";
 import "./AutomationPanel.css";
 import "./orchestration.css";
 import "./harness.css";
+import "./management-panels.css";
 import "./desktop-browser.css";
 import "./terminal.css";
 
