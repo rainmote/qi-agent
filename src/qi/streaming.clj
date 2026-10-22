@@ -6,13 +6,15 @@
             [clojure.string :as str]))
 
 (defn- parse-data [data]
-  (when (and (not (str/blank? data)) (not= "[DONE]" data))
+  (cond
+    (= "[DONE]" data) ::done
+    (not (str/blank? data))
     (try
       (json/parse-string data true)
       (catch Throwable error
         (throw (ex-info "Invalid JSON in LLM event stream"
-                        {:event-data (subs data 0 (min 500 (count data)))}
-                        error))))))
+                        {:code :invalid_stream_json :retryable false
+                         :event-chars (count data)}))))))
 
 (defn consume-sse!
   "Parse an SSE string/InputStream incrementally and call handler for every JSON
@@ -49,8 +51,9 @@
             (recur data-lines)
 
             (identical? eof entry)
-            (when-let [event (parse-data (str/join "\n" data-lines))]
-              (handler event))
+            (let [event (parse-data (str/join "\n" data-lines))]
+              (when (and event (not= ::done event)) (handler event))
+              {:done? (= ::done event)})
 
             (= :error (first entry))
             (throw (second entry))
@@ -59,10 +62,10 @@
             (let [line (second entry)]
               (cond
             (str/blank? line)
-            (do
-              (when-let [event (parse-data (str/join "\n" data-lines))]
-                (handler event))
-              (recur []))
+            (let [event (parse-data (str/join "\n" data-lines))]
+              (if (= ::done event)
+                {:done? true}
+                (do (when event (handler event)) (recur []))))
 
             (str/starts-with? line "data:")
             (recur (conj data-lines (str/trim (subs line 5))))
@@ -75,5 +78,8 @@
           (throw error)))
       (finally
         (dispose)
+        ;; DONE may arrive while the reader future is blocked on its next read.
+        ;; Closing the underlying stream first releases that read/reader lock.
+        (try (.close ^java.io.Closeable close-target) (catch Throwable _))
         (future-cancel reader-task)
         (try (.close ^java.io.Reader reader) (catch Throwable _))))))

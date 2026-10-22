@@ -35,6 +35,11 @@
   (let [index (or (:index chunk) 0)
         current (get calls index {})
         function (:function chunk)]
+    (when-not (and (integer? index) (not (neg? index))
+                  (or (nil? (:id current)) (nil? (:id chunk))
+                      (= (:id current) (:id chunk))))
+      (throw (ex-info "Invalid streamed tool-call identity"
+                      {:reason :provider-incomplete :retryable false})))
     (assoc calls index
            (cond-> current
              (:id chunk) (assoc :id (:id chunk))
@@ -44,23 +49,71 @@
              (:arguments function)
              (update-in [:function :arguments] str (:arguments function))))))
 
-(defn- stream-response [ctx body cancel-token]
-  (let [state (atom {:content [] :tool-calls {} :usage {}})]
+(defn- deepseek? [config]
+  (or (some #{:deepseek "deepseek"}
+            ((juxt :provider-id :settings-provider-id :auth-id) config))
+      (try (= "api.deepseek.com" (.getHost (java.net.URI. (:base-url config))))
+           (catch Throwable _ false))))
+
+(defn- valid-tool-call? [call]
+  (and (string? (:id call)) (not (str/blank? (:id call)))
+       (= "function" (:type call))
+       (string? (get-in call [:function :name]))
+       (not (str/blank? (get-in call [:function :name])))
+       (string? (get-in call [:function :arguments]))
+       (try (map? (json/parse-string (get-in call [:function :arguments]) true))
+            (catch Throwable _ false))))
+
+(defn- validate-response! [{:keys [message finish-reason usage] :as response}]
+  (let [calls (:tool_calls message)
+        reason (cond
+                 (= "length" finish-reason) :output-limit
+                 (or (contains? #{"content_filter" "refusal"} finish-reason)
+                     (seq (:refusal message))) :provider-refusal
+                 (not (contains? #{"stop" "tool_calls"} finish-reason)) :provider-incomplete
+                 (not (map? message)) :provider-incomplete
+                 (if (= "tool_calls" finish-reason)
+                   (not (and (seq calls) (every? valid-tool-call? calls)
+                             (= (count calls) (count (set (map :id calls))))))
+                   (seq calls)) :provider-incomplete)]
+    (when reason
+      (throw (ex-info (case reason
+                       :output-limit "Model response reached its output limit"
+                       :provider-refusal "Provider refused the response"
+                       "Provider response has no valid terminal outcome")
+                      {:reason reason :code :invalid_provider_terminal
+                       :finish-reason (when finish-reason
+                                        (if (contains? #{"stop" "tool_calls" "length" "content_filter" "refusal"} finish-reason)
+                                          finish-reason :unrecognized))
+                       :usage usage :retryable false})))
+    response))
+
+(defn- stream-response [ctx config body cancel-token]
+  (let [state (atom {:content [] :reasoning [] :tool-calls {} :usage {}})]
+    (try
     (streaming/consume-sse!
      body cancel-token
      (fn [event]
-       (when-let [error (:error event)]
+       (when (:usage event) (swap! state assoc :usage (:usage event)))
+       (when (:error event)
          (kernel/emit! ctx :llm/stream
                        {:type :response/error
                         :provider :openai-compatible
-                        :error error})
-         (throw (ex-info (or (:message error) "LLM stream failed")
-                         {:provider :openai-compatible})))
+                        :error {:code :provider-stream-error}})
+         (throw (ex-info "Provider reported a stream error"
+                         {:reason :provider-error :code :provider_stream_error
+                          :retryable false})))
        (swap! state
               (fn [current]
                 (let [choice (first (:choices event))
                       delta (:delta choice)
                       content (:content delta)]
+                  (when (and (:finish-reason current)
+                             (or (seq delta)
+                                 (and (:finish_reason choice)
+                                      (not= (:finish-reason current) (:finish_reason choice)))))
+                    (throw (ex-info "Provider sent content after its terminal outcome"
+                                    {:reason :provider-incomplete :retryable false})))
                   ;; Providers such as DeepSeek may stream spaces and newlines as
                   ;; standalone deltas. They are significant output, especially
                   ;; for Markdown headings, lists, and tables.
@@ -82,28 +135,53 @@
                     (assoc :finish-reason (:finish_reason choice))
                     (and (string? content) (not (empty? content)))
                     (update :content conj content)
+                    (string? (:reasoning_content delta))
+                    (update :reasoning conj (:reasoning_content delta))
+                    (seq (:refusal delta)) (assoc :refusal true)
                     (seq (:tool_calls delta))
                     (update :tool-calls
                             #(reduce append-tool-call % (:tool_calls delta)))))))))
-    (let [{:keys [content tool-calls finish-reason usage model]} @state
+    (cancellation/throw-if-cancelled! cancel-token)
+    (catch Throwable error
+      (throw (ex-info (if (cancellation/cancelled? cancel-token)
+                        "Agent run was cancelled" "LLM stream could not be completed")
+                      (merge {:reason :provider-error
+                              :retryable (boolean (some #(instance? java.io.IOException %)
+                                                        (take-while some? (iterate ex-cause error))))}
+                             (select-keys (ex-data error) [:reason :code :cancelled :retryable])
+                             {:usage (:usage @state)})))))
+    (let [{:keys [content reasoning tool-calls finish-reason usage model refusal]} @state
           calls (->> tool-calls (sort-by key) (mapv val))
-          text (apply str content)]
+          text (apply str content)
+          response (validate-response!
+                    {:message (cond-> {:role "assistant"
+                                       :content (when-not (str/blank? text) text)}
+                                (seq calls) (assoc :tool_calls calls)
+                                refusal (assoc :refusal "refused")
+                                (and (deepseek? config) (seq reasoning))
+                                (assoc :reasoning_content (apply str reasoning)))
+                     :finish-reason finish-reason :usage usage :model model})]
       (kernel/emit! ctx :llm/stream
                     {:type :response/completed
                      :provider :openai-compatible})
-      {:message (cond-> {:role "assistant"
-                         :content (when-not (str/blank? text) text)}
-                  (seq calls) (assoc :tool_calls calls))
-       :finish-reason (or finish-reason
-                          (if (seq calls) "tool_calls" "stop"))
-       :usage usage
-       :model model})))
+      response)))
 
-(defn- json-response [ctx body]
-  (let [parsed (json/parse-string body true)
-        choice (first (:choices parsed))]
-    (when-not (and choice (:message choice))
-      (throw (ex-info "LLM response has no choice/message" {:body parsed})))
+(defn- json-response [ctx config body]
+  (let [parsed (try (json/parse-string body true)
+                    (catch Throwable _
+                      (throw (ex-info "Invalid JSON in LLM response"
+                                      {:reason :provider-error :code :invalid_response_json
+                                       :retryable false}))))
+        _ (when (:error parsed)
+            (throw (ex-info "Provider reported a response error"
+                            {:reason :provider-error :code :provider_response_error
+                             :usage (:usage parsed) :retryable false})))
+        choice (first (:choices parsed))
+        response (validate-response!
+                  {:message (cond-> (:message choice)
+                              (not (deepseek? config)) (dissoc :reasoning_content))
+                   :finish-reason (:finish_reason choice)
+                   :usage (:usage parsed) :model (:model parsed)})]
     (when-let [content (get-in choice [:message :content])]
       (when-not (str/blank? content)
         (kernel/emit! ctx :llm/stream
@@ -113,10 +191,7 @@
     (kernel/emit! ctx :llm/stream
                   {:type :response/completed
                    :provider :openai-compatible})
-    {:message (:message choice)
-     :finish-reason (:finish_reason choice)
-     :usage (:usage parsed)
-     :model (:model parsed)}))
+    response))
 
 (defn- chat-content [content]
   (if-not (sequential? content)
@@ -136,18 +211,19 @@
                                     {:block block}))))
           content)))
 
-(defn- normalize-message [message]
-  (let [message (dissoc message :images :is-error)]
+(defn- normalize-message [replay-reasoning? message]
+  (let [message (cond-> (dissoc message :images :is-error)
+                  (not replay-reasoning?) (dissoc :reasoning_content))]
     (if (= "user" (:role message))
       (update message :content chat-content)
       message)))
 
-(defn- chat-messages [messages]
+(defn- chat-messages [config messages]
   (vec
    (mapcat
     (fn [batch]
       (concat
-       (map normalize-message batch)
+       (map (partial normalize-message (deepseek? config)) batch)
        ;; Chat Completions tool content is text-only. Finish the whole tool
        ;; batch before attaching screenshots as user image content, otherwise
        ;; the image message interrupts outstanding tool-call results.
@@ -172,7 +248,7 @@
       (throw (ex-info (str "Missing API key; set "
                            (or (:api-key-env config) ":api-key"))
                       {:provider :openai-compatible})))
-    (let [messages (cond-> (chat-messages (:messages request))
+    (let [messages (cond-> (chat-messages config (:messages request))
                      (not (str/blank? (:system-prompt request)))
                      (->> (into [{:role "system"
                                   :content (:system-prompt request)}])))
@@ -202,8 +278,8 @@
       (cancellation/throw-if-cancelled! (:cancel-token request))
       (if (and (string? (:body response))
                (str/starts-with? (str/trim (:body response)) "{"))
-        (json-response ctx (:body response))
-        (stream-response ctx (:body response) (:cancel-token request))))))
+        (json-response ctx config (:body response))
+        (stream-response ctx config (:body response) (:cancel-token request))))))
 
 (defn provider-entry
   "Build one OpenAI-compatible registry entry for a validated config."

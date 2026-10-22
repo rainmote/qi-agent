@@ -35,6 +35,17 @@ a complete billing ledger for compaction and failed requests. Recovered orphan
 runs have unknown usage and step counts. Legacy logs without run envelopes
 remain readable and are not assigned invented outcomes.
 
+Chat Completions requires an explicit valid `stop` or `tool_calls` terminal.
+EOF and `[DONE]` alone never authorize a tool batch; a valid terminal followed
+by EOF is accepted without requiring `[DONE]`. Usage-only tail frames remain
+accounted. Malformed calls, refusals and output limits fail before tool dispatch.
+Cancellation still wins over late responses. Stream parse errors omit raw data.
+DeepSeek reasoning is accumulated separately in durable assistant messages and
+replayed only to DeepSeek-compatible configuration, including after resume and
+the next user turn. It is not appended to final answer content or diagnostics;
+legacy messages without reasoning stay unchanged and thinking defaults do not
+change. See https://api-docs.deepseek.com/guides/thinking_mode/.
+
 `request-usage` is explicitly `scope: session-local` with `request-scope: logical-requests`: known input/output
 tokens, request count, unknown request count, and token completeness. It includes
 compaction and failed requests by request ID, and never substitutes zero for an

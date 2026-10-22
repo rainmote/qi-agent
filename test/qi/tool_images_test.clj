@@ -58,7 +58,7 @@
                                      :model "vision-fixture" :stream false
                                      :supports-images? true}
                                 (request-with-images))
-              {:choices [{:message {:role "assistant" :content "done"}}]})
+              {:choices [{:finish_reason "stop" :message {:role "assistant" :content "done"}}]})
         messages (:messages body)]
     (is (= ["user" "assistant" "tool" "tool" "user"] (mapv :role messages)))
     (is (= ["first" "second"] (mapv :tool_call_id (subvec messages 2 4))))

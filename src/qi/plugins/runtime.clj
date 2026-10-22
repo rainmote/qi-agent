@@ -296,17 +296,6 @@
     (record! ctx "tool/result" (dissoc result-data :value))
     [call result]))
 
-(defn- truncated-tool-results [tool-calls]
-  (mapv (fn [tool-call]
-          {:call tool-call
-           :result
-           (failure {:token (str (random-uuid))
-                     :call-id (:id tool-call)
-                     :name (get-in tool-call [:function :name])}
-                    (str "Tool call was not executed because the model response "
-                         "hit its output-token limit."))})
-        tool-calls))
-
 (defn- sequential-batch? [prepared]
   (boolean
    (some #(or (= :sequential (get-in % [:prepared :tool :execution-mode]))
@@ -715,18 +704,18 @@
           (cancellation/throw-if-cancelled! cancel-token))
         (when (or (not (map? (:message response))) (:error response))
           (throw (ex-info "Provider returned an invalid response" {:reason :provider-error})))
+        (when (and (seq tool-calls)
+                   (not= "tool_calls" (some-> (:finish-reason response) name)))
+          (throw (ex-info "Provider did not authorize a complete tool batch"
+                          {:reason (if (= "length" (some-> (:finish-reason response) name))
+                                     :output-limit :provider-incomplete)
+                           :finish-reason (:finish-reason response) :retryable false})))
         (record-message! ctx assistant)
         (publish! ctx listeners :agent.message/end {:message assistant})
         (if (seq tool-calls)
-          (let [executions (if (= "length" (:finish-reason response))
-                             (do
-                               (doseq [tool-call tool-calls]
-                                 (record-tool-call! ctx tool-call))
-                               (mapv #(record-tool-result! ctx %)
-                                     (truncated-tool-results tool-calls)))
-                             (do
-                               (set-phase! ctx state listeners :tool)
-                               (execute-batch! ctx tool-calls cancel-token (or (:max-parallel-tools config) 4))))
+          (let [executions (do
+                             (set-phase! ctx state listeners :tool)
+                             (execute-batch! ctx tool-calls cancel-token (or (:max-parallel-tools config) 4)))
                 results (mapv second executions)
                 turn-end (cond-> {:step step :tool-count (count results)}
                            (cancellation/cancelled? cancel-token)
