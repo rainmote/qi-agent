@@ -86,6 +86,7 @@ try {
   assert.equal(currentSuite.exit_code, 0, currentSuite.stderr);
   assert.ok(webPassed, 'current-source browser and daemon checks must pass in the same immutable image');
   assert.ok(locksRejected, 'unreviewed dependency locks must fail before executing the requested process');
+  assert.equal(report.status, 'PASS', 'incomplete or truncated evidence cannot qualify the smoke run');
 } catch (error) {
   await durableWrite(path.join(output, 'failure.json'), encode({ status: 'FAIL', reason: error.message, model_calls: 0 }));
   throw error;
