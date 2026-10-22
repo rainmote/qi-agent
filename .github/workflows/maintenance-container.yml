@@ -5,6 +5,7 @@ on:
     paths:
       - 'maintenance/**'
       - 'apps/tui-rs/**'
+      - 'apps/web/tests/**'
       - 'src/qi/generation.clj'
       - 'src/qi/plugins/context_manager.clj'
       - '.github/workflows/maintenance-container.yml'
@@ -13,6 +14,7 @@ on:
     paths:
       - 'maintenance/**'
       - 'apps/tui-rs/**'
+      - 'apps/web/tests/**'
       - 'src/qi/generation.clj'
       - 'src/qi/plugins/context_manager.clj'
       - '.github/workflows/maintenance-container.yml'
