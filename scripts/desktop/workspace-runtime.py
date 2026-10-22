@@ -302,6 +302,18 @@ def wheel_entries(path, writer):
 def prepare(lock, cache, target):
     if target.exists() or target.is_symlink():
         raise ValueError("workspace runtime destination must be new")
+    edition = lock.get("edition", "full")
+    if edition not in ("full", "core-preview"):
+        raise ValueError("unsupported workspace runtime edition")
+    if edition == "core-preview":
+        sources = lock["sources"]
+        if (lock.get("target") != "aarch64-apple-darwin" or lock.get("python_version") != "3.12.14"
+                or lock.get("python_packages") != {} or len(sources) != 3
+                or sum(source["kind"] == "python" for source in sources) != 1
+                or any(source["kind"] not in ("python", "npm") for source in sources)
+                or {source.get("package") for source in sources if source["kind"] == "npm"}
+                   != {"@xterm/xterm", "@xterm/addon-fit"}):
+            raise ValueError("core preview requires only Python and the two terminal renderer packages")
     # Admit and verify the entire closure before creating any build output.
     archives = [(source, verify(source, cache)) for source in lock["sources"]]
     target.mkdir(mode=0o700)
@@ -344,14 +356,19 @@ def prepare(lock, cache, target):
         for name, version in declared.items():
             if name not in npm or npm[name][1]["version"] != version:
                 raise ValueError("missing exact npm runtime dependency")
-    for required in ["python/bin/python3.12", "node_modules/pnpm/bin/pnpm.cjs", "node_modules/@deepseek-ai/libreoffice-kit/package.json", "node_modules/@deepseek-ai/libreoffice-kit-darwin-arm64/package.json", "node_modules/@koromix/koffi-darwin-arm64/package.json"]:
+    required_entries = (["python/bin/python3.12", "node_modules/@xterm/xterm/lib/xterm.js",
+                         "node_modules/@xterm/xterm/css/xterm.css", "node_modules/@xterm/addon-fit/lib/addon-fit.js"]
+                        if edition == "core-preview" else
+                        ["python/bin/python3.12", "node_modules/pnpm/bin/pnpm.cjs", "node_modules/@deepseek-ai/libreoffice-kit/package.json", "node_modules/@deepseek-ai/libreoffice-kit-darwin-arm64/package.json", "node_modules/@koromix/koffi-darwin-arm64/package.json"])
+    for required in required_entries:
         if not (target / required).is_file():
             raise ValueError("missing required workspace runtime entry")
     wrappers = {
         "python3": 'exec "$qi_root/python/bin/python3.12" "$@"',
         "python": 'exec "$qi_root/python/bin/python3.12" "$@"',
-        "pnpm": 'exec "$qi_root/../bin/node" "$qi_root/node_modules/pnpm/bin/pnpm.cjs" "$@"',
     }
+    if edition == "full":
+        wrappers["pnpm"] = 'exec "$qi_root/../bin/node" "$qi_root/node_modules/pnpm/bin/pnpm.cjs" "$@"'
     for name, command in wrappers.items():
         writer.put("bin/" + name, ('#!/bin/sh\nset -eu\nqi_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)\n' + command + '\n').encode(), True)
     notices = []
@@ -379,7 +396,10 @@ def prepare(lock, cache, target):
     writer.put("licenses.json", (json.dumps({"notice_paths_relative_to": "workspace", "notices": notices,
                                             "supplemental_notices": supplemental}, indent=2) + "\n").encode())
     hashes = {str(path.relative_to(target)): hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(target.rglob("*")) if path.is_file()}
-    writer.put("workspace-manifest.json", (json.dumps({"schema": 1, "target": lock["target"], "python_version": lock["python_version"],
+    writer.put("workspace-manifest.json", (json.dumps({"schema": 1, "edition": edition,
+                                                     "features": {"python": True, "terminal_renderer": "@xterm/xterm" in npm and "@xterm/addon-fit" in npm,
+                                                                  "pnpm": edition == "full", "office": edition == "full"},
+                                                     "target": lock["target"], "python_version": lock["python_version"],
                                                      "platform_omissions":platform_omissions,"files": hashes}, indent=2) + "\n").encode())
 
 

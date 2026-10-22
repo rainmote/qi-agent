@@ -24,7 +24,9 @@
      (let [world (kernel/require-service ctx :execution/world)
            registry (kernel/require-service ctx :remote/registry)
            pending (atom {}) cancelled (atom #{}) closed? (atom false) lock (Object.)
-           available? #(and (get-in world [:workspace-runtime :available?]) (contains? (:capabilities world) :process))
+           available? #(and (get-in world [:workspace-runtime :available?])
+                            (true? (get-in world [:workspace-runtime :office-available?]))
+                            (contains? (:capabilities world) :process))
            tool {:name "office_preview"
                :description "Convert an authorized workspace Office document to a new PDF using the pinned native engine. Input stays unchanged, existing outputs are never replaced; no host runtime or WASM fallback."
                :parameters parameters
@@ -39,7 +41,8 @@
                                 _ (kernel/require-service ctx :tool/policy)
                                 _ (when-not ((:trusted? trust)) (throw (ex-info "Office conversion requires a trusted project" {})))
                                 assets (runtime/describe)
-                                _ (when-not (:available? assets) (throw (ex-info (:reason assets) {})))
+                                _ (when-not (and (:available? assets) (:office-available? assets))
+                                    (throw (ex-info (or (:office-reason assets) (:reason assets) "Pinned Office runtime is unavailable") {})))
                                 source ((:resolve! world) path)
                                 destination ((:resolve-write! world) output)
                                 _ (when (fs/exists? destination) (throw (ex-info "Office output already exists" {})))
@@ -90,7 +93,10 @@
            methods [{:method "workspace.runtime-status" :description "Inspect packaged workspace runtime capability without starting a process."
                      :params-schema {:type "object" :additionalProperties false :properties {}} :result-schema {:type "object"}
                      :handler (fn [_] {:available (boolean (and (not @closed?) (available?)))
-                                       :runtime (if @closed? {:reason "Office request admission is closed; inspect existing outputs and use a new session."} (:workspace-runtime world))
+                                       :runtime (if @closed? {:reason "Office request admission is closed; inspect existing outputs and use a new session."}
+                                                  (cond-> (:workspace-runtime world)
+                                                    (get-in world [:workspace-runtime :office-reason])
+                                                    (assoc :reason (get-in world [:workspace-runtime :office-reason]))))
                                        :trusted (boolean ((:trusted? (kernel/require-service ctx :project/trust))))})}
                     {:method "workspace.office-preview" :description "Explicitly create a new PDF for file-panel preview through ordinary tool/trust/plan/approval gates."
                      :blocking true :params-schema manual-schema :result-schema {:type "object"} :handler render!}

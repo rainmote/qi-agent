@@ -13,6 +13,9 @@ const runtime = join(desktop, 'stage/runtime');
 const cache = resolve(process.env.QI_DESKTOP_CACHE || join(repo, '.cache/desktop'));
 const cli = join(desktop, '.tools/bin/cargo-tauri');
 const mode = process.argv[2] || 'build';
+const edition = ['prepare-preview', 'build-preview-app', 'verify-preview'].includes(mode) ? 'core-preview' : 'full';
+const workspaceLockFile = edition === 'core-preview' ? 'workspace-runtime-core-preview.json' : 'workspace-runtime-sources.json';
+const appName = edition === 'core-preview' ? 'qi-agent Preview' : 'qi-agent';
 const pkg = JSON.parse(await readFile(join(repo, 'package.json'), 'utf8'));
 const sources = JSON.parse(await readFile(join(desktop, 'runtime-sources.json'), 'utf8'));
 const target = 'aarch64-apple-darwin';
@@ -30,7 +33,7 @@ const env = { PATH: `${dirname(cli)}:/opt/homebrew/bin:/Users/geb/.local/bin:/us
   CARGO_HOME: process.env.CARGO_HOME || join(desktop, '.cache/cargo') };
 if (shellConfig.version !== pkg.version) throw new Error('Core and desktop versions must match');
 if (process.platform !== 'darwin' || process.arch !== 'arm64') throw new Error('Only macOS arm64 is supported; other platform packages are NOT_BUILT');
-if (!['prepare', 'build', 'build-app', 'dev', 'verify'].includes(mode)) throw new Error('Unknown desktop build mode');
+if (!['prepare', 'prepare-preview', 'build', 'build-app', 'build-preview-app', 'dev', 'verify', 'verify-preview'].includes(mode)) throw new Error('Unknown desktop build mode');
 
 function run(command, args, cwd = repo, binary = false) {
   const report = !binary && ((command === 'cargo' && ['build', 'tauri'].includes(args[0]))
@@ -91,6 +94,7 @@ async function files(root, prefix = '') {
 
 async function manifest(root) {
   const record = { schema: 1, architecture: 'aarch64', target, version: pkg.version,
+    edition, workspace_features: JSON.parse(await readFile(join(root, 'workspace/workspace-manifest.json'), 'utf8')).features,
     ...frozenSource, node_version: sources.node.version, babashka_version: sources.babashka.version,
     reference_sha: '687f282e8625c6b8d11ff58211a90524be2e4317', files: await files(root) };
   await writeFile(join(root, 'runtime-manifest.json'), `${JSON.stringify(record, null, 2)}\n`);
@@ -177,18 +181,21 @@ async function licenses(root) {
 async function prepare() {
   await assertSource();
   const workspaceStage = join(desktop, 'stage', `workspace-${randomUUID()}`);
-  // Full runtime closure is mandatory. This preparer only reads pinned cache
-  // archives; it never downloads dependencies or runs package install scripts.
+  // Every edition has a complete explicit closure. The preview genuinely omits
+  // Office/pnpm/wheels; full keeps its original license and native requirements.
   run('python3', [join(repo, 'scripts/desktop/workspace-runtime.py'),
-    join(desktop, 'workspace-runtime-sources.json'), join(cache, 'workspace'), workspaceStage]);
-  const workspaceLock = JSON.parse(await readFile(join(desktop,'workspace-runtime-sources.json'),'utf8'));
-  const derivation = await normalizePillow(workspaceStage,workspaceLock,run,shellConfig.bundle.macOS.minimumSystemVersion);
+    join(desktop, workspaceLockFile), join(cache, 'workspace'), workspaceStage]);
+  const workspaceLock = JSON.parse(await readFile(join(desktop, workspaceLockFile), 'utf8'));
   const workspaceManifestPath = join(workspaceStage,'workspace-manifest.json');
   const workspaceManifest = JSON.parse(await readFile(workspaceManifestPath,'utf8'));
-  if (workspaceManifest.files[derivation.entry] !== derivation.original_sha256) throw new Error('Native source differs from prepared workspace manifest');
-  workspaceManifest.files[derivation.entry] = derivation.derived_sha256;
-  workspaceManifest.native_derivations = [derivation];
-  await writeFile(workspaceManifestPath,JSON.stringify(workspaceManifest,null,2)+'\n');
+  if (workspaceManifest.edition !== edition) throw new Error('Prepared workspace edition differs');
+  if (edition === 'full') {
+    const derivation = await normalizePillow(workspaceStage,workspaceLock,run,shellConfig.bundle.macOS.minimumSystemVersion);
+    if (workspaceManifest.files[derivation.entry] !== derivation.original_sha256) throw new Error('Native source differs from prepared workspace manifest');
+    workspaceManifest.files[derivation.entry] = derivation.derived_sha256;
+    workspaceManifest.native_derivations = [derivation];
+    await writeFile(workspaceManifestPath,JSON.stringify(workspaceManifest,null,2)+'\n');
+  }
   await assertSource();
   const archive = join(cache, sources.node.archive);
   if (hash(await readFile(archive)) !== sources.node.sha256) throw new Error('Missing/mismatched official Node archive; run desktop:bootstrap explicitly');
@@ -200,7 +207,7 @@ async function prepare() {
   // model is run and no user config/credentials enter the staging directory.
   run('cargo', ['build', '--locked', '--offline', '--release', '--manifest-path', 'apps/tui-rs/Cargo.toml', '--bin', 'qi-agent']);
   await assertSource();
-  run('node', ['scripts/desktop/web-build.mjs', workspaceStage]);
+  run('node', ['scripts/desktop/web-build.mjs', workspaceStage, edition]);
   await assertSource();
   await rm(runtime, { recursive: true, force: true }); // fixed ignored build-owned directory only
   await mkdir(join(runtime, 'bin'), { recursive: true });
@@ -235,6 +242,11 @@ async function verify(app) {
   const root = join(app, 'Contents/Resources/runtime');
   const manifestPath = join(root, 'runtime-manifest.json');
   const record = JSON.parse(await readFile(manifestPath, 'utf8'));
+  if (record.source_sha !== frozenSource.source_sha || record.source_fingerprint !== frozenSource.source_fingerprint
+    || record.dirty !== frozenSource.dirty) throw new Error('Packaged source differs from this frozen candidate');
+  const workspaceManifest = JSON.parse(await readFile(join(root, 'workspace/workspace-manifest.json'), 'utf8'));
+  if (record.edition !== edition || workspaceManifest.edition !== edition
+    || JSON.stringify(record.workspace_features) !== JSON.stringify(workspaceManifest.features)) throw new Error('Packaged edition/features differ');
   const actual = await files(root);
   if (JSON.stringify(actual) !== JSON.stringify(record.files)) throw new Error('Packaged runtime files differ from final manifest');
   const regularFiles = new Set(Object.keys(actual).map(name => join(root, name)));
@@ -253,8 +265,12 @@ async function verify(app) {
     catch (error) { throw new Error(`Native payload ${name}: ${error.message}`); }
     native.push(name);
   }
-  if (!native.includes('workspace/python/bin/python3.12') || !native.some(name => name.endsWith('.node'))
-    || !native.includes('workspace/node_modules/@deepseek-ai/libreoffice-kit-darwin-arm64/bin/libreoffice-kit')) throw new Error('Incomplete Python/Office/koffi native runtime closure');
+  if (!native.includes('workspace/python/bin/python3.12')) throw new Error('Incomplete Python runtime closure');
+  if (edition === 'full' && (!native.some(name => name.endsWith('.node'))
+    || !native.includes('workspace/node_modules/@deepseek-ai/libreoffice-kit-darwin-arm64/bin/libreoffice-kit'))) throw new Error('Incomplete Office/koffi native runtime closure');
+  if (edition === 'core-preview' && (Object.keys(actual).some(name => name.startsWith('workspace/node_modules/')
+      && !name.startsWith('workspace/node_modules/@xterm/xterm/') && !name.startsWith('workspace/node_modules/@xterm/addon-fit/'))
+    || actual['workspace/bin/pnpm'] || workspaceManifest.features.office !== false || workspaceManifest.features.pnpm !== false)) throw new Error('Preview contains an omitted runtime component');
   const info = run('/usr/libexec/PlistBuddy', ['-c', 'Print :CFBundleExecutable', join(app, 'Contents/Info.plist')]).trim();
   if (!run('/usr/bin/lipo', ['-archs', join(app, 'Contents/MacOS', info)]).includes('arm64')) throw new Error('Wrong shell architecture');
   await writeFile(join(app, '..', 'native-payload-verification.json'), JSON.stringify({ source_sha: record.source_sha,
@@ -263,14 +279,15 @@ async function verify(app) {
   return record;
 }
 
-const app = join(desktop, 'src-tauri/target/release/bundle/macos/qi-agent.app');
-if (mode === 'verify') { await verify(process.argv[3] ? resolve(process.argv[3]) : app); }
+const app = join(desktop, 'src-tauri/target/release/bundle/macos', appName + '.app');
+if (['verify', 'verify-preview'].includes(mode)) { await verify(process.argv[3] ? resolve(process.argv[3]) : app); }
 else {
-  if (['build', 'build-app'].includes(mode) && frozenSource.dirty) throw new Error('Release packaging requires a clean committed candidate; use prepare/check while implementing');
+  if (['build', 'build-app', 'build-preview-app'].includes(mode) && frozenSource.dirty) throw new Error('Release packaging requires a clean committed candidate; use prepare/check while implementing');
   await prepare();
   if (mode === 'dev') { run('cargo', ['tauri', 'dev'], desktop); }
-  if (['build', 'build-app'].includes(mode)) {
-    run('cargo', ['tauri', 'build', '--bundles', 'app', '--', '--locked', '--offline'], desktop);
+  if (['build', 'build-app', 'build-preview-app'].includes(mode)) {
+    run('cargo', ['tauri', 'build', '--bundles', 'app',
+      ...(edition === 'core-preview' ? ['--config', 'src-tauri/tauri.preview.conf.json'] : []), '--', '--locked', '--offline'], desktop);
     await assertSource();
     // Tauri may re-sign native resources during bundling. Freeze FINAL bytes,
     // then seal the app locally with an ad-hoc identity (no key or notary).
@@ -278,9 +295,9 @@ else {
     run('/usr/bin/codesign', ['--force', '--sign', '-', app]);
     await assertSource();
     await verify(app);
-    const output = join(repo, 'out/desktop', `${pkg.version}-${target}-${frozenSource.source_sha.slice(0, 12)}`);
+    const output = join(repo, 'out/desktop', `${pkg.version}-${edition === 'core-preview' ? 'core-preview-' : ''}${target}-${frozenSource.source_sha.slice(0, 12)}`);
     await mkdir(output, { recursive: true });
-    const copied = join(output, 'qi-agent.app');
+    const copied = join(output, appName + '.app');
     await rm(copied, { recursive: true, force: true });
     await cp(app, copied, { recursive: true, dereference: false });
     const imageRoot = join(output, 'dmg-content');
@@ -291,7 +308,7 @@ else {
       await symlink('/Applications', join(imageRoot, 'Applications'));
     }
     const dmg = join(output, `qi-agent-${pkg.version}-${target}-adhoc.dmg`);
-    const result = { version: pkg.version, target, ...frozenSource, app: copied, dmg: mode === 'build' ? dmg : null,
+    const result = { version: pkg.version, edition, target, ...frozenSource, app: copied, dmg: mode === 'build' ? dmg : null,
       dmg_sha256: null, dmg_status: mode === 'build' ? 'NOT_BUILT' : 'NOT_REQUESTED_APP_ONLY', app_files_sha256: hash(JSON.stringify(await files(copied))),
       manifest_sha256: hash(await readFile(join(copied, 'Contents/Resources/runtime/runtime-manifest.json'))),
       signature: 'ad-hoc; no signing key/notarization/publication', package_verification: 'STATIC_ONLY', actual_e2e: 'NOT_RUN' };

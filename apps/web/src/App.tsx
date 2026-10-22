@@ -24,6 +24,7 @@ import { WorkspacePanel } from "./WorkspacePanel";
 import { DesktopBrowser } from "./DesktopBrowser";
 import { TerminalPanel } from "./TerminalPanel";
 import { officeCancellationEvent } from "./office-result";
+import { corePreview } from "./desktop-edition";
 import { ComposerAttachments, ComposerReferences, type AttachmentRef } from "./ComposerAttachments";
 import { AutomationPanel } from "./AutomationPanel";
 import { OrchestrationPanel } from "./OrchestrationPanel";
@@ -1260,6 +1261,7 @@ export function App() {
     {mobileSidebar && <button className="mobile-scrim" aria-label={t("关闭导航")} onClick={() => setMobileSidebar(false)} />}
 
     <main ref={mainElement} className="main-panel">
+      {corePreview && <p className="desktop-preview-notice" role="note">{t("Core Preview · 支持对话、配置和原生终端。未包含 Office、pnpm 和扩展 Python 包；LCU 需另行接入，模型连接请在设置中配置。")}</p>}
       {!activeSession ? <section className="new-session-view">
         <button className="mobile-nav-button" type="button" onClick={() => setMobileSidebar(true)} aria-label={t("打开导航")}><BrandMark size={24} /></button>
         {workspaceId && <button type="button" className={`header-action draft-files-trigger ${workbench === "files" ? "active" : ""}`}

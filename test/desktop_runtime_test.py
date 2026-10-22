@@ -385,6 +385,55 @@ class ProtocolTests(unittest.TestCase):
 
 
 class ArchiveTests(unittest.TestCase):
+    def core_preview_fixture(self, root):
+        sources = []
+        packages = [("python.tgz", "python", "python", {"bin/python3.12": b"inert Python", "LICENSE.txt": b"fixture Python notice"}, {}),
+                    ("xterm.tgz", "npm", "package", {"lib/xterm.js": b"inert xterm", "css/xterm.css": b"inert CSS"},
+                     {"package": "@xterm/xterm", "version": "6.0.0", "dependencies": []}),
+                    ("fit.tgz", "npm", "package", {"lib/addon-fit.js": b"inert fit"},
+                     {"package": "@xterm/addon-fit", "version": "0.11.0", "dependencies": []})]
+        for name, kind, prefix, entries, metadata in packages:
+            if kind == "npm":
+                entries = {**entries, "package.json": json.dumps({"name": metadata["package"], "version": metadata["version"], "license": "MIT"}).encode(),
+                           "LICENSE": b"fixture publisher notice"}
+            path = root / name
+            with tarfile.open(path, "w:gz") as archive:
+                for entry, data in entries.items():
+                    info = tarfile.TarInfo(prefix + "/" + entry); info.size = len(data)
+                    archive.addfile(info, io.BytesIO(data))
+            sources.append({"name": name, "kind": kind, "limit": 100000,
+                            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), **metadata})
+        return {"schema": 1, "edition": "core-preview", "target": "aarch64-apple-darwin",
+                "python_version": "3.12.14", "python_packages": {}, "sources": sources}
+
+    def test_core_preview_prepares_only_licensed_python_and_terminal_renderer(self):
+        with tempfile.TemporaryDirectory(prefix="qi-core-preview-unit-") as temporary:
+            root = Path(temporary); lock = self.core_preview_fixture(root); target = root / "preview"
+            failure = None
+            try:
+                runtime.prepare(lock, root, target)
+            except ValueError as error:
+                failure = str(error)
+            self.assertIsNone(failure, "an explicit minimal preview must not require undistributed Office/pnpm/wheels")
+            manifest = json.loads((target / "workspace-manifest.json").read_text())
+            self.assertEqual(manifest["edition"], "core-preview")
+            self.assertFalse(manifest["features"]["office"])
+            self.assertFalse(manifest["features"]["pnpm"])
+            self.assertTrue(manifest["features"]["python"])
+            self.assertTrue((target / "bin/python3").is_file())
+            self.assertFalse((target / "bin/pnpm").exists())
+            self.assertFalse((target / "node_modules/@deepseek-ai").exists())
+            self.assertFalse((target / "python/lib/python3.12/site-packages").exists())
+
+    def test_core_preview_rejects_extra_components_and_unknown_editions_before_output(self):
+        for extra in ("edition", "wheel", "office"):
+            with self.subTest(extra=extra), tempfile.TemporaryDirectory(prefix="qi-core-preview-unit-") as temporary:
+                root = Path(temporary); lock = self.core_preview_fixture(root); target = root / "rejected"
+                if extra == "edition": lock["edition"] = "unchecked"
+                else: lock["sources"].append({**lock["sources"][1], "kind": "wheel" if extra == "wheel" else "npm", "package": "@deepseek-ai/libreoffice-kit"})
+                with self.assertRaises((ValueError, zipfile.BadZipFile)): runtime.prepare(lock, root, target)
+                self.assertFalse(target.exists(), "unsupported preview closure must be rejected before writing a package")
+
     def missing_notice_fixture(self, root, mutation=None, origin="repository"):
         sources = []
         def tar_source(name, kind, entries, **metadata):

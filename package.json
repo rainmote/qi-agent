@@ -38,7 +38,10 @@
     "desktop:fetch-workspace": "python3 scripts/desktop/runtime-fetch.py",
     "test:desktop-fetch": "python3 test/desktop_runtime_fetch_test.py -v",
     "test:desktop-unit": "tsx --test apps/desktop/*.test.ts",
-    "test:desktop-rust": "cargo test --locked --manifest-path apps/desktop/supervisor/Cargo.toml --lib"
+    "test:desktop-rust": "cargo test --locked --manifest-path apps/desktop/supervisor/Cargo.toml --lib",
+    "desktop:prepare-preview": "node scripts/desktop/build.mjs prepare-preview",
+    "desktop:build-preview": "node scripts/desktop/build.mjs build-preview-app",
+    "desktop:verify-preview": "node scripts/desktop/build.mjs verify-preview"
   },
   "dependencies": {
     "@vitejs/plugin-react": "6.1.2",

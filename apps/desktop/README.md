@@ -12,6 +12,12 @@ that native startup, worker cleanup, project permissions, or computer use E2E
 has passed. The full [Harness comparison](../../docs/desktop-harness-comparison.md)
 keeps those acceptance items and backend gaps open.
 
+A separate [Core Preview](../../docs/desktop-core-preview.md) is available through
+`desktop:build-preview`: it genuinely omits Office/pnpm/extra wheels and uses a
+separate app name, identifier and data directory. Full packaging remains the
+default with its original closure and license gates. A preview build still needs
+actual launch/core-path receipts before being described as usable.
+
 ## Build
 
 Use an installed Rust/Xcode command-line toolchain, npm project dependencies,

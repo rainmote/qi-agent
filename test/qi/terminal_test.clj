@@ -215,7 +215,8 @@
         ctx (kernel/create-context) owner (kernel/plugin-context ctx :test/office)
         calls (atom [])]
     (kernel/register-service! owner :execution/world
-                              {:root (str root) :capabilities #{:process} :workspace-runtime {:available? true}
+                              {:root (str root) :capabilities #{:process}
+                               :workspace-runtime (get options :runtime {:available? true :office-available? true})
                                :resolve! #(str (fs/path root %)) :resolve-write! #(str (fs/path root %))
                                :spawn! (fn [request]
                                          (swap! calls conj request)
@@ -229,7 +230,61 @@
     {:root root :ctx ctx :calls calls
      :rpc (fn [method params] ((:invoke! (kernel/service ctx :remote/registry)) method params))}))
 
-(def office-assets {:available? true :node "/bundle/node" :office-helper "/bundle/office.mjs"})
+(def office-assets {:available? true :office-available? true :node "/bundle/node" :office-helper "/bundle/office.mjs"})
+
+(deftest preview-runtime-seals-python-independently-from-omitted-office-and-rejects-tampering
+  ;; Inert file-only resolver seam: no Python process or full App qualification.
+  (let [root (fs/create-temp-dir {:prefix "qi-preview-resolver-"})
+        digest (fn [text] (apply str (map #(format "%02x" (bit-and 255 %))
+                                         (.digest (java.security.MessageDigest/getInstance "SHA-256") (.getBytes text "UTF-8")))))
+        features {"python" true "terminal_renderer" true "pnpm" false "office" false}
+        write! (fn [edition workspace-edition extras]
+                 (let [features (if (= "full" workspace-edition) (assoc features "pnpm" true "office" true) features)
+                       entries (merge {"workspace/python/bin/python3.12" "inert Python"
+                                       "bin/node" "inert Node" "src/qi/terminal_helper.py" "inert helper"
+                                       "workspace/workspace-manifest.json" (json/generate-string {"schema" 1 "target" "aarch64-apple-darwin"
+                                                                                               "edition" workspace-edition "features" features
+                                                                                               "python_version" "3.12.14"})} extras)]
+                   (doseq [[path text] entries]
+                     (fs/create-dirs (fs/parent (fs/path root path)))
+                     (spit (str (fs/path root path)) text))
+                   (spit (str (fs/path root "runtime-manifest.json"))
+                         (json/generate-string {"schema" 1 "edition" edition "workspace_features" features
+                                                "files" (into {} (map (fn [[path text]] [path (digest text)]) entries))}))))]
+    (try
+      (write! "core-preview" "core-preview" {})
+      (let [assets (#'runtime/describe-payload (str root))]
+        (is (:available? assets))
+        (is (= "core-preview" (:edition assets)))
+        (is (:python assets))
+        (is (false? (:office-available? assets)))
+        (is (false? (:pnpm-available? assets)))
+        (is (nil? (:office assets)))
+        (is (nil? (:pnpm assets))))
+      (spit (str (fs/path root "workspace/python/bin/python3.12")) "changed bytes")
+      (is (false? (:available? (#'runtime/describe-payload (str root)))))
+      (write! "full" "core-preview" {})
+      (is (false? (:available? (#'runtime/describe-payload (str root)))))
+      (write! "unchecked" "unchecked" {})
+      (is (false? (:available? (#'runtime/describe-payload (str root)))))
+      (write! "full" "full" {})
+      (is (false? (:available? (#'runtime/describe-payload (str root)))))
+      (write! "full" "full" {"workspace/node_modules/pnpm/bin/pnpm.cjs" "inert pnpm"
+                              "workspace/node_modules/@deepseek-ai/libreoffice-kit/package.json" "{}"
+                              "src/qi/office_preview.mjs" "inert Office helper"})
+      (is (:office-available? (#'runtime/describe-payload (str root))))
+      (finally (fs/delete-tree root)))))
+
+(deftest core-preview-does-not-register-or-execute-omitted-office-provider
+  (let [{:keys [ctx root calls rpc]} (office-fixture {:runtime {:available? true :office-available? false
+                                                              :edition "core-preview" :office-reason "Office is not included in this preview."}})]
+    (try
+      (is (nil? (kernel/tool ctx "office_preview")))
+      (is (false? (:available (rpc "workspace.runtime-status" {}))))
+      (with-redefs [runtime/describe (constantly office-assets)]
+        (is (thrown? Exception (rpc "workspace.office-preview" {:path "report.docx" :output "report.preview.pdf"}))))
+      (is (empty? @calls))
+      (finally (kernel/dispose-all! ctx) (fs/delete-tree root)))))
 
 (deftest office-manual-preview-honors-bash-deny-trust-and-explicit-approval
   (doseq [options [{:trusted false} {:policy {:deny-tools ["bash"]}} {:policy {:deny-tools ["office_preview"]}}]]

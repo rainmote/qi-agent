@@ -28,11 +28,8 @@
       (throw (ex-info "Bundled workspace runtime checksum is missing or changed" {:entry relative})))
     (str path)))
 
-(defn describe
-  "Resolve an explicitly packaged runtime. Missing assets remain unavailable;
-  neither PATH, the current project nor a user Python installation is consulted."
-  []
-  (if-let [payload (System/getenv "QI_AGENT_REPOSITORY_ROOT")]
+(defn- describe-payload [payload]
+  (if payload
     (try
       (let [root (fs/real-path payload)
             main-path (fs/path root "runtime-manifest.json")
@@ -43,19 +40,40 @@
             workspace-manifest (sealed-file! root files "workspace/workspace-manifest.json")
             _ (when (> (fs/size workspace-manifest) 16000000) (throw (ex-info "Oversized workspace manifest" {})))
             workspace (json/parse-string (slurp workspace-manifest))
+            edition (get workspace "edition" "full")
             _ (when-not (and (= 1 (get workspace "schema")) (= "aarch64-apple-darwin" (get workspace "target")))
-                (throw (ex-info "Unsupported workspace runtime" {})))]
-        {:available? true :root (str root)
+                (throw (ex-info "Unsupported workspace runtime" {})))
+            _ (when-not (and (contains? #{"full" "core-preview"} edition)
+                             (= edition (get manifest "edition" "full")))
+                (throw (ex-info "Workspace runtime edition differs" {})))
+            preview? (= edition "core-preview")
+            features {"python" true "terminal_renderer" true "pnpm" (not preview?) "office" (not preview?)}
+            _ (when (or (and (or preview? (contains? workspace "features"))
+                                    (not= features (get workspace "features")))
+                        (and (or preview? (contains? manifest "workspace_features"))
+                             (not= features (get manifest "workspace_features"))))
+                (throw (ex-info "Workspace runtime features differ" {})))
+            base {:available? true :root (str root) :edition edition
          :python-version (get workspace "python_version")
          :python (sealed-file! root files "workspace/python/bin/python3.12")
          :node (sealed-file! root files "bin/node")
          :helper (sealed-file! root files "src/qi/terminal_helper.py")
-         :pnpm (sealed-file! root files "workspace/node_modules/pnpm/bin/pnpm.cjs")
-         :office (sealed-file! root files "workspace/node_modules/@deepseek-ai/libreoffice-kit/package.json")
-         :office-helper (sealed-file! root files "src/qi/office_preview.mjs")
-         :bin (str (fs/path root "workspace/bin"))})
+         :pnpm-available? (not preview?) :office-available? (not preview?)
+         :office-reason (when preview? "Office conversion is not included in the core preview.")
+         :bin (str (fs/path root "workspace/bin"))}]
+        (if preview?
+          base
+          (assoc base :pnpm (sealed-file! root files "workspace/node_modules/pnpm/bin/pnpm.cjs")
+                      :office (sealed-file! root files "workspace/node_modules/@deepseek-ai/libreoffice-kit/package.json")
+                      :office-helper (sealed-file! root files "src/qi/office_preview.mjs"))))
       (catch Throwable _ {:available? false :reason "The pinned desktop workspace runtime is missing, unsupported or changed; no host runtime was selected."}))
     {:available? false :reason "Workspace runtimes are available only in the packaged desktop payload."}))
+
+(defn describe
+  "Resolve only the explicitly packaged runtime. Missing assets remain unavailable;
+  neither PATH, the current project nor a user Python installation is consulted."
+  []
+  (describe-payload (System/getenv "QI_AGENT_REPOSITORY_ROOT")))
 
 (defn environment [runtime root]
   (when (:available? runtime)

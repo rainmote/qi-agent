@@ -7,6 +7,8 @@ import { lstat } from 'node:fs/promises';
 // The parent also supplies a minimal environment without VITE_* overrides.
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const workspace = process.argv[2] ? resolve(process.argv[2]) : null;
+const edition = process.argv[3] || 'full';
+if (!['full', 'core-preview'].includes(edition)) throw new Error('Unsupported desktop edition');
 const aliases = [];
 if (workspace) {
   const stage = join(repo, 'apps/desktop/stage');
@@ -20,4 +22,5 @@ if (workspace) {
   aliases.push({ find: '@qi-terminal-renderer-css', replacement: join(workspace, 'node_modules/@xterm/xterm/css/xterm.css') });
   aliases.push({ find: /^\.\/terminal-emulator$/, replacement: join(repo, 'scripts/desktop/terminal-entry.mjs') });
 }
-await build({ envDir: false, resolve: { alias: aliases }, build: { sourcemap: false } });
+await build({ envDir: false, define: { __QI_DESKTOP_EDITION__: JSON.stringify(edition) },
+  resolve: { alias: aliases }, build: { sourcemap: false } });

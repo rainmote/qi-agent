@@ -539,7 +539,8 @@
             :default-timeout-ms timeout-ms
             :max-timeout-ms max-timeout-ms
             :process-group-enabled (boolean (process-groups-available?))
-            :workspace-runtime (select-keys assets [:available? :reason :python-version])
+            :workspace-runtime (select-keys assets [:available? :reason :python-version :edition
+                                                    :pnpm-available? :office-available? :office-reason])
             :terminal-capability terminal-capability
             :terminal-controller (when (and (:available? terminal-capability)
                                             (:available? assets) (not= :unavailable mode))
