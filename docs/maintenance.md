@@ -129,6 +129,8 @@ QI_MAINTENANCE_OUTPUT=/absolute/new-evidence-directory npm run test:maintenance:
 默认固定在 `a0b74ad310aa0e0978f747369c41315560aa6dd3`，只取两份压缩请求归属相关
 源码，并在回执中保存 `oracle_sha` 和逐文件 SHA-256。可显式指定另一个完整提交；
 缺失对象或文件立即失败，不回退到 HEAD。需要完整 Git 历史或明确保留参考提交的对象。
+当前源码还使用同一不可变镜像、独立新容器执行 production-browser 和 daemon-web-e2e，
+覆盖当前 React/Playwright 依赖槽；回执逐项绑定 source SHA 和 image，缺失、失败、超时或截断均阻止镜像导出。
 参考实现与控制器、当前应用源码分别记录，避免后续生命周期事件等无关变化被整文件带入
 历史基线，破坏原有测试。当前源码仍独立运行完整测试；离线 oracle 通过不能代替其验收。
 

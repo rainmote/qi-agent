@@ -3,6 +3,9 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
+      - 'package.json'
+      - 'package-lock.json'
+      - 'apps/desktop/**'
       - 'maintenance/**'
       - 'apps/tui-rs/**'
       - 'apps/web/tests/**'
@@ -12,6 +15,9 @@ on:
   push:
     branches: [main, feat/unattended-readiness]
     paths:
+      - 'package.json'
+      - 'package-lock.json'
+      - 'apps/desktop/**'
       - 'maintenance/**'
       - 'apps/tui-rs/**'
       - 'apps/web/tests/**'
@@ -25,13 +31,15 @@ concurrency:
   cancel-in-progress: false
 jobs:
   full-qi-container:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+          persist-credentials: false
+      - uses: actions/setup-node@v7
         with:
           node-version: 22.12.0
       - name: Build pinned toolchain and offline dependencies
