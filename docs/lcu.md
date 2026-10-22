@@ -60,8 +60,20 @@ The original approval message is displayed in the existing UI. qì offers Allow
 once, Allow for this session when the runtime offers it, and Decline; it does not
 offer persistent “always” grants. Without an active prompt UI (including plain
 `bb qi-agent --once`), new app approval requests are cancelled, never auto-accepted.
-Unsupported elicitation forms also cancel. Chrome-origin and audio flows are not
-implemented or covered by this integration's E2E.
+Unsupported elicitation forms also cancel. In explicitly enabled Chrome mode,
+the adapter recognizes the exact empty-form `access_browser_origin` contract
+from the [LCU 0.11.2 client and fixtures](https://github.com/amontlabs/lcu/blob/v0.11.2/adapters/test/mcp-fixture.mjs).
+Only canonical HTTP(S) origins with matching origin metadata are accepted for
+prompting. URL challenges, nonempty forms, history access, mixed native/browser
+metadata and unknown kinds cancel. Audio remains unsupported.
+
+Site consent is independent of native-app and tool approval, including Full
+Access. The original request text and exact origin are shown to the user. An
+allow applies to this origin in the current session, workspace and connection;
+deny returns the original decline response. Cancellation, UI timeout, stale
+answers and missing UI return cancel. Reconnection and other sessions require
+fresh decisions. The frontend displays this scope rather than calling it an
+allow-once grant.
 
 ## Configuration and recovery
 
@@ -79,9 +91,16 @@ implemented or covered by this integration's E2E.
 
 The adapter pins `CUA_REPL_ENABLED_SURFACES` to these configured surfaces. An
 unrelated shell's inherited browser/audio setting cannot expand desktop access.
-Chrome mode still requires the separately installed official extension and its
-authorized origin flow. This adapter cancels unsupported origin requests; it
-does not register origins, install extensions, or create persistent site grants.
+Chrome mode still requires the separately installed official extension. The
+official runtime [saves origin decisions under its state root](https://github.com/amontlabs/lcu/blob/v0.11.2/docs/verification/origin-decisions-2026-10-06.md),
+so qì creates a fresh owner-only temporary runtime state directory per browser
+connection. It passes that root only to the owned LCU child, keeps the original
+session/turn IDs, and starts the shared client with an empty origin allowlist.
+No existing preferences, browser profile, cookies or credentials are copied.
+The directory is removed after closing the transport, including startup failure;
+cleanup errors remain visible. An abruptly terminated worker can leave an unused
+temporary directory, but it is never reused for a later connection. The adapter
+does not install extensions or modify the user's global origin settings.
 
 `/computer status` reports connection state, configured provider, surfaces,
 project trust, execution-world and image-model prerequisites. `connect` is
@@ -106,7 +125,7 @@ a Web user preset must include the documented services in dependency order.
 Neither the panel nor this repository change trusts an actual project or
 changes OS accessibility, recording, credentials, extension or site permissions.
 
-Tool deadlines pause while native approval is pending. The frontend may have its
+Tool deadlines pause while native or origin approval is pending. The frontend may have its
 own prompt deadline (the Web/RPC bridge defaults to five minutes). Cancellation
 dismisses pending prompts and closes the transport. No input is automatically
 replayed after timeout, disconnection or an SDK exception.
@@ -118,6 +137,13 @@ The original session ID and agent-run ID are carried on every call. A completed
 run sends `Stop`; a failed or cancelled run sends `Interrupt`. A cleanup failure
 closes the client and requires reconnect before further input. Unloading the
 provider stops admission, interrupts active work and reaps the owned bridge.
+
+Linux offline fixtures cover origin decisions, malformed requests, exact scope
+matching, private-state isolation, reconnect, late cancellation and independent
+session interactions. These fixtures do not launch the real LCU runtime, Chrome
+extension or a model. Real browser behavior and macOS App acceptance remain
+pending. Bridge exit alone does not prove all real LCU descendants completed
+native cleanup; that must be checked on the Mac alongside the actual task.
 
 ## Tests
 

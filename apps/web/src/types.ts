@@ -106,7 +106,7 @@ export interface Interaction {
   createdAt?: string;
   "created-at"?: string;
   items: Array<{ label: string; value: "allow" | "allow-session" | "deny" }>;
-  default: "allow" | "allow-session" | "deny";
+  default: "allow" | "allow-session" | "deny" | "cancel";
 }
 
 export interface SessionSnapshot {

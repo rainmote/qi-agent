@@ -140,3 +140,11 @@ test("full access confirmation requires explicit risk acknowledgement", () => {
   assert.match(html, /我已了解风险，并愿意继续/);
   assert.match(html, /disabled=""[^>]*>启用 Full Access/);
 });
+
+test("browser approval displays its offered scope instead of a misleading once label", () => {
+  const html = renderToStaticMarkup(<ApprovalPanel interaction={{ id: "origin", title: "Browser site: https://example.test", message: "Original origin request", default: "cancel",
+    items: [{ label: "Allow this connection to access this site", value: "allow" }, { label: "Decline", value: "deny" }] }}
+    resolving={false} onResolve={() => undefined} />);
+  assert.match(html, /Allow this connection to access this site/);
+  assert.doesNotMatch(html, /仅允许一次|本会话允许/);
+});

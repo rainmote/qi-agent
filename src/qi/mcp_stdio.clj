@@ -392,6 +392,7 @@
                              :protocol-version (:protocolVersion result)})))
           (when-not @modern? (send! {:jsonrpc "2.0" :method "notifications/initialized"} nil))
           {:request! request! :close! close!
+           :closed closed
            :alive? #(and @active? (.isAlive process))
            :server-info (:serverInfo result)
            :capabilities (:capabilities result)

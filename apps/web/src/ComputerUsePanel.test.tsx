@@ -38,3 +38,10 @@ test("Chrome opt-in is not advertised as completed origin consent and errors rem
   const html = render({ ...base, capabilities: { ...base.capabilities, surfaces: ["browser", "computer"] }, error: "<script>untrusted</script>" });
   assert.match(html, /新站点请求会取消/); assert.match(html, /&lt;script&gt;/); assert.doesNotMatch(html, /<script>/);
 });
+
+test("interactive origin consent describes the connection scope without claiming a grant", () => {
+  const html = render({ ...base, capabilities: { surfaces: ["browser", "computer"], "browser-origin-consent": "interactive" } });
+  assert.match(html, /访问新站点需要独立确认/);
+  assert.match(html, /当前会话、项目和本次连接内有效/);
+  assert.doesNotMatch(html, /新站点请求会取消|权限已授予/);
+});

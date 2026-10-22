@@ -168,7 +168,10 @@
                           (when-let [connection @client]
                             (when-let [failure (:failure connection)]
                               (when-let [unresolved (failure)] (reset! uncertain unresolved)))
-                            ((:close! connection)))
+                            (try ((:close! connection))
+                                 (finally
+                                   (when-let [failure (:failure connection)]
+                                     (when-let [unresolved (failure)] (reset! uncertain unresolved))))))
                           ;; Closing transport unblocks a running call. Await
                           ;; its normalization before releasing tools/resources.
                           (locking operation-lock
@@ -226,14 +229,15 @@
              (require-host! world trust)
              (stop-client!)
              (try
-               (let [connection (connect! ctx config
+               (let [epoch (random-uuid)
+                     connection (connect! ctx config
                                  {:command (or command default-command) :cwd (:root world)
+                                  :connection-generation (str epoch)
                                   :request-timeout-ms request-timeout-ms
                                   :startup-timeout-ms startup-timeout-ms
                                   :max-message-chars (+ 1048576 (* 4 (quot (+ max-image-bytes 2) 3)))})]
                  (reset! client connection)
-                 (let [tools (discover! connection max-tools)
-                       epoch (random-uuid)]
+                 (let [tools (discover! connection max-tools)]
                    (doseq [{:keys [name description inputSchema]} tools]
                      (swap! tool-disposers conj
                             (kernel/register-tool!

@@ -33,7 +33,9 @@ export function ComputerUsePanel({ status, onCommand, onRefresh }: {
     {status && <>
       <p>{status.capabilities?.surfaces?.includes("browser") ? t("Chrome 扩展模式（显式启用）") : t("原生电脑模式")}
         {" · "}{t("操作范围：本机桌面")}{" · "}{t("{0} 个模型工具", status.tools.length)}</p>
-      {status.capabilities?.surfaces?.includes("browser") && <p>{t("Chrome 站点授权尚未接入，新站点请求会取消。")}</p>}
+      {status.capabilities?.surfaces?.includes("browser") && <p>{status.capabilities["browser-origin-consent"] === "interactive"
+        ? t("访问新站点需要独立确认；授权仅在当前会话、项目和本次连接内有效。")
+        : t("Chrome 站点授权尚未接入，新站点请求会取消。")}</p>}
       {!status.enabled && <p>{t("需在新的会话运行配置中明确启用电脑操作；这里不会修改权限或安装软件。")}</p>}
       {status.enabled && !status.trusted && <p>{t("先查看项目信任范围；此处不会替你信任项目。")}</p>}
       {status.enabled && !status["local-desktop"] && <p>{t("仅支持明确配置为 local / sandbox:none 的运行环境。")}</p>}

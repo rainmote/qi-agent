@@ -81,6 +81,7 @@ export function ApprovalPanel({ interaction, resolving, onResolve, onStop, stopp
   onStop?: () => void; stopping?: boolean; stopError?: string | null;
   error?: string | null; count?: number;
 }) {
+  const choiceLabel = (value: string, fallback: string) => interaction.items?.find(item => item.value === value)?.label || t(fallback);
   return <section className="approval-panel" aria-label={t("待确认操作")} aria-busy={resolving || stopping || false}>
     <header className="approval-heading" role="status"><Icon name="shield" />
       <strong>{interaction.title || t("允许执行此操作？")}</strong><span>{resolving ? t("正在提交…") : count > 1 ? t("{0} 项待确认", count) : t("等待确认")}</span></header>
@@ -89,10 +90,11 @@ export function ApprovalPanel({ interaction, resolving, onResolve, onStop, stopp
     <div className="approval-actions">
       {onStop && <button type="button" className="button ghost" disabled={stopping} onClick={onStop}>
         {stopping ? t("正在停止…") : t("停止运行")}</button>}
-      <button type="button" className="button ghost" disabled={resolving || stopping} onClick={() => onResolve("deny")}>{t("拒绝")}</button>
+      <button type="button" className="button ghost" disabled={resolving || stopping} onClick={() => onResolve("deny")}>{choiceLabel("deny", "拒绝")}</button>
       {interaction.items?.some(item => item.value === "allow-session") && <button type="button" className="button secondary" disabled={resolving || stopping}
-        onClick={() => onResolve("allow-session")}>{t("本会话允许")}</button>}
-      <button type="button" className="button primary" disabled={resolving || stopping} onClick={() => onResolve("allow")}>{t("仅允许一次")}</button>
+        onClick={() => onResolve("allow-session")}>{choiceLabel("allow-session", "本会话允许")}</button>}
+      {(!interaction.items || interaction.items.some(item => item.value === "allow")) &&
+        <button type="button" className="button primary" disabled={resolving || stopping} onClick={() => onResolve("allow")}>{choiceLabel("allow", "仅允许一次")}</button>}
     </div>
   </section>;
 }

@@ -5,6 +5,7 @@
             [clojure.test :refer [deftest is]]
             [qi.cancellation :as cancellation]
             [qi.kernel :as kernel]
+            [qi.plugins.lcu :as lcu]
             [qi.plugin :as plugin]))
 
 (defn fixture [& [opts]]
@@ -90,7 +91,7 @@
       (try
         (let [status ((:status (kernel/service ctx :computer-use/runtime)))]
           (is (= expected (get-in status [:capabilities :surfaces])))
-          (is (= :unsupported (get-in status [:capabilities :browser-origin-consent])))
+          (is (= (if (seq args) :interactive :disabled) (get-in status [:capabilities :browser-origin-consent])))
           (is (= "0" (:audio (first (events f)))))
           (is (= "0" (:replAudio (first (events f)))))
           (is (= (str/join "," expected) (:surfaces (first (events f))))))
@@ -197,7 +198,8 @@
           (is (thrown? Exception (run! f ["approve"])))
           (run! f ["approve"]))
         (let [answer (:result (first (filter #(= "approval" (:event %)) (events f))))]
-          (is (= (if headless "cancel" "session") (:choice answer))))
+          (is (= (if headless "cancel" "accept") (:action answer)))
+          (when-not headless (is (= "session" (get-in answer [:_meta :persist])))))
         (when-not headless
           (is (= "Original app approval text" (:message (first @prompts))))
           (is (= [:allow :allow-session :deny] (mapv :value (:items (first @prompts))))))
@@ -218,7 +220,7 @@
                     :select! (fn [_] (Thread/sleep 350) :allow-session)})]
     (try
       (run! f ["approve"])
-      (is (= "session" (get-in (first (filter #(= "approval" (:event %)) (events f))) [:result :choice])))
+      (is (= "session" (get-in (first (filter #(= "approval" (:event %)) (events f))) [:result :_meta :persist])))
       (finally (dispose! f)))))
 
 (deftest cancellation-dismisses-app-prompt-and-reaps-bridge
@@ -281,5 +283,199 @@
         ((:resolve! service) (:id prompt) "allow-session")
         (is (not= :timeout (deref running 5000 :timeout)))
         (is (empty? ((:pending service))))
-        (is (= "session" (get-in (first (filter #(= "approval" (:event %)) (events f))) [:result :choice]))))
+        (is (= "session" (get-in (first (filter #(= "approval" (:event %)) (events f))) [:result :_meta :persist]))))
+      (finally (dispose! f)))))
+
+(defn origin-request [origin]
+  {:mode "form" :message (str "Allow Browser use to access " origin "?")
+   :requestedSchema {:type "object" :properties {}}
+   :_meta {:codex_approval_kind "mcp_tool_call" :connector_id "browser-use"
+           :tool_name "access_browser_origin" :origin origin :tool_params {:origin origin} :persist "always"}})
+(defn browser-code [params] (str "browser:" (json/generate-string params)))
+(defn browser-events [f event] (filter #(= event (:event %)) (events f)))
+(defn attempt! [f codes] (try (run! f codes) (catch Exception error {:fixture-error (ex-data error)})))
+
+(deftest browser-origin-consent-is-explicit-and-scoped-to-one-connection
+  (let [{:keys [ctx prompts] :as f} (fixture {:config {:lcu-args ["--chrome"]} :select! (constantly :allow)})
+        command #((:execute (kernel/command ctx "computer")) % {})]
+    (try
+      (is (= "Verified" (:content (attempt! f [(browser-code (origin-request "https://example.test"))]))))
+      (is (= "Verified" (:content (attempt! f [(browser-code (origin-request "https://example.test"))]))))
+      (is (= 1 (count @prompts)))
+      (is (= 2 (count (browser-events f "browser-action"))))
+      (is (= [:deny :allow] (mapv :value (:items (first @prompts)))))
+      (is (= :cancel (:default (first @prompts))))
+      (is (str/includes? (or (:title (first @prompts)) "") "https://example.test"))
+      (is (str/includes? (or (:label (some #(when (= :allow (:value %)) %) (:items (first @prompts)))) "") "connection"))
+      (let [first-root (:runtimeRoot (first (events f)))]
+        (is (string? first-root))
+        (is (= 448 (:mode (first (events f)))))
+        (is (= [] (:allowedOrigins (first (events f)))))
+        (command "disconnect")
+        (when first-root (is (not (fs/exists? first-root))))
+        (command "reconnect")
+        (is (not= first-root (:runtimeRoot (last (browser-events f "connect")))))
+        (attempt! f [(browser-code (origin-request "https://example.test"))])
+        (is (= 2 (count @prompts))))
+      (finally (dispose! f)))))
+
+(deftest browser-refusal-headless-and-other-origins-never-inherit-an-allow
+  (doseq [mode [:deny :headless :cross-origin :lookalike :native-only]]
+    (let [selections (atom 0)
+          {:keys [ctx prompts] :as f}
+          (fixture {:config {:lcu-args (if (= :native-only mode) [] ["--chrome"])}
+                    :headless (= :headless mode)
+                    :select! (fn [_] (if (and (contains? #{:cross-origin :lookalike} mode)
+                                              (= 1 (swap! selections inc))) :allow :deny))})]
+      (try
+        (when (contains? #{:cross-origin :lookalike} mode)
+          (attempt! f [(browser-code (origin-request "https://example.test"))]))
+        (attempt! f [(browser-code (origin-request (case mode
+                                                   :lookalike "https://example.test.attacker.invalid"
+                                                   :cross-origin "https://other.test" "https://example.test")))])
+        (is (= (if (contains? #{:cross-origin :lookalike} mode) 1 0) (count (browser-events f "browser-action"))))
+        (is (false? (:connected ((:status (kernel/service ctx :computer-use/runtime))))))
+        (when (contains? #{:cross-origin :lookalike} mode) (is (= 2 (count @prompts))))
+        (finally (dispose! f))))))
+
+(deftest browser-unknown-or-noncanonical-elicitation-is-cancelled-without-a-prompt
+  (let [valid (origin-request "https://example.test")]
+    (doseq [params (concat
+                   (map origin-request ["HTTPS://EXAMPLE.TEST" "https://example.test:443" "https://example.test/"
+                                        "https://example.test/path" "https://user@example.test" "file:///tmp/page" "null"])
+                   [(assoc valid :mode "url")
+                    (assoc-in valid [:requestedSchema :properties] {:secret {:type "string"}})
+                    (assoc-in valid [:_meta :tool_name] "read_browser_history")
+                    (assoc-in valid [:_meta :connector_id] "unknown")
+                    (-> valid (assoc-in [:_meta :connector_id] "computer-use")
+                        (assoc-in [:_meta :tool_params :app] "qi.test"))
+                    (assoc-in valid [:_meta :tool_params :origin] "https://different.test")])]
+      (let [{:keys [prompts] :as f} (fixture {:config {:lcu-args ["--chrome"]} :select! (constantly :allow)})]
+        (try
+          (attempt! f [(browser-code params)])
+          (is (empty? @prompts))
+          (is (empty? (browser-events f "browser-action")))
+          (is (= "cancel" (get-in (first (browser-events f "browser-approval")) [:result :action])))
+          (finally (dispose! f)))))))
+
+(deftest browser-response-cannot-cross-origin-session-workspace-or-generation
+  (doseq [field [:origin :sessionId :workspace :generation :turnId :approvalId]]
+    (let [original @#'lcu/approval!]
+      (with-redefs-fn {#'lcu/approval! (fn [& args]
+                                      (let [answer (apply original args)]
+                                        (assoc-in answer [:scope field] "stale-or-foreign")))}
+        #(let [f (fixture {:config {:lcu-args ["--chrome"]} :select! (constantly :allow)})]
+           (try
+             (attempt! f [(browser-code (origin-request "https://example.test"))])
+             (is (empty? (browser-events f "browser-action")))
+             (is (= "cancel" (get-in (first (browser-events f "browser-approval")) [:result :action])))
+             (finally (dispose! f))))))))
+
+(deftest browser-startup-failures-clean-the-owned-preference-root
+  (doseq [marker ["fail-connect" "blank-instructions"]]
+    (let [{:keys [ctx root] :as f} (fixture {:config {:lcu-args ["--chrome"] :connect-on-start false}})]
+      (try
+        (spit (str (fs/path root marker)) "fixture")
+        (is (thrown? Exception ((:execute (kernel/command ctx "computer")) "connect" {})))
+        (let [runtime-root (:runtimeRoot (first (events f)))]
+          (is (string? runtime-root))
+          (when runtime-root (is (not (fs/exists? runtime-root)))))
+        (finally (dispose! f))))))
+
+(deftest browser-prompt-timeout-is-cancel-not-a-persisted-decline
+  (let [{:keys [ctx] :as f} (fixture {:config {:lcu-args ["--chrome"]} :headless true})
+        owner (kernel/plugin-context ctx :test/browser-remote)]
+    (try
+      (kernel/register-service! owner :remote/registry {:register! (fn [_] (fn []))})
+      (kernel/mark-loaded! ctx {:id :test/browser-remote})
+      (plugin/load-plugin! ctx {:ns 'qi.plugins.remote-interaction :config {:timeout-ms 50}})
+      (attempt! f [(browser-code (origin-request "https://example.test"))])
+      (is (empty? (browser-events f "browser-action")))
+      (is (= "cancel" (get-in (first (browser-events f "browser-approval")) [:result :action])))
+      (finally (dispose! f)))))
+
+(deftest cancelled-browser-approval-cannot-be-accepted-late-or-replayed-on-reconnect
+  (let [entered (promise) release (promise) token (cancellation/create-token)
+        {:keys [ctx] :as f} (fixture {:config {:lcu-args ["--chrome"]}
+                                     :select! (fn [_] (deliver entered true) (deref release 5000 :cancel))})
+        root (:runtimeRoot (first (events f)))]
+    (try
+      (let [running (future (try (run! f [(browser-code (origin-request "https://example.test"))] {:cancel-token token})
+                                 (catch Exception _ :cancelled)))]
+        (is (= true (deref entered 5000 :timeout)))
+        (cancellation/cancel! token)
+        (is (not= :timeout (deref running 15000 :timeout)))
+        (deliver release :allow)
+        (is (empty? (browser-events f "browser-action")))
+        (when root (is (not (fs/exists? root))))
+        ((:execute (kernel/command ctx "computer")) "reconnect" {})
+        (is (empty? (browser-events f "browser-action")))
+        (is (= "Verified" (:content (attempt! f [(browser-code (origin-request "https://example.test"))]))))
+        (is (= 1 (count (browser-events f "browser-action"))))
+        (is (not= root (:runtimeRoot (last (browser-events f "connect"))))))
+      (finally (deliver release :cancel) (dispose! f)))))
+
+(defn install-remote! [ctx]
+  (let [owner (kernel/plugin-context ctx :test/scoped-remote)]
+    (kernel/register-service! owner :remote/registry {:register! (fn [_] (fn []))})
+    (kernel/mark-loaded! ctx {:id :test/scoped-remote})
+    (plugin/load-plugin! ctx {:ns 'qi.plugins.remote-interaction :config {:timeout-ms 5000}})
+    (kernel/service ctx :interaction/remote)))
+
+(defn await-prompt [service]
+  (loop [left 500]
+    (or (first ((:pending service)))
+        (when (pos? left) (Thread/sleep 10) (recur (dec left))))))
+
+(deftest switching-session-does-not-transfer-origin-approval-in-a-shared-workspace
+  (let [a (fixture {:config {:lcu-args ["--chrome"]} :headless true})
+        b (fixture {:config {:lcu-args ["--chrome"]} :headless true :world {:root (str (:root a))}})
+        remote-a (install-remote! (:ctx a)) remote-b (install-remote! (:ctx b))
+        code (browser-code (origin-request "http://127.0.0.1:8080"))]
+    (try
+      (let [run-a (future (attempt! a [code])) run-b (future (attempt! b [code]))
+            prompt-a (await-prompt remote-a) prompt-b (await-prompt remote-b)]
+        (is (map? prompt-a)) (is (map? prompt-b))
+        (is (not= (:id prompt-a) (:id prompt-b)))
+        (is (thrown? Exception ((:resolve! remote-b) (:id prompt-a) "allow")))
+        (is (empty? (browser-events b "browser-action")))
+        ((:resolve! remote-a) (:id prompt-a) "allow")
+        ((:resolve! remote-b) (:id prompt-b) "deny")
+        (is (= "Verified" (:content (deref run-a 5000 {}))))
+        (is (not= :timeout (deref run-b 5000 :timeout)))
+        (is (= 1 (count (browser-events a "browser-action"))))
+        (is (empty? (browser-events b "browser-action")))
+        (is (not= (:runtimeRoot (first (events a))) (:runtimeRoot (first (events b))))))
+      (finally (dispose! a) (dispose! b)))))
+
+(deftest unexpected-idle-bridge-exit-cleans-owned-browser-state
+  (let [{:keys [ctx root] :as f} (fixture {:config {:lcu-args ["--chrome"] :connect-on-start false}})]
+    (try
+      (spit (str (fs/path root "idle-exit")) "fixture")
+      ((:execute (kernel/command ctx "computer")) "connect" {})
+      (let [runtime-root (:runtimeRoot (first (events f)))]
+        (is (string? runtime-root))
+        (loop [left 500]
+          (when (and (pos? left) runtime-root (fs/exists? runtime-root))
+            (Thread/sleep 10) (recur (dec left))))
+        (is (not (fs/exists? runtime-root)))
+        (is (false? (:connected ((:status (kernel/service ctx :computer-use/runtime)))))))
+      (finally (dispose! f)))))
+
+(deftest browser-state-removal-failure-remains-visible-until-explicit-reconnect
+  (let [{:keys [ctx] :as f} (fixture {:config {:lcu-args ["--chrome"]}})
+        root (:runtimeRoot (first (events f))) remove-tree fs/delete-tree]
+    (try
+      (with-redefs [fs/delete-tree (fn [path & args]
+                                    (if (= root (str path))
+                                      (throw (ex-info "Synthetic state removal failure" {}))
+                                      (apply remove-tree path args)))]
+        (is (thrown? Exception ((:execute (kernel/command ctx "computer")) "disconnect" {})))
+        (let [status ((:status (kernel/service ctx :computer-use/runtime)))]
+          (is (= :uncertain (:state status)))
+          (is (= :cleanup-failed (get-in status [:uncertain :reason]))))
+        (is (fs/exists? root)))
+      ((:execute (kernel/command ctx "computer")) "reconnect" {})
+      (is (not (fs/exists? root)))
+      (is (:connected ((:status (kernel/service ctx :computer-use/runtime)))))
       (finally (dispose! f)))))
