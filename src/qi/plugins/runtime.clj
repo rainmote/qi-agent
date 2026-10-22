@@ -10,6 +10,7 @@
             [qi.session-preferences :as preferences]
             [qi.schema :as schema]
             [qi.system-prompt :as system]
+            [qi.tool-recovery :as recovery]
             [cheshire.core :as json]
             [clojure.java.io :as io]
             [clojure.string :as str]))
@@ -131,27 +132,27 @@
         (cancelled-result execution)
         (failure execution (ex-message error) (ex-data error))))))
 
-(defn- record-tool-call! [ctx tool-call]
+(defn- record-tool-call! [ctx tool-call scope]
   (let [visible-arguments (try
                             (arguments tool-call)
                             (catch Throwable _
                               (get-in tool-call [:function :arguments])))]
     (record! ctx "tool/call"
-             {:name (get-in tool-call [:function :name])
+             (merge scope {:name (get-in tool-call [:function :name])
               :call-id (:id tool-call)
-              :arguments visible-arguments})))
+              :arguments visible-arguments}))))
 
-(defn- prepare-call! [ctx tool-call cancel-token on-update]
+(defn- prepare-call! [ctx tool-call cancel-token on-update scope]
   (let [call-id (:id tool-call)
         tool-name (get-in tool-call [:function :name])
         tool (kernel/tool ctx tool-name)
-        base-execution {:token (str (random-uuid))
+        base-execution (merge scope {:token (str (random-uuid))
                         :call-id call-id
                         :name tool-name
                         :cancel-token cancel-token
                         :on-update on-update
                         :uncertain-on-cancel (:uncertain-on-cancel tool)
-                        :stop-batch-on-error (:stop-batch-on-error tool)}]
+                        :stop-batch-on-error (:stop-batch-on-error tool)})]
     (cond
       (cancellation/cancelled? cancel-token)
       {:call tool-call :result (cancelled-result base-execution)}
@@ -221,9 +222,9 @@
               prepared (assoc prepared :execution execution)]
           ;; The slot serializes start against cancellation. If cancellation
           ;; already won, no start can appear after the terminal event.
-          (if-not (begin! execution)
-            (assoc entry :result (cancelled-result execution))
-            (try
+          (try
+            (if-not (begin! execution)
+              (assoc entry :result (cancelled-result execution))
               (let [outcome (kernel/waterfall
                              ctx :tool/post-execute
                              (kernel/waterfall ctx :tool/execute prepared
@@ -240,7 +241,7 @@
                                (or (:execution outcome) execution))
 
                               :else outcome)]
-                (assoc entry :result outcome))
+                (assoc entry :result outcome)))
               (catch Throwable error
                 (assoc entry :result
                        (if (or (cancelled-error? error)
@@ -248,7 +249,7 @@
                                 (:cancel-token execution)))
                          (cancelled-result execution)
                          (failure execution (ex-message error)
-                                  (ex-data error))))))))))))
+                                  (ex-data error)))))))))))
 
 (defn- result-status [{:keys [ok is-error details] :as result}]
   (let [exit-code (or (:exit-code details) (:exit_code details)
@@ -266,7 +267,8 @@
                       (max 0 (quot (- (System/nanoTime) started-at-nanos)
                                    1000000)))
         status (result-status result)]
-    (cond-> {:name (get-in call [:function :name])
+    (cond-> (merge (select-keys execution recovery/scope-keys)
+                  {:name (get-in call [:function :name])
      :call-id (:id call)
      :execution-id (:token execution)
      :started-at (:started-at execution)
@@ -280,7 +282,7 @@
               (:value result))
      :details (:details result)
      :content (:content result)
-     :duration-ms duration-ms}
+     :duration-ms duration-ms})
       (seq (:images result)) (assoc :images (:images result)))))
 
 (defn- emit-tool-end! [ctx entry]
@@ -313,6 +315,11 @@
 (defn- begin-slot! [ctx {:keys [transition-lock terminal? execution]} started]
   (locking transition-lock
     (when-not @terminal?
+      ;; A direct durable barrier, not an observer: failure prevents dispatch.
+      (record! ctx "tool/start"
+               (merge (select-keys started recovery/scope-keys)
+                      {:execution-id (:token started) :call-id (:call-id started)
+                       :name (:name started) :started-at (:started-at started)}))
       (reset! execution started)
       (kernel/emit! ctx :tool.execution/start
                     {:execution-id (:token started)
@@ -389,7 +396,7 @@
                                          (execute-prepared! ctx entry #(begin-slot! ctx slot %))))
                        (recur))))))))))
 
-(defn- execute-batch! [ctx tool-calls cancel-token max-parallel-tools]
+(defn- execute-batch! [ctx tool-calls cancel-token max-parallel-tools scope]
   (let [update! (fn [execution update]
                   (kernel/emit! ctx :tool.execution/update
                                 {:execution-id (:token execution)
@@ -397,13 +404,13 @@
                                  :name (:name execution)
                                  :update update}))
         _ (doseq [tool-call tool-calls]
-            (record-tool-call! ctx tool-call))
+            (record-tool-call! ctx tool-call scope))
         ;; Policy and approval remain serial and all finish before a body starts.
         ;; A terminal preflight outcome is nevertheless visible immediately;
         ;; durable results are still drained in model order below.
         prepared (mapv (fn [tool-call]
                          (let [entry (prepare-call! ctx tool-call cancel-token
-                                                    update!)]
+                                                    update! scope)]
                            (if (:result entry)
                              (emit-tool-end! ctx entry)
                              entry)))
@@ -429,7 +436,8 @@
           (when (cancellation/cancelled? cancel-token)
             (doseq [task @tasks]
               (future-cancel task)))
-          ;; Only this ordered drain mutates the durable session.
+          ;; Result facts drain in order; worker slots persist their own start
+          ;; barriers before dispatch.
           (mapv #(record-tool-result! ctx %) executed))
         (finally
           (dispose-cancel))))))
@@ -710,18 +718,26 @@
                           {:reason (if (= "length" (some-> (:finish-reason response) name))
                                      :output-limit :provider-incomplete)
                            :finish-reason (:finish-reason response) :retryable false})))
-        (record-message! ctx assistant)
+        (let [store (kernel/require-service ctx :session/store)
+              scope {:session_id (:session-id store)
+                     :run-id (:run-id @active) :step step}
+              assistant-event (record! ctx "message"
+                                       (cond-> (assoc scope :message assistant)
+                                         (and (seq tool-calls) (:durable? store))
+                                         (assoc :tool-dispatch-version 1)))
+              scope (assoc scope :assistant-event-id (:id assistant-event))]
         (publish! ctx listeners :agent.message/end {:message assistant})
         (if (seq tool-calls)
           (let [executions (do
                              (set-phase! ctx state listeners :tool)
-                             (execute-batch! ctx tool-calls cancel-token (or (:max-parallel-tools config) 4)))
+                             (execute-batch! ctx tool-calls cancel-token (or (:max-parallel-tools config) 4) scope))
                 results (mapv second executions)
                 turn-end (cond-> {:step step :tool-count (count results)}
                            (cancellation/cancelled? cancel-token)
                            (assoc :aborted true))]
             (doseq [[call result] executions]
-              (record-message! ctx (tool-result-message call result)))
+              (record! ctx "message" (assoc scope :call-id (:id call)
+                                           :message (tool-result-message call result))))
             (record! ctx "step/end" turn-end)
             (publish! ctx listeners :agent.turn/end turn-end)
             (cancellation/throw-if-cancelled! cancel-token)
@@ -756,7 +772,7 @@
               (do (reset! tool-progress nil) (recur (inc step) next-usage))
               {:content (or (:content assistant) "")
                :steps step :usage next-usage
-               :messages (messages ctx)})))))))
+               :messages (messages ctx)}))))))))
 
 (defn- run-agent!
   [ctx config active admission-lock prompt options queue state listeners]
@@ -844,6 +860,15 @@
 
 (defn- recover-interrupted-runs! [ctx]
   (let [store (kernel/require-service ctx :session/store)
+        plan (recovery/recovery-plan ((:events store))
+                                     {:session-id (:session-id store)
+                                      :diagnostics ((:diagnostics store))})
+        _ (doseq [{:keys [scope call result-event result-data]} (:repairs plan)]
+            (let [result-event (or result-event (record! ctx "tool/result" result-data))]
+              (record! ctx "message"
+                       (assoc scope :message (tool-result-message call (:data result-event))
+                              :recovery {:version 1 :assistant-event-id (:assistant-event-id scope)
+                                         :source-result-event-id (:id result-event)}))))
         receipt (host-deadline-receipt)
         _ (doseq [terminal (outcome/host-deadline-outcomes
                             receipt {:worker-id (env/get "QI_AGENT_WORKER_ID")
@@ -852,14 +877,9 @@
             ;; Keep the original late fact and append an explicit host correction.
             ;; Never dispatch another provider request before it is durable.
             (record! ctx "agent/run/end" terminal))
-        pending (reduce (fn [runs event]
-                          (let [id (get-in event [:data :run-id])]
-                            (case (:type event)
-                              "agent/run/start" (assoc runs id (:data event))
-                              "agent/run/end" (dissoc runs id)
-                              runs))) {} ((:events store)))]
+        pending (recovery/pending-runs ((:events store)) (:session-id store))]
     ;; Legacy logs without run envelopes remain readable and are not reclassified.
-    (doseq [[id _] pending :when id]
+    (doseq [[[_ id] _] pending :when id]
       (record! ctx "agent/run/end"
                (assoc (outcome/normalize {:status :uncertain :reason :restored})
                       :run-id id :usage nil :steps nil)))))

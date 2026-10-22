@@ -141,6 +141,22 @@ and durable tool results retain model order. Cancellation closes waiting slots
 before their bodies can start; a non-cooperative running body can still outlive
 its cancelled result.
 
+Interrupted native tool batches are repaired before another provider request.
+An existing durable result is reused, including its images; a missing result
+becomes an explicit unknown outcome, never an automatic tool retry. New fsync
+session logs record a dispatch barrier before middleware or the tool body. Only
+these versioned logs, without load diagnostics or a matching start, can prove a
+call was not dispatched. Legacy logs cannot provide that proof.
+
+Recovery matches session, run, step, assistant event and call identity, appends
+missing result/message pairs in model order, and then closes the interrupted run
+as uncertain. Reopening or losing acknowledgement after a repair append does
+not duplicate results. Clear retires old calls; retained checkpoint messages
+reuse original provenance only when the match is unique. Conflicting ownership,
+closed dangling history or unprovable checkpoint ownership blocks recovery for
+reconciliation rather than rewriting history. Offline subprocess fixtures verify
+that an effect followed by process exit is not executed again after reopen.
+
 Web and TUI project the same native outcomes into one history row per run ID,
 merging associated errors and retaining outcomes across snapshots and replay.
 `completed` plus `not-run` reads “运行完成 · 尚未验收”; restored uncertainty reads

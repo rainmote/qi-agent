@@ -351,6 +351,7 @@
                        ([event-id options]
                         (checkout-body! event-id options)))
            store {:append! append!
+                  :durable? (boolean (and path fsync?))
                   :events (fn [] (vec @events))
                   :events-after (fn [cursor]
                                   (let [cursor (or cursor 0)]
