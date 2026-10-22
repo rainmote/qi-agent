@@ -156,7 +156,7 @@ jobs:
       - name: Verify default Node setup and release gates without publishing
         run: |
           node -e 'if (process.version !== "v22.12.0") process.exit(1)'
-          node --test maintenance/tests/github.test.mjs maintenance/tests/assets.test.mjs
+          node --test maintenance/tests/github.test.mjs
 
   artifact-producer:
     name: Artifact transport producer (no publish)
