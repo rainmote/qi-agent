@@ -114,6 +114,9 @@ Office kit/engine 声明 MPL-2.0。除许可证外，重新分发前还须核验
 的前台/后台作业可有不同 PGID，分别登记；投递前再次核对 UID、启动身份、SID/PGID。
 所有组终止信号完成前保留直接子进程的 wait 身份，reap 后只观察组是否不存在，
 不再投递终止信号。close/撤销/取消共享同一次有界清理，重复调用不重发输入或信号。
+原生分配只调用一次 `os.forkpty()`，不走标准库隐藏的 openpty/旧设备回退；错误回执
+保留首个 `failure_stage`/`failure_errno`，后续清理错误不能覆盖最初失败。它不增加
+设备写权限，也不跳过原 Seatbelt；未通过真实分配测试时不能称终端已可用。
 
 `interrupt` 是向当前已核对前台组请求 SIGINT；TERM/KILL 投递、shell exit 和清理
 观察是不同事实。状态提供 `last_interrupt`、`termination`、`shell_exit_observed`、

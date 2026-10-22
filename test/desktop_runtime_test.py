@@ -1,5 +1,6 @@
 """Pure protocol/archive fixtures. Never calls PTY/fork, ps, sandbox or Office."""
 import importlib.util
+import errno
 import hashlib
 import io
 import json
@@ -101,7 +102,8 @@ class ProtocolTests(unittest.TestCase):
         instance = terminal.Terminal("/fixture", 12345)
         with patch.object(instance, "parent_alive", return_value=True), \
              patch.object(terminal, "census", side_effect=AssertionError("must not invoke ps")), \
-             patch.object(terminal.pty, "fork", side_effect=AssertionError("must not fork")):
+             patch.object(terminal.pty, "fork", side_effect=AssertionError("must not fork")), \
+             patch.object(terminal.os, "forkpty", side_effect=AssertionError("must not fork")):
             with self.assertRaisesRegex(RuntimeError, "descendant_containment_unavailable"):
                 instance.start(90, 24)
 
@@ -110,9 +112,50 @@ class ProtocolTests(unittest.TestCase):
         instance.cleanup_mode = "native-process-group"
         with patch.object(instance, "parent_alive", return_value=True), \
              patch.object(terminal, "census", return_value={}), \
-             patch.object(terminal.pty, "fork", side_effect=RuntimeError("fixture-fork-boundary")):
+             patch.object(terminal.os, "forkpty", side_effect=RuntimeError("fixture-fork-boundary")):
             with self.assertRaisesRegex(RuntimeError, "fixture-fork-boundary"):
                 instance.start(90, 24)
+
+    def test_native_allocation_preserves_first_errno_without_implicit_fallback(self):
+        instance = terminal.Terminal("/fixture", 12345, "native-process-group")
+        # Both boundaries are mocked: this is never a real PTY probe. The
+        # stdlib fallback would otherwise discard the first permission error.
+        with patch.object(instance, "parent_alive", return_value=True), \
+             patch.object(terminal, "census", return_value={}), \
+             patch.object(terminal.os, "pipe", return_value=(31, 32)), \
+             patch.object(terminal.os, "close"), \
+             patch.object(terminal.os, "forkpty", side_effect=OSError(errno.EACCES, "fixture first error")) as first, \
+             patch.object(terminal.pty, "fork", side_effect=OSError(errno.ENOSYS, "fixture forbidden fallback")) as fallback:
+            try:
+                instance.start(90, 24)
+            except OSError as error:
+                observed = error.errno
+            else:
+                observed = None
+            self.assertEqual(observed, errno.EACCES, "retain the first syscall error, never silently try another allocator")
+            self.assertEqual(first.call_count, 1)
+            fallback.assert_not_called()
+            self.assertEqual(getattr(instance, "operation_stage", None), "pty-allocate")
+
+    def test_native_preflight_failure_identifies_stage_before_any_allocation(self):
+        instance = terminal.Terminal("/fixture", 12345, "native-process-group")
+        with patch.object(instance, "parent_alive", return_value=True), \
+             patch.object(terminal, "census", side_effect=OSError("fixture library unavailable")), \
+             patch.object(terminal.os, "pipe") as pipe, \
+             patch.object(terminal.os, "forkpty") as first, \
+             patch.object(terminal.pty, "fork") as fallback:
+            with self.assertRaises(OSError):
+                instance.start(90, 24)
+            self.assertEqual(getattr(instance, "operation_stage", None), "ownership-preflight")
+            pipe.assert_not_called(); first.assert_not_called(); fallback.assert_not_called()
+
+    def test_failure_receipt_retains_first_stage_and_errno_when_cleanup_also_fails(self):
+        instance = terminal.Terminal("/fixture", 12345, "native-process-group")
+        instance.record_failure(OSError(errno.EACCES, "fixture first error"), "pty-allocate")
+        instance.record_failure(RuntimeError("fixture cleanup also failed"), "registered-group-cleanup")
+        state = instance.state()
+        self.assertEqual((state["failure_code"], state["failure_errno"], state["failure_stage"]),
+                         ("PermissionError", errno.EACCES, "pty-allocate"))
 
     def native_fixture(self):
         instance = terminal.Terminal("/fixture", 12345, "native-process-group")

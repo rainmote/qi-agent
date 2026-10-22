@@ -98,7 +98,11 @@ class BsdInfo(ctypes.Structure):
 def native_library():
     if sys.platform != "darwin":
         raise RuntimeError("native_process_group_requires_macos")
-    library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+    try:
+        library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+    except OSError as error:
+        error.qi_failure_stage = "native-library-load"
+        raise
     library.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int]
     library.proc_pidinfo.restype = ctypes.c_int
     for name in ("proc_listchildpids", "proc_listpgrppids"):
@@ -169,6 +173,15 @@ class Terminal:
         self.last_interrupt = None
         self.failure_code = None
         self.failure_errno = None
+        self.failure_stage = None
+        self.operation_stage = "not-started"
+
+    def record_failure(self, error, stage):
+        # Retain the first cause even when subsequent cleanup also fails.
+        if self.failure_code is None:
+            self.failure_code = str(error) if isinstance(error, RuntimeError) else type(error).__name__
+            self.failure_errno = getattr(error, "errno", None)
+            self.failure_stage = getattr(error, "qi_failure_stage", stage)
 
     def parent_alive(self):
         return os.getppid() == self.parent
@@ -178,12 +191,19 @@ class Terminal:
             raise RuntimeError("invalid_cleanup_mode")
         if self.cleanup_mode == "strict" and not descendant_containment_available():
             raise RuntimeError("terminal_descendant_containment_unavailable")
+        self.operation_stage = "owner-check"
         if not self.parent_alive():
             raise RuntimeError("parent_changed")
+        self.operation_stage = "ownership-preflight"
         census()  # Fail before forking any shell when ownership cannot be read.
+        self.operation_stage = "control-pipe"
         read_exec, write_exec = os.pipe()
         try:
-            self.pid, self.master = pty.fork()
+            self.operation_stage = "pty-allocate"
+            # macOS forkpty already acquires a controlling terminal/session.
+            # pty.fork() silently retries openpty/legacy devices after OSError,
+            # masking the first refusal and its errno. Native mode never does.
+            self.pid, self.master = os.forkpty() if self.cleanup_mode == "native-process-group" else pty.fork()
             if self.pid == 0:
                 os.close(read_exec)
                 try:
@@ -195,13 +215,16 @@ class Terminal:
             os.close(write_exec)
             write_exec = None
             os.set_blocking(self.master, False)
+            self.operation_stage = "pty-configure"
             self.resize(cols, rows)
+            self.operation_stage = "shell-exec-confirm"
             with selectors.DefaultSelector() as poll:
                 poll.register(read_exec, selectors.EVENT_READ)
                 if not poll.select(2) or os.read(read_exec, 128):
                     raise RuntimeError("terminal_exec_unconfirmed")
             if not self.parent_alive():
                 raise RuntimeError("parent_changed")
+            self.operation_stage = "shell-registration"
             if self.cleanup_mode == "native-process-group":
                 info = process_info(self.pid)
                 if (info is None or info["parent"] != os.getpid() or info["group"] != self.pid
@@ -210,7 +233,9 @@ class Terminal:
                 self.shell_identity = info["identity"]
                 self.known[self.pid] = self.shell_identity
                 self.groups.add(self.pid)
+            self.operation_stage = "group-registration"
             self.remember()
+            self.operation_stage = "running"
         finally:
             os.close(read_exec)
             if write_exec is not None:
@@ -370,8 +395,7 @@ class Terminal:
                     break
                 time.sleep(0.025)
         except (OSError, RuntimeError) as error:
-            self.failure_code = str(error) if isinstance(error, RuntimeError) else type(error).__name__
-            self.failure_errno = getattr(error, "errno", None)
+            self.record_failure(error, "registered-group-cleanup")
             self.reason = "cleanup_unknown"
         if not self.cleanup:
             self.reason = "cleanup_unknown"
@@ -453,12 +477,14 @@ class Terminal:
                 "registered_groups": sorted(self.groups), "detached_observed": sorted(self.detached),
                 "termination": self.termination, "last_interrupt": self.last_interrupt,
                 "failure_code": self.failure_code, "failure_errno": self.failure_errno,
+                "failure_stage": self.failure_stage, "operation_stage": self.operation_stage,
                 "shell_exit_observed": self.reaped,
                 "limitations": ["Detached descendants may survive; group absence is not full descendant containment."] if self.cleanup_mode == "native-process-group" else [],
                 "exit_code": self.exit_code, "reason": self.reason}
 
     def request(self, request):
         op = request["op"]
+        self.operation_stage = op
         if op == "close":
             return self.close()
         if op == "read" and self.cleanup and self.pid is not None:
@@ -516,8 +542,7 @@ def main(root, parent, cleanup_mode="strict"):
                 try:
                     terminal.remember_groups()
                 except (OSError, RuntimeError) as error:
-                    terminal.failure_code = str(error) if isinstance(error, RuntimeError) else type(error).__name__
-                    terminal.failure_errno = getattr(error, "errno", None)
+                    terminal.record_failure(error, "registered-group-observation")
                     terminal.reason = "cleanup_unknown"
                     break
                 if terminal.pid not in terminal.observed or terminal.observed[terminal.pid]["zombie"]:
@@ -559,8 +584,7 @@ def main(root, parent, cleanup_mode="strict"):
                 try:
                     value = {"id": request["id"], "ok": True, "result": terminal.request(request)}
                 except Exception as error:
-                    terminal.failure_code = str(error) if isinstance(error, RuntimeError) else type(error).__name__
-                    terminal.failure_errno = getattr(error, "errno", None)
+                    terminal.record_failure(error, terminal.operation_stage)
                     terminal.close("terminal_operation_unknown")
                     value = {"id": request["id"], "ok": False, "error": "terminal_operation_failed", "result": terminal.state()}
                 if request["op"] != "read":

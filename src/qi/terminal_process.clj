@@ -78,7 +78,8 @@
                                                             :cleanup_mode :descendant_containment :limitations :generation
                                                             :registered_groups :termination :last_interrupt :shell_exit_observed
                                                             :detached_observed :child_pid :guardian_pid :exit_code :reason
-                                                            :failure_code :failure_errno :has_more :end :cursor :truncated]))))
+                                                            :failure_code :failure_errno :failure_stage :operation_stage
+                                                            :has_more :end :cursor :truncated]))))
         status (fn []
                  (let [process @child]
                    (cond
