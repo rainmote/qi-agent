@@ -15,6 +15,7 @@ const [base, output, oracleSha] = process.argv.slice(2);
 if (!/^[a-f0-9]{40}$/.test(base ?? '') || !path.isAbsolute(output ?? '')) throw new Error('Usage: QI_MAINTENANCE_IMAGE=sha256:... node maintenance/qi-smoke.mjs EXACT_BASE_SHA ABS_NEW_OUTPUT [EXACT_ORACLE_SHA]');
 const oracle = compactionOracle(controller, oracleSha);
 const image = immutableImage(process.env.QI_MAINTENANCE_IMAGE);
+const source = git(controller, 'rev-parse', 'HEAD');
 const resources = resourceLimits(process.env.QI_MAINTENANCE_RESOURCES ? JSON.parse(process.env.QI_MAINTENANCE_RESOURCES)
   : { cpus: 4, memory_mb: 6144, work_mb: 6144, tmp_mb: 1024, pids: 1024 });
 await fs.mkdir(output); // Preserve earlier evidence.
@@ -54,9 +55,15 @@ try {
   const driver = compactionOracleDriver(oracle);
   const result = await implement({ root, lock, id: task.task_id, driver });
   const currentSource = path.join(output, 'current-source');
-  await snapshot(controller, git(controller, 'rev-parse', 'HEAD'), currentSource);
+  await snapshot(controller, source, currentSource);
   const currentSuite = await containerCommand({ image, workspace: currentSource, readonly: true, resources: task.resources,
     argv: ['npm', 'test'], timeoutMs: 900_000 });
+  const currentWebChecks = [];
+  for (const check of catalog.web_checks) {
+    const evidence = await containerCommand({ image, workspace: currentSource, readonly: true, resources: task.resources,
+      argv: check.argv, timeoutMs: check.timeout_seconds * 1000 });
+    currentWebChecks.push({ ...evidence, id: check.id, source_sha: source, image });
+  }
   const invalidLocks = path.join(output, 'invalid-locks');
   await fs.mkdir(path.join(invalidLocks, 'apps/tui-rs'), { recursive: true });
   await fs.copyFile(path.join(currentSource, 'package-lock.json'), path.join(invalidLocks, 'package-lock.json'));
@@ -64,17 +71,20 @@ try {
   const lockRejection = await containerCommand({ image, workspace: invalidLocks, readonly: true, resources: task.resources,
     argv: ['node', '-e', 'console.log("unreviewed process started")'], timeoutMs: 30_000 });
   const report = { schema_version: 1, status: result.status === 'review_ready' ? 'PASS' : 'FAIL', mode: 'full-qi-offline-oracle',
-    model_calls: 0, source_sha: git(controller, 'rev-parse', 'HEAD'), base_sha: base, image, resources: task.resources,
+    model_calls: 0, source_sha: source, base_sha: base, image, resources: task.resources,
     oracle_sha: oracle.sha, oracle_files: oracle.files.map(({ file, sha256 }) => ({ file, sha256 })),
     task_status: result.status, reason: result.reason ?? null, checks: result.checks, evidence: result.evidence, candidate_sha: result.candidate_sha,
-    current_source_suite: currentSuite, dependency_lock_rejection: lockRejection };
+    current_source_suite: currentSuite, current_web_checks: currentWebChecks, dependency_lock_rejection: lockRejection };
   const locksRejected = lockRejection.exit_code === 1 && /Dependency lock pair does not match/.test(lockRejection.stderr)
     && !lockRejection.stdout.includes('unreviewed process started');
-  if (currentSuite.exit_code !== 0 || !locksRejected) report.status = 'FAIL';
+  const webPassed = currentWebChecks.length === 2 && currentWebChecks.every(check =>
+    check.exit_code === 0 && !check.timed_out && !check.output_limited);
+  if (currentSuite.exit_code !== 0 || currentSuite.timed_out || currentSuite.output_limited || !webPassed || !locksRejected) report.status = 'FAIL';
   await durableWrite(path.join(output, 'report.json'), encode(report));
   console.log(encode(report));
   assert.equal(result.status, 'review_ready');
   assert.equal(currentSuite.exit_code, 0, currentSuite.stderr);
+  assert.ok(webPassed, 'current-source browser and daemon checks must pass in the same immutable image');
   assert.ok(locksRejected, 'unreviewed dependency locks must fail before executing the requested process');
 } catch (error) {
   await durableWrite(path.join(output, 'failure.json'), encode({ status: 'FAIL', reason: error.message, model_calls: 0 }));

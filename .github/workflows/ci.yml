@@ -54,6 +54,10 @@ jobs:
         run: npm run test:web
       - name: Test web UI
         run: npm run test:web-ui
+      - name: Test desktop host and supervisor
+        run: |
+          npm run test:desktop-unit
+          npm run test:desktop-rust
       - name: Test ACP editor protocol with isolated workers
         run: npm run test:acp
       - name: Build production Web application
@@ -122,6 +126,37 @@ jobs:
         run: cargo install cargo-audit --locked
       - name: Audit Rust dependencies
         run: cargo audit --file apps/tui-rs/Cargo.lock
+
+  dependency-actions:
+    name: Dependency actions (${{ matrix.os }}, no publish)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15-intel, macos-14]
+    env:
+      EXPECTED_SOURCE: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify exact checkout
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.12.0
+          cache: npm
+      - name: Verify cached Node setup
+        run: node -e 'if (process.version !== "v22.12.0") process.exit(1)'
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.12.0
+      - name: Verify default Node setup and release gates without publishing
+        run: |
+          node -e 'if (process.version !== "v22.12.0") process.exit(1)'
+          node --test maintenance/tests/github.test.mjs maintenance/tests/assets.test.mjs
 
   artifact-producer:
     name: Artifact transport producer (no publish)

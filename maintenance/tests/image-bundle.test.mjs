@@ -6,6 +6,7 @@ const sha = 'a'.repeat(40), baseline = 'b'.repeat(40), id = 'sha256:' + 'c'.repe
 const image = { source_sha: sha, image: id, platform: 'linux/arm64', baseline_sha: baseline, status: 'BUILT' };
 const report = { source_sha: sha, image: id, status: 'PASS', model_calls: 0 };
 const full = { ...report, base_sha: baseline, task_status: 'review_ready', current_source_suite: { exit_code: 0 },
+  current_web_checks: ['production-browser', 'daemon-web-e2e'].map(id => ({ id, exit_code: 0, source_sha: sha, image: image.image })),
   dependency_lock_rejection: { exit_code: 1, stdout: '', stderr: 'Dependency lock pair does not match a reviewed image source' } };
 
 test('portable image bundles require matching source, architecture and all three verification reports', () => {
@@ -18,6 +19,17 @@ test('portable image bundles require matching source, architecture and all three
     { ...report, image: 'sha256:' + 'd'.repeat(64) }, { ...report, model_calls: 1 }]) {
     assert.throws(() => verifiedImageBundle(sha, image, full, bad, report));
     assert.throws(() => verifiedImageBundle(sha, image, full, report, bad));
+  }
+});
+
+test('image export requires complete current-source browser evidence from the same source and image', () => {
+  for (const checks of [undefined, [], full.current_web_checks.slice(0, 1),
+    [full.current_web_checks[0], full.current_web_checks[0]],
+    ...[{ exit_code: 1 }, { exit_code: null }, { timed_out: true }, { output_limited: true },
+      { source_sha: baseline }, { image: 'sha256:' + 'd'.repeat(64) }].map(patch =>
+      [{ ...full.current_web_checks[0], ...patch }, full.current_web_checks[1]])]) {
+    assert.throws(() => verifiedImageBundle(sha, image, { ...full, current_web_checks: checks }, report, report),
+      /current-source browser checks/);
   }
 });
 
