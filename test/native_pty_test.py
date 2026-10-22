@@ -107,6 +107,9 @@ class Session:
         while time.monotonic() < deadline:
             value = self.call("read", since=self.cursor)
             self.cursor = value["cursor"]; self.output += value["output"]
+            # Fixed synthetic fixtures only. Retain a bounded transcript so a
+            # failed observation can be diagnosed without replaying input.
+            self.record["output_tail"] = self.output[-4096:]
             if predicate(value): return value
             time.sleep(0.025)
         raise AssertionError("fixture observation deadline; no input was replayed")

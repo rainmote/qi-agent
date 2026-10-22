@@ -135,6 +135,13 @@ fork 后先经私有注册门核对本代身份；就绪 ACK 必须在原策略�
 命令子进程设备写权限，也不跳过其原 Seatbelt；受信分配层的边界见上。未通过真实
 分配和命令边界测试时不能称终端已可用。
 
+受信分配器的首轮真实合成组件测试已创建 PTY、确认原策略内的 shell 就绪并观察到
+ASCII 命令输入及 Unicode 输出；但第 00 项中的 `stty size` 返回
+`TIOCGETD: Operation not permitted`。两次失败均已确认自有 guardian 退出、shell
+回收和登记组消失；第二次仅增加有界诊断正文，没有改变判定或策略。fail-fast 结果
+仍是 1 项失败、其余 9 项未运行，尺寸/前台中断等整体验收保持 OPEN。命令子进程
+需要的终端 ioctl 权限须另行审查，不能用受信分配器的批准自行放宽原策略。
+
 `interrupt` 是向当前已核对前台组请求 SIGINT；TERM/KILL 投递、shell exit 和清理
 观察是不同事实。状态提供 `last_interrupt`、`termination`、`shell_exit_observed`、
 `cleanup_observed`、`cleanup_scope`、`registered_groups` 与本代身份。
