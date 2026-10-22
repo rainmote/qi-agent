@@ -1,0 +1,41 @@
+/* Shared local font fallbacks; explicit user choices always lead the stack. */
+:root {
+  --qi-font-sans: system-ui, -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Segoe UI", "Microsoft YaHei", sans-serif;
+  --qi-font-mono: ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas, "Liberation Mono", "PingFang SC", monospace;
+  font-family: var(--qi-font-sans);
+}
+body {
+  font-family: var(--qi-text-font, var(--qi-font-sans)), var(--qi-font-sans);
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 1.6;
+  font-kerning: normal;
+}
+.message-user .message-content,
+.message-assistant .markdown-content,
+.composer textarea,
+.composer-placeholder {
+  line-height: 1.75;
+}
+.markdown-content :is(h1, h2, h3, h4, strong),
+.management-panel :is(h2, h3, strong) {
+  font-weight: 600;
+}
+.markdown-content :is(h1, h2, h3, h4) { line-height: 1.45; }
+.markdown-content :is(pre, code), .tool-details pre,
+.workspace-preview pre, .workspace-diff pre, .trajectory-detail-row pre {
+  font-family: var(--qi-code-font, var(--qi-font-mono)), var(--qi-font-mono);
+  font-size: var(--qi-code-font-size, 13px);
+  line-height: 1.65;
+  font-variant-ligatures: none;
+}
+.management-panel code {
+  font-family: var(--qi-code-font, var(--qi-font-mono)), var(--qi-font-mono);
+  font-variant-ligatures: none;
+}
+.tool-card[data-tool="bash"] .tool-details > div:nth-child(2) > pre,
+.tool-batch-items [data-tool-call="bash"] .tool-details > div:nth-child(2) > pre {
+  font-family: var(--qi-terminal-font, var(--qi-font-mono)), var(--qi-font-mono);
+  font-size: var(--qi-terminal-font-size, 13px);
+  line-height: 1.65;
+}

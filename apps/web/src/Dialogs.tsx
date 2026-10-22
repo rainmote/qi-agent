@@ -217,8 +217,8 @@ type SettingsTab = "general" | "models" | "plugins" | "tools" | "workspaces";
 
 function ContentFontControl({ expanded, onToggle, controls }: { expanded: boolean; onToggle: () => void; controls: string }) {
   const [size, setSize] = useState(() => {
-    const stored = typeof localStorage === "undefined" ? 14 : Number(localStorage.getItem("qi-agent.content-font-size"));
-    return Number.isInteger(stored) && stored >= 10 && stored <= 22 ? stored : 14;
+    const stored = typeof localStorage === "undefined" ? 15 : Number(localStorage.getItem("qi-agent.content-font-size"));
+    return Number.isInteger(stored) && stored >= 10 && stored <= 22 ? stored : 15;
   });
   const [draft, setDraft] = useState(String(size));
   const apply = (n: number) => {

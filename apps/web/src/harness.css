@@ -81,7 +81,7 @@ body { font-family: var(--qi-text-font,var(--dsw-font-family)); line-height: 22p
 .composer, .draft-workbench .composer { position: relative; display: flex; flex-direction: column; min-height: 0; gap: 12px; padding: 8px 0 0; border: 0; border-radius: 28px; background: var(--input); --dsw-elevation-stroke-color: var(--border-2); box-shadow: var(--dsw-elevation-soft); }
 .composer:focus-within { box-shadow: var(--dsw-elevation-soft); }
 .composer:has(textarea:focus-visible) { outline: 1px solid var(--accent); outline-offset: 1px; }
-.composer textarea { min-height: 36px; height: 36px; max-height: 336px; padding: 4px 14px 0; font-size: var(--qi-content-font-size,14px); line-height: calc(var(--qi-content-font-size,14px) + 10px); }
+.composer textarea { min-height: 36px; height: 36px; max-height: 336px; padding: 4px 14px 0; font-size: var(--qi-content-font-size,15px); line-height: calc(var(--qi-content-font-size,15px) + 10px); }
 .draft-workbench .composer textarea { min-height: 52px; height: 52px; }
 .composer textarea::placeholder { color: var(--dsw-alias-label-caption); }
 .composer .composer-footer { flex-wrap: wrap; min-height: 42px; padding: 2px 8px 6px; gap: 12px; container-type: inline-size; }
@@ -137,8 +137,8 @@ body { font-family: var(--qi-text-font,var(--dsw-font-family)); line-height: 22p
 .view-tabs button[aria-selected="true"] { background: transparent; color: var(--accent); border-bottom-color: var(--accent); box-shadow: none; }
 .timeline-inner { width: min(var(--conversation-width),calc(100% - 72px)); padding-top: 16px; margin-right: auto; position: relative; left: -3.5px; }
 .message-user .message-body { max-width: min(70.2%,82%); }
-.message-user .message-content { padding: 10px 16px; border: 0; border-radius: 20px; background: var(--dsw-specific-bubble); font-size: var(--qi-content-font-size,14px); line-height: calc(var(--qi-content-font-size,14px) + 8px); }
-.message-assistant .markdown-content { font-size: var(--qi-content-font-size,14px); line-height: calc(var(--qi-content-font-size,14px) + 10px); }
+.message-user .message-content { padding: 10px 16px; border: 0; border-radius: 20px; background: var(--dsw-specific-bubble); font-size: var(--qi-content-font-size,15px); line-height: calc(var(--qi-content-font-size,15px) + 8px); }
+.message-assistant .markdown-content { font-size: var(--qi-content-font-size,15px); line-height: calc(var(--qi-content-font-size,15px) + 10px); }
 .message-actions { gap: 8px; min-height: 28px; margin-top: 6px; opacity: 1; }
 .message-actions time { font-size: 13px; line-height: 20px; }
 .message-actions svg { width: 16px; height: 16px; }
@@ -152,7 +152,7 @@ body { font-family: var(--qi-text-font,var(--dsw-font-family)); line-height: 22p
 .tool-summary-copy .tool-name { color: var(--text-2); font-size: 14px; font-weight: 400; }
 .tool-details,.tool-batch-items { margin-left: 9px; border-top: 0; border-left: 1px solid var(--border-2); }
 .tool-details pre { padding: 10px 12px; border: .5px solid var(--border-2); border-radius: 12px; background: var(--code); font: 11px/18px 'SF Mono',Menlo,monospace; }
-.turn-process-toggle { display: flex; align-items: center; gap: 4px; height: calc(33px + var(--qi-content-font-size,14px) - 14px); min-height: 33px; width: 100%; padding: 0 0 8px; margin-bottom: 16px; border: 0; border-bottom: .5px solid var(--dsw-alias-border-l2); background: transparent; color: var(--dsw-alias-label-tertiary); text-align: left; font-size: var(--qi-content-font-size,14px); line-height: calc(var(--qi-content-font-size,14px) + 10px); cursor: pointer; }
+.turn-process-toggle { display: flex; align-items: center; gap: 4px; height: calc(33px + var(--qi-content-font-size,15px) - 15px); min-height: 33px; width: 100%; padding: 0 0 8px; margin-bottom: 16px; border: 0; border-bottom: .5px solid var(--dsw-alias-border-l2); background: transparent; color: var(--dsw-alias-label-tertiary); text-align: left; font-size: var(--qi-content-font-size,15px); line-height: calc(var(--qi-content-font-size,15px) + 10px); cursor: pointer; }
 .turn-process-toggle > span { overflow-wrap: anywhere; }
 .turn-process-toggle > svg { order: 1; width: 14px; height: 14px; transform: rotate(90deg); }
 .turn-process-toggle[aria-expanded="true"] > svg { transform: rotate(-90deg); }
@@ -288,7 +288,7 @@ body { font-family: var(--qi-text-font,var(--dsw-font-family)); line-height: 22p
 .busy-submit-button { display: grid; flex: none; place-items: center; width: 34px; height: 34px; padding: 0; border: 0; border-radius: 50%; background: var(--text); color: var(--bg); cursor: pointer; }
 .busy-submit-button svg { width: 16px; height: 16px; }
 .busy-submit-button:disabled { opacity: .4; cursor: default; }
-.markdown-content :is(pre,code),.tool-details pre,.workspace-preview pre,.workspace-diff pre,.trajectory-detail-row pre { font-family: var(--qi-code-font,'SF Mono',Menlo,monospace); font-size: var(--qi-code-font-size,11px); }
+.markdown-content :is(pre,code),.tool-details pre,.workspace-preview pre,.workspace-diff pre,.trajectory-detail-row pre { font-family: var(--qi-code-font,'SF Mono',Menlo,monospace); font-size: var(--qi-code-font-size,13px); }
 .tool-card[data-tool="bash"] .tool-details > div:nth-child(2) > pre,.tool-batch-items [data-tool-call="bash"] .tool-details > div:nth-child(2) > pre { font-family: var(--qi-terminal-font,'SF Mono',Menlo,monospace); font-size: var(--qi-terminal-font-size,13px); }
 @media (max-width:600px) {
  .settings-font-row { flex-wrap: wrap; }
@@ -368,7 +368,7 @@ body { text-rendering: auto; font-synthesis: weight style small-caps; }
 .composer-editor { position: relative; width: calc(100% - 4px); }
 .composer-editor textarea { width: 100%; }
 .composer textarea::placeholder { color: transparent; }
-.composer-placeholder { position: absolute; top: 4px; left: 14px; right: 8px; overflow: hidden; color: var(--dsw-alias-label-caption); font-size: var(--qi-content-font-size,14px); line-height: calc(var(--qi-content-font-size,14px) + 10px); text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
+.composer-placeholder { position: absolute; top: 4px; left: 14px; right: 8px; overflow: hidden; color: var(--dsw-alias-label-caption); font-size: var(--qi-content-font-size,15px); line-height: calc(var(--qi-content-font-size,15px) + 10px); text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
 .draft-workbench .composer-placeholder { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; white-space: normal; }
 .composer .model-trigger-icon { display: none; }
 @container (max-width:270px) {

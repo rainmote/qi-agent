@@ -53,7 +53,7 @@ export function normalizeWebPreferences(value: unknown): WebPreferences {
     busyEnter: v.busyEnter === "steer" ? "steer" : "queue", fileLinkOpening: v.fileLinkOpening === "new-tab" ? "new-tab" : "panel", shortcuts,
     shortcutsRevision: Number.isSafeInteger(v.shortcutsRevision) && v.shortcutsRevision! >= 0 ? v.shortcutsRevision! : 0,
     fontFamilies: { text: normalizeFontFamily(v.fontFamilies?.text ?? "") ?? "", code: normalizeFontFamily(v.fontFamilies?.code ?? "") ?? "", terminal: normalizeFontFamily(v.fontFamilies?.terminal ?? "") ?? "" },
-    codeFontSize: Number.isInteger(v.codeFontSize) && v.codeFontSize! >= 10 && v.codeFontSize! <= 16 ? v.codeFontSize! : 11,
+    codeFontSize: Number.isInteger(v.codeFontSize) && v.codeFontSize! >= 10 && v.codeFontSize! <= 16 ? v.codeFontSize! : 13,
     terminalFontSize: Number.isInteger(v.terminalFontSize) && v.terminalFontSize! >= 10 && v.terminalFontSize! <= 20 ? v.terminalFontSize! : 13 };
 }
 function loadPreferences(): WebPreferences {
