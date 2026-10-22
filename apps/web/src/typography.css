@@ -17,6 +17,9 @@ body {
 .composer-placeholder {
   line-height: 1.75;
 }
+.composer textarea {
+  min-height: max(36px, calc(var(--qi-content-font-size, 15px) * 1.75 + 4px));
+}
 .markdown-content :is(h1, h2, h3, h4, strong),
 .management-panel :is(h2, h3, strong) {
   font-weight: 600;
