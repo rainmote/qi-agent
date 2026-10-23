@@ -1,8 +1,14 @@
 // Uses only mocked API data. Start Vite, then run npm run test:web-browser.
 // QI_AGENT_PLAYWRIGHT_MODULE can select an existing Playwright installation.
 import assert from 'node:assert/strict';
-const { chromium } = await import(process.env.QI_AGENT_PLAYWRIGHT_MODULE || 'playwright');
-const browser = await chromium.launch({headless:true,...(process.env.QI_AGENT_BROWSER_CHANNEL ? {channel:process.env.QI_AGENT_BROWSER_CHANNEL} : {})});
+const { chromium, webkit } = await import(process.env.QI_AGENT_PLAYWRIGHT_MODULE || 'playwright');
+const engine = process.env.QI_AGENT_BROWSER_ENGINE || 'chromium';
+assert(['chromium', 'webkit'].includes(engine), `Unsupported browser engine: ${engine}`);
+const browserType = engine === 'webkit' ? webkit : chromium;
+const endpoint = process.env.QI_AGENT_BROWSER_WS_ENDPOINT;
+if (endpoint) { const url = new URL(endpoint); assert(url.protocol === 'ws:' && url.hostname === '127.0.0.1', 'Owned loopback browser required'); }
+const browser = endpoint ? await browserType.connect(endpoint) : await browserType.launch({headless:true,
+ ...(engine === 'chromium' && process.env.QI_AGENT_BROWSER_CHANNEL ? {channel:process.env.QI_AGENT_BROWSER_CHANNEL} : {})});
 const base = process.env.QI_AGENT_WEB_TEST_URL || 'http://127.0.0.1:4179';
 const errors=[];
 const workspaceId='1234567890abcdef';

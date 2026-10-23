@@ -89,6 +89,41 @@ jobs:
           cargo build --release --locked --manifest-path apps/tui-rs/Cargo.toml
           expect apps/tui-rs/tests/pty-smoke.exp
 
+  web-headless:
+    name: Headless UI (${{ matrix.os }}, ${{ matrix.browser }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            browser: chromium
+          - os: macos-14
+            browser: webkit
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.12.0
+          cache: npm
+      - name: Install locked UI dependencies
+        run: npm ci --registry=https://registry.npmjs.org
+      - name: Install pinned headless browser
+        run: npx playwright install --with-deps ${{ matrix.browser }}
+      - name: Test production Core Preview composer
+        run: npm run test:web-headless -- --browser ${{ matrix.browser }} --artifacts "$RUNNER_TEMP/web-headless"
+      - name: Upload UI assertions, screenshots and failure traces
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: web-headless-${{ matrix.os }}-${{ matrix.browser }}
+          path: ${{ runner.temp }}/web-headless/
+          if-no-files-found: error
+          retention-days: 7
+
   msrv:
     name: MSRV 1.88 (${{ matrix.os }})
     strategy:

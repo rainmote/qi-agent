@@ -210,6 +210,34 @@ Vite production build，以及桌面和 375px 视口的实际浏览器检查。
 未确认结果、模型搜索空态、键盘选择与焦点恢复。
 首次运行需 `npx playwright install chromium`；可通过 `QI_AGENT_E2E_ARTIFACTS` 指定截图目录。
 
+### 无头 UI 自动化
+
+沿用锁定版本的 Playwright，不需要启动可见浏览器。首次准备依赖和浏览器后，一条命令运行真实 Host 的离线 E2E，再检查 Core Preview 输入区：
+
+```bash
+npm ci
+npx playwright install --with-deps chromium webkit
+npm run test:ui:e2e
+```
+
+完整入口还需要现有 E2E 的 Rust 和 Babashka。只验证前端时运行 `npm run test:web-headless`，仅需 Node 与浏览器；默认依次运行 Chromium、WebKit，各 11 个场景。
+它构建独立的生产 Core Preview 资源，不覆盖 `apps/web/dist`。顶部提示条来自真实编译常量，不能用普通 Web 构建或注入 CSS 代替。
+场景覆盖信任/受限提示、待审批、运行中、360×480 最小窗口、长草稿、窄屏、缩窗、只缩高度和展开运行详情；断言检查完整输入卡、底部状态条、工具栏按钮、输入内部滚动和页面横向溢出。
+
+```bash
+# 单个引擎，或把证据写入指定父目录（每轮创建新子目录）
+npm run test:web-headless -- --browser webkit --artifacts /absolute/ui-evidence
+# 直接检查已交付 macOS 包里的生产资源，不重新构建
+npm run test:web-headless -- --ui-root '/absolute/qi-agent Preview.app/Contents/Resources/runtime/apps/web/dist'
+```
+
+每轮默认写入 `out/web-headless/<独立运行目录>/`，包含总结果、引擎版本、源码与控制器指纹、实际 UI 资源哈希、每场景几何 JSON/截图、原始日志和失败场景的 Playwright trace。
+失败、缺少场景/截图、浏览器未安装、资源缺失或超时均返回非零；无自动重试。可用 `npx playwright show-trace /absolute/failed-trace.zip` 查看失败步骤。
+默认每引擎的场景执行限时 180 秒，`--timeout-ms` 仅允许在 1–180 秒之间设置；另有浏览器启动 30 秒和有界退出清理时间。`--source-root` 供冻结在候选外的已审查测试控制器指向被测仓库。
+
+CI 在 Linux Chromium 和 macOS WebKit 自动执行该专项，并通过 `always()` 上传证据，保留 7 天。现有 Chromium 六组回归与真实 Host E2E 继续运行。
+专项使用真实浏览器和生产 DOM，但 API 为隔离 fixture；它不替代真实 Host 测试，也不证明 WKWebView 原生启动、真实模型或 LCU 桌面操作。
+
 
 ### 简洁工作步骤展示
 
