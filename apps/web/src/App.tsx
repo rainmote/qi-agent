@@ -995,22 +995,41 @@ export function App() {
   useLayoutEffect(() => {
     const input = composerInput.current;
     if (!input) return;
+    const view = input.closest(".session-view");
+    const wrap = input.closest(".composer-wrap");
+    const content = view?.querySelector(".timeline");
+    // Reserve the measured trust/approval controls, toolbar and summary before
+    // growing a draft. Their height changes with content and narrow windows.
+    const measure = () => ({
+      width: input.clientWidth,
+      available: view && wrap && content
+        ? view.getBoundingClientRect().bottom - content.getBoundingClientRect().top
+          - wrap.getBoundingClientRect().height + input.getBoundingClientRect().height
+        : 336,
+    });
+    let previous = measure();
     const resize = () => {
+      const minimum = parseFloat(getComputedStyle(input).minHeight) || (activeSession ? 36 : 52);
+      const maximum = Math.max(minimum, Math.min(336, Math.floor(measure().available)));
       input.style.height = "0px";
-      const nextHeight = input.value ? Math.max(activeSession ? 36 : 52, Math.min(input.scrollHeight, 336)) : activeSession ? 36 : 52;
+      const nextHeight = input.value ? Math.max(minimum, Math.min(input.scrollHeight, maximum)) : minimum;
       input.style.height = `${nextHeight}px`;
-      input.style.overflowY = input.scrollHeight > 336 ? "auto" : "hidden";
+      input.style.overflowY = input.value && input.scrollHeight > input.clientHeight ? "auto" : "hidden";
+      previous = measure();
     };
     resize();
-    let width = input.clientWidth;
+    let frame = 0;
     const observer = new ResizeObserver(() => {
-      if (input.clientWidth === width) return;
-      width = input.clientWidth;
-      resize();
+      const next = measure();
+      if (next.width === previous.width && next.available === previous.available) return;
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(resize);
     });
-    observer.observe(input);
-    return () => observer.disconnect();
-  }, [activeSession?.id, composer]);
+    // Observe the fixed siblings too: a zero-height timeline can move without
+    // resizing when the run overview expands. Rebind when that row is inserted.
+    for (const element of [input, view, ...Array.from(view?.children || [])]) if (element) observer.observe(element);
+    return () => { observer.disconnect(); cancelAnimationFrame(frame); };
+  }, [activeSession?.id, composer, phase, pendingOperation, stopping]);
 
   const chooseCommand = (index = commandIndex) => {
     const command = commandSuggestions[index];

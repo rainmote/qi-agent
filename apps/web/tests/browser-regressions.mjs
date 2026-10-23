@@ -601,10 +601,23 @@ try{
    assert.equal(await placeholder.isVisible(),true);
    assert.equal(await placeholder.evaluate(e => getComputedStyle(e).whiteSpace), 'nowrap', 'docked empty hint stays a single truncated line');
    assert.equal(await input.evaluate(e=>e.clientHeight),36,'empty docked input does not grow to fit placeholder text');
+   assert.equal(await input.evaluate(e=>getComputedStyle(e).overflowY),'hidden','empty placeholder does not create a scrollbar');
   }
   await page.setViewportSize({width:1440,height:1000});await input.fill('响应式输入 '.repeat(30));
   await page.setViewportSize({width:390,height:844});await settle(page);
   assert.equal(await input.evaluate(e=>e.scrollHeight<=e.clientHeight||getComputedStyle(e).overflowY==='auto'),true,'wrapped drafts remain visible or scrollable after a width change');
+  await page.setViewportSize({width:900,height:840});
+  await input.fill(Array.from({length:40},(_,i)=>`Draft line ${i+1}`).join('\n'));await settle(page);
+  const tallHeight=await input.evaluate(e=>e.clientHeight);
+  // Change only height: the old width-only observer left the send row clipped.
+  await page.setViewportSize({width:900,height:480});await settle(page);
+  const short=await input.evaluate(e=>({height:e.clientHeight,scrollable:e.scrollHeight>e.clientHeight&&getComputedStyle(e).overflowY==='auto'}));
+  assert(short.height<tallHeight&&short.scrollable,'short windows shrink long drafts into an internally scrollable input');
+  const card=await page.locator('.composer').boundingBox(),summary=await page.locator('.session-run-summary').boundingBox();
+  assert(card.y+card.height<=452,'the full card retains bottom clearance');
+  assert(summary.y+summary.height<=477,'the run summary remains inside the window');
+  await page.setViewportSize({width:900,height:840});await settle(page);
+  assert.equal(await input.evaluate(e=>e.clientHeight),tallHeight,'enlarging the window restores draft height');
   await page.close();console.log(JSON.stringify({composerResize:'passed'}));
  }
  for(const width of [1440,390]){
