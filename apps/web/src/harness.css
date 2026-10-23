@@ -516,3 +516,14 @@ body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; 
  .settings-option-row.settings-preference-row { flex-wrap: wrap; }
  .settings-preference-trigger { height: auto; max-width: 100%; padding-block: 7px; white-space: normal; text-align: left; }
 }
+
+/* Compact work steps keep live arguments and settled approval records behind disclosure. */
+.compact-step-toggle { display: flex; align-items: center; gap: 7px; width: 100%; min-height: 32px; padding: 4px 0; border: 0; background: transparent; color: var(--text-2); font: inherit; text-align: left; cursor: pointer; }
+.compact-step-toggle > span { min-width: 0; overflow-wrap: anywhere; }
+.compact-step-toggle > svg { width: 14px; height: 14px; flex: 0 0 14px; }
+.compact-step-toggle > svg:last-child { transform: rotate(90deg); }
+.compact-step-toggle[aria-expanded="true"] > svg:last-child { transform: rotate(-90deg); }
+.compact-step-group.is-error .compact-step-toggle { color: var(--danger); }
+.compact-run-details { color: var(--text-2); font-size: 12px; }
+.compact-run-details > summary { cursor: pointer; width: fit-content; }
+.run-overview.is-compact .run-overview-inner { gap: 4px; }

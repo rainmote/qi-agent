@@ -1308,7 +1308,7 @@ export function App() {
             ? `${phaseLabel(phase)} ${projection.state.compaction["completed-chunks"]}/${projection.state.compaction["total-chunks"]}` : phase}
           turns={projection?.summary.turns ?? 0} steps={projection?.summary.steps ?? 0}
           calls={projection?.summary.calls ?? 0} waitingCount={projection?.interactions.length ?? 0}
-          context={contextStatus} />}
+          context={contextStatus} compact={stepsView === "compact" && conversationView === "chat"} />}
         <div className={`timeline ${conversationView === "trajectory" ? "trajectory-mode" : ""}`} ref={timeline} tabIndex={0} aria-label={t("会话内容")}>
           {conversationView === "chat" && projection && <Timeline key={activeSession.id} projection={projection} scrollRef={timeline} pluginSlots={pluginSlots} view={stepsView} collapseTiming={stepsCollapseTiming} />}
           {conversationView === "trajectory" && <Trajectory key={activeSession.id} events={projection?.events || []} />}

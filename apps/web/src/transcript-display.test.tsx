@@ -34,9 +34,9 @@ test("settled turns fold process while retaining final answer, decisions and unv
   assert.equal(focused.rows.filter(row => row.kind === "tools").length,1,"completion cannot hide a focused tool control");
 });
 
-test("interleaved user input and active turns keep every step in original order", () => {
+test("standard interleaved user input and active turns keep every step in original order", () => {
   const interrupted=model(true);
-  assert.deepEqual(displayTranscript(interrupted,"compact",new Map()).rows,interrupted.rows);
+  assert.deepEqual(displayTranscript(interrupted,"standard",new Map()).rows,interrupted.rows);
   const active=buildTimeline(events([["message",user],["tool/call",tool]]));
   assert.deepEqual(displayTranscript(active,"standard",new Map()).rows,active.rows);
   assert.deepEqual(displayTranscript(model(),"verbose",new Map()).rows,model().rows);
@@ -79,4 +79,64 @@ test("display preferences fail back to standard and subtask results remain discl
   assert.doesNotMatch(html,/<details[^>]+open=/);
   assert.match(html,/已完成 · 尚未验收/);
   assert.match(html,/没有发现阻断问题/);
+});
+
+
+test("compact groups consecutive steps and resolved approvals without duplicate placeholders", () => {
+  const values: Array<[string, Record<string, unknown>]> = [["message", user]];
+  for (let i = 0; i < 9; i++) values.push(
+    ["message", {message:{role:"assistant",tool_calls:[{id:`c${i}`} ]}}],
+    ["tool/call", {...tool,"call-id":`c${i}`}],
+    ["approval/decision", {decision:"allow",tool:"read"}],
+    ["tool/result", {"call-id":`c${i}`,ok:true}], ["step/end", {}]);
+  const live = buildTimeline(events(values));
+  const compact = displayTranscript(live,"compact",new Map());
+  assert.deepEqual(compact.rows.map(row=>row.kind),["message","step-control"]);
+  const group = compact.rows.find(row=>row.kind === "step-control")!;
+  assert.equal(group.batch.calls.length,9);
+  assert.equal(displayTranscript(live,"compact",new Map(),group.id).rows.find(row=>row.kind === "step-control")!.open,false,
+    "focusing the header cannot expand it before its first click");
+  const expanded = displayTranscript(live,"compact",new Map([[group.id,true]]));
+  assert.equal(expanded.rows.filter(row=>row.kind === "tools").length,9);
+  assert.equal(expanded.rows.filter(row=>row.kind === "decision").length,9);
+  assert.equal(expanded.rows.filter(row=>row.kind === "message").length,1);
+  const settled = buildTimeline(events([...values,["message",answer],["agent/run/end",outcome]]));
+  const folded = displayTranscript(settled,"compact",new Map());
+  assert.deepEqual(folded.rows.map(row=>row.kind),["message","turn-control","message"]);
+  assert.match(folded.rows.find(row=>row.kind === "turn-control")!.caption,/尚未验收/);
+  const focused = displayTranscript(settled,"compact",new Map(),group.id);
+  assert.equal(focused.rows.find(row=>row.kind === "turn-control")!.open,true);
+  assert.equal(focused.rows.find(row=>row.kind === "step-control")!.open,false);
+});
+
+test("compact retains narration, user input, refusals and abnormal outcomes outside step groups", () => {
+  for (const status of ["failed","cancelled","uncertain"]) {
+    const original = model(true);
+    const end = original.rows.find(row=>row.kind === "outcome")!;
+    assert.equal(end.kind,"outcome");
+    if (end.kind !== "outcome") throw new Error("Outcome missing");
+    const stopped = {...original,rows:original.rows.map(row=>row === end ? {...end,event:{...end.event,data:{...end.event.data,status}}} : row)};
+    const compact = displayTranscript(stopped,"compact",new Map());
+    assert(!compact.rows.some(row=>row.kind === "turn-control"));
+    assert(compact.rows.some(row=>row.kind === "step-control"));
+    assert(compact.rows.some(row=>row.kind === "decision" && row.event.data.decision === "deny"));
+    assert(compact.rows.some(row=>row.kind === "outcome" && row.event.data.status === status));
+    assert.deepEqual(compact.rows.filter(row=>row.kind === "message").map(row=>row.id),original.rows.filter(row=>row.kind === "message").map(row=>row.id));
+  }
+});
+
+test("compact splits mixed reasoning from narration without mutating durable events", () => {
+  const original = events([["message",user],["tool/call",tool],["step/end",{}],["message",answer]]);
+  const before = JSON.stringify(original), timeline = buildTimeline(original);
+  const compact = displayTranscript(timeline,"compact",new Map());
+  assert.deepEqual(compact.rows.map(row=>row.kind),["message","step-control","message"]);
+  const group = compact.rows.find(row=>row.kind === "step-control")!;
+  assert.equal(group.reasoningCount,1);
+  const expanded = displayTranscript(timeline,"compact",new Map([[group.id,true]]));
+  const messages = expanded.rows.flatMap(row=>row.kind === "message" ? [row.event.data.message as Record<string,unknown>] : []);
+  assert.equal(messages.filter(message=>message.content).length,2);
+  const reasoning = messages.filter(message=>message.reasoning_content);
+  assert.equal(reasoning.length,1);
+  assert.equal(reasoning[0].content,undefined);
+  assert.equal(JSON.stringify(original),before);
 });

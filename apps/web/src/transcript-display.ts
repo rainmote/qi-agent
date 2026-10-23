@@ -1,5 +1,6 @@
 import { uiText as t } from "./i18n";
-import type { TimelineModel, TimelineRow } from "./timeline-model";
+import type { TimelineModel, TimelineRow, ToolBatch } from "./timeline-model";
+import { outcomeText, runOutcome } from "./run-outcome";
 
 // Presentation preferences never change model requests or permission policy.
 export type TranscriptView = "compact" | "standard" | "detailed" | "verbose";
@@ -20,11 +21,58 @@ export function collapseTiming(value: string | null): CollapseTiming {
 export type TurnControl = {
   id: string; kind: "turn-control"; open: boolean; label: string; caption: string; members: string[];
 };
+export type StepControl = {
+  id: string; kind: "step-control"; open: boolean; members: string[]; batch: ToolBatch; reasoningCount: number;
+};
+export type TranscriptRow = TimelineRow | TurnControl | StepControl;
+
+function memberIds(rows: TimelineRow[]): string[] {
+  return rows.flatMap(row => [row.id, `${row.id}:reasoning`, `steps:${row.id}`, `steps:${row.id}:reasoning`,
+    ...(row.kind === "tools" ? row.batch.calls.map(call => `call:${call.id}`) : [])]);
+}
+
+/** Compact groups span runtime steps, but never consume prose, user input or a refusal. */
+function compactSteps(rows: Array<TimelineRow | TurnControl>, choices: ReadonlyMap<string, boolean>,
+  focusedRow: string | null, hiddenReasoning: ReadonlySet<string>): TranscriptRow[] {
+  const result: TranscriptRow[] = [];
+  let members: TimelineRow[] = [];
+  const flush = () => {
+    if (!members.length) return;
+    const id = `steps:${members[0].id}`, ids = memberIds(members);
+    const open = choices.get(id) ?? (focusedRow !== null && focusedRow !== id && ids.includes(focusedRow));
+    const calls = members.flatMap(row => row.kind === "tools" ? row.batch.calls : []);
+    const reasoningCount = members.filter(row => row.kind === "message" &&
+      Boolean((row.event.data.message as Record<string, unknown>).reasoning_content ||
+        (row.event.data.message as Record<string, unknown>).reasoning)).length;
+    result.push({ id, kind: "step-control", open, members: ids, batch: { id, calls }, reasoningCount });
+    if (open) result.push(...members.filter(row => row.kind !== "message" ||
+      Boolean((row.event.data.message as Record<string, unknown>).reasoning_content ||
+        (row.event.data.message as Record<string, unknown>).reasoning)));
+    members = [];
+  };
+  for (const row of rows) {
+    const message = row.kind === "message" ? row.event.data.message as Record<string, unknown> : undefined;
+    if (row.kind === "message" && message?.role === "assistant" && message.content &&
+      (message.reasoning_content || message.reasoning) && !hiddenReasoning.has(row.id)) {
+      const { reasoning_content, reasoning, ...response } = message;
+      members.push({ ...row, id: `${row.id}:reasoning`, event: { ...row.event,
+        data: { ...row.event.data, message: { role: "assistant", reasoning_content, reasoning } } } });
+      flush();
+      result.push({ ...row, event: { ...row.event, data: { ...row.event.data, message: response } } });
+      continue;
+    }
+    if (row.kind === "tools" || (row.kind === "decision" && row.event.data.decision === "allow") ||
+      (message?.role === "assistant" && !message.content)) members.push(row as TimelineRow);
+    else { flush(); result.push(row); }
+  }
+  flush();
+  return result;
+}
 
 /** Fold only settled, uninterrupted turns; retain answers, decisions and failure outcomes. */
 export function displayTranscript(model: TimelineModel, mode: TranscriptView,
   choices: ReadonlyMap<string, boolean>, focusedRow: string | null = null, timing: CollapseTiming = "completion"): {
-    rows: Array<TimelineRow | TurnControl>; hiddenReasoning: ReadonlySet<string>; activeRows: ReadonlySet<string>;
+    rows: TranscriptRow[]; hiddenReasoning: ReadonlySet<string>; activeRows: ReadonlySet<string>;
   } {
   const rows: Array<TimelineRow | TurnControl> = [];
   const hiddenReasoning = new Set<string>();
@@ -46,18 +94,26 @@ export function displayTranscript(model: TimelineModel, mode: TranscriptView,
           process.add(row.id);
         }
       } else if (row.kind === "tools") { started = true; finalId = undefined; process.add(row.id); }
+      else if (mode === "compact" && row.kind === "decision" && row.event.data.decision === "allow") process.add(row.id);
     }
     if (finalId) process.delete(finalId);
     const final = segment.find(row => row.id === finalId);
     const finalMessage = final?.kind === "message" ? final.event.data.message as Record<string, unknown> : undefined;
     const finalReasoning = Boolean(finalMessage?.reasoning_content || finalMessage?.reasoning);
-    const count = process.size + (finalReasoning ? 1 : 0);
+    const count = mode === "compact" ? segment.reduce((sum, row) => {
+      if (!process.has(row.id)) return sum;
+      if (row.kind === "tools") return sum + row.batch.calls.length;
+      if (row.kind !== "message") return sum;
+      const message = row.event.data.message as Record<string, unknown>;
+      return sum + Number(Boolean(message.content || message.reasoning_content || message.reasoning));
+    }, finalReasoning ? 1 : 0) : process.size + (finalReasoning ? 1 : 0);
     if (!settled || interrupted || !count || mode === "verbose") { rows.push(...segment); segment = []; return; }
     const outcome = segment.at(-1)!;
     const id = `process:${outcome.id}`;
     const hasLaterUserInput = lastUserInputIndex > outcomeIndex;
+    const focusedOwner = focusedRow?.replace(/^steps:/, "").replace(/:reasoning$/, "");
     const open = choices.get(id) ?? ((timing === "next-input" && !hasLaterUserInput)
-      || (focusedRow !== null && (process.has(focusedRow) || (focusedRow === finalId && finalReasoning))));
+      || (focusedOwner != null && (process.has(focusedOwner) || (focusedOwner === finalId && finalReasoning))));
     let failed = 0, missing = 0;
     for (const row of segment) if (row.kind === "tools") for (const call of row.batch.calls) {
       const result = model.results.get(String(call.data["call-id"] || call.data.call_id || ""));
@@ -68,12 +124,16 @@ export function displayTranscript(model: TimelineModel, mode: TranscriptView,
     const endedAt = "event" in outcome ? outcome.event.at : undefined;
     const elapsed = startedAt && endedAt ? Date.parse(endedAt) - Date.parse(startedAt) : NaN;
     const duration = Number.isFinite(elapsed) ? t("，用时 {0}秒", Math.max(1, Math.round(elapsed / 1000))) : "";
+    const terminal = outcome.kind === "outcome" ? runOutcome(outcome.event.data) : null;
+    // In compact view the outer summary carries the truthful outcome once.
+    if (mode === "compact" && terminal) process.add(outcome.id);
     let inserted = false;
     for (const row of segment) {
       if (!inserted && (process.has(row.id) || row.id === finalId)) {
         rows.push({ id, kind: "turn-control", open,
-          caption: t("已完成{0}{1}", duration, summary.length ? ` · ${summary.join(" · ")}` : ""),
-          members: segment.flatMap(member => [member.id, ...(member.kind === "tools" ? member.batch.calls.map(call => `call:${call.id}`) : [])]),
+          caption: mode === "compact" && terminal ? `${outcomeText(terminal)}${duration}${summary.length ? ` · ${summary.join(" · ")}` : ""}`
+            : t("已完成{0}{1}", duration, summary.length ? ` · ${summary.join(" · ")}` : ""),
+          members: memberIds(segment),
           label: t("工作步骤 · {0} 项{1}", count, summary.length ? ` · ${summary.join(" · ")}` : "") });
         inserted = true;
       }
@@ -88,5 +148,5 @@ export function displayTranscript(model: TimelineModel, mode: TranscriptView,
   }
   for (const row of segment) activeRows.add(row.id);
   flush(false);
-  return { rows, hiddenReasoning, activeRows };
+  return { rows: mode === "compact" ? compactSteps(rows, choices, focusedRow, hiddenReasoning) : rows, hiddenReasoning, activeRows };
 }
