@@ -99,7 +99,8 @@ jobs:
         include:
           - os: ubuntu-24.04
             browser: chromium
-          - os: macos-14
+          # Playwright pins a frozen WebKit on macOS 14; use its maintained build.
+          - os: macos-15
             browser: webkit
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
