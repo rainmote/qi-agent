@@ -26,7 +26,10 @@
           (when-not (= 1 (:version state))
             (throw (ex-info "Unsupported provider settings version"
                             {:path path :version (:version state)})))
-          (vec (:providers state)))))))
+          (mapv #(cond-> %
+                   (= "chatgpt-subscription" (:protocol %))
+                   (assoc :catalog-identity (:chatGptCatalogIdentity state)))
+                (:providers state)))))))
 
 (defn- provider-keyword [value]
   (let [value (str value)]
@@ -82,6 +85,9 @@
       "openai-completions" (openai/provider-entry ctx config)
       "openai-responses" (openai-responses/provider-entry ctx config)
       "anthropic-messages" (anthropic/provider-entry ctx config)
+      "chatgpt-subscription" ((kernel/require-service ctx :chatgpt/provider-entry)
+                             (assoc config :catalog-identity (:catalog-identity provider)
+                                           :catalog-order (:catalog-order model)))
       (throw (ex-info "Provider settings contain an unsupported protocol"
                       {:provider (:id provider)
                        :protocol (:protocol provider)})))))
@@ -106,12 +112,20 @@
                    auth (kernel/require-service ctx :auth/store)
                    selected ((:current registry))
                    previous ((:providers registry))
-                   providers (mapv validate-provider-credentials! (read-providers path))
-                   managed (remove #(= "chatgpt-subscription" (:protocol %)) providers)
+                   providers (mapv (fn [provider]
+                                     (let [provider (validate-provider-credentials! provider)
+                                           matches? (kernel/service ctx :chatgpt/catalog-matches?)]
+                                       (if (and (= "chatgpt-subscription" (:protocol provider))
+                                                matches? (not (matches? (:catalog-identity provider))))
+                                         (assoc provider :models []) provider)))
+                                   (read-providers path))
+                   managed (filter #(or (not= "chatgpt-subscription" (:protocol %))
+                                        (kernel/service ctx :chatgpt/provider-entry)) providers)
                    ;; Validate and construct the complete replacement before
                    ;; removing working registrations.
                    entries (vec (mapcat (fn [provider]
-                                          (map #(model-entry ctx provider %) (:models provider)))
+                                          (map-indexed #(model-entry ctx provider (assoc %2 :catalog-order %1))
+                                                       (:models provider)))
                                         managed))]
                (when-not (= (count entries) (count (set (map :id entries))))
                  (throw (ex-info "Provider settings contain duplicate model identities" {})))
@@ -123,11 +137,12 @@
                    ;; Replace the built-in provider alias while this provider
                    ;; is managed by Web; restore it when the override is removed.
                    (swap! effects conj ((:mask! registry) provider-id))
-                   (swap! effects conj
+                   (when-not (= "chatgpt-subscription" (:protocol provider))
+                     (swap! effects conj
                           ((:upsert! auth) provider-id
                            (fn [] {:api-key (or key (when key-env (System/getenv key-env)))})
                            {:provider (keyword (:protocol provider))
-                            :source (if key :settings :environment)}))))
+                            :source (if key :settings :environment)})))))
                (doseq [entry entries]
                  (swap! effects conj ((:upsert! registry) entry)))
                (doseq [provider managed

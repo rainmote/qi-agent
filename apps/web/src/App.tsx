@@ -1446,9 +1446,10 @@ export function App() {
         const next = await api.rpc<{ current: ModelEntry | null; providers: ModelEntry[] }>(source.id, "model.list");
         if (!current() || !modelCurrent()) return;
         setModels(next);
-        if (!next.providers.some((entry) => entry.id === pendingModel)) {
-          setPendingModel(next.current?.id || null);
-          setPendingThinking(next.current?.["thinking-level"] || null);
+        const selected = next.providers.find(entry => entry.id === pendingModel) || next.current;
+        setPendingModel(selected?.id || null);
+        if (selected?.id !== pendingModel || !selected?.["thinking-levels"]?.includes(pendingThinking || "")) {
+          setPendingThinking(selected?.["thinking-level"] || null);
         }
       }}
       onAddWorkspace={() => { setSettingsOpen(false); setWorkspaceDialogOpen(true); }} onRemoveWorkspace={removeWorkspace} />}

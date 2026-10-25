@@ -2,6 +2,7 @@
   "Experimental ChatGPT-subscription adapter using the Codex auth cache."
   (:require [qi.cancellation :as cancellation]
             [qi.kernel :as kernel]
+            [qi.secure-files :as secure]
             [qi.streaming :as streaming]
             [qi.tool-images :as images]
             [babashka.http-client :as http]
@@ -68,7 +69,8 @@
                 {:provider :chatgpt-subscription
                  :auth-file (str file)}))))
     (let [auth (try
-                 (json/parse-string (slurp file) true)
+                 (json/parse-string (if (= false (:check-permissions config))
+                                      (slurp file) (secure/read-owner-file-text! file)) true)
                  (catch Throwable _
                    (throw (ex-info
                            (str "Cannot parse Codex auth cache at " file)
@@ -89,6 +91,17 @@
       ;; Retain neither the parsed auth cache nor its refresh token in plugin state.
       {:access-token access-token
        :account-id account-id})))
+
+(defn- auth-identity [{:keys [access-token account-id]}]
+  (let [subject (try
+                  (let [claims (-> (str/split access-token #"\.") second
+                                   (->> (.decode (java.util.Base64/getUrlDecoder)))
+                                   (String. "UTF-8") (json/parse-string true))]
+                    (if (string? (:sub claims)) (:sub claims) ""))
+                  (catch Throwable _ ""))
+        bytes (.getBytes (json/generate-string [account-id subject]) "UTF-8")]
+    (apply str (map #(format "%02x" (bit-and 0xff %))
+                    (.digest (java.security.MessageDigest/getInstance "SHA-256") bytes)))))
 
 (defn- endpoint [base-url]
   (let [trimmed (str/replace base-url #"/+$" "")]
@@ -393,10 +406,14 @@
   ;; Re-read the cache for every request so a token refreshed by Codex is picked
   ;; up without restarting this agent.
   (let [auth-id (or (:auth-id config) (:provider-id config) :chatgpt)
-        {:keys [access-token account-id]}
+        {:keys [access-token account-id] :as auth}
         (if-let [store (kernel/service ctx :auth/store)]
           ((:resolve! store) auth-id)
           (read-auth! config))
+        _ (when (and (:catalog-identity config)
+                     (not= (:catalog-identity config) (auth-identity auth)))
+            (throw (ex-info "ChatGPT account changed; refresh the model catalog before sending"
+                            {:provider :chatgpt-subscription :code :catalog-account-changed})))
         tools (mapv tool-schema (:tools request))
         body (cond->
               (merge {:model (:model config)
@@ -458,7 +475,7 @@
 (def plugin
   {:id :llm/chatgpt-subscription
    :description "ChatGPT subscription adapter backed by the Codex login cache."
-   :provides #{:llm/generate}
+   :provides #{:llm/generate :chatgpt/provider-entry :chatgpt/catalog-matches?}
    :start
    (fn [ctx config]
      (let [base-url (or (:base-url config) default-base-url)]
@@ -493,24 +510,45 @@
            #(read-auth! config)
            {:provider :chatgpt-subscription
             :source :codex-auth-cache})))
+       (kernel/register-service!
+        ctx :chatgpt/catalog-matches?
+        (fn [identity]
+          (or (nil? identity)
+              (try (= identity (auth-identity (read-auth! config)))
+                   (catch Throwable _ false)))))
        (let [transport (transport-state config)
-             generator (partial generate ctx config transport)]
+             auth-id (or (:auth-id config) (:provider-id config) :chatgpt)
+             entry (fn [metadata]
+                     ;; The catalog owns model metadata only. Preserve the profile's
+                     ;; auth reader, proxy, retry policy and transport settings.
+                     (let [model-config (merge config
+                                               (select-keys metadata
+                                                [:provider-id :settings-provider-id :model
+                                                 :display-name :context-window :thinking-levels
+                                                 :default-thinking-level :catalog-identity :catalog-order]))
+                           catalog? (contains? metadata :settings-provider-id)
+                           model-config (cond-> model-config
+                                          catalog? (update :extra-body dissoc :reasoning))]
+                       {:id (or (:provider-id model-config) :chatgpt)
+                        :settings-provider-id (:settings-provider-id model-config)
+                        :display-name (:display-name model-config)
+                        :catalog-order (:catalog-order model-config)
+                        :provider :chatgpt-subscription
+                        :model (:model model-config)
+                        :context-window (:context-window model-config)
+                        :max-output-tokens (get-in config [:extra-body :max_output_tokens])
+                        :thinking-levels (or (:thinking-levels model-config)
+                                             (if catalog? [] [:low :medium :high]))
+                        :default-thinking-level
+                        (or (:default-thinking-level model-config)
+                            (when-not catalog?
+                              (some-> (get-in config [:extra-body :reasoning :effort]) keyword)))
+                        :input-modalities (images/input-modalities config #{:text :image})
+                        :experimental true
+                        :generate (partial generate ctx (assoc model-config :auth-id auth-id) transport)}))
+             initial (entry {})]
+         (kernel/register-service! ctx :chatgpt/provider-entry entry)
          (if-let [registry (kernel/service ctx :llm/registry)]
-           (kernel/track-effect!
-            ctx
-            ((:register! registry)
-             {:id (or (:provider-id config) :chatgpt)
-              :provider :chatgpt-subscription
-              :model (:model config)
-              :context-window (:context-window config)
-              :max-output-tokens (get-in config [:extra-body :max_output_tokens])
-              :thinking-levels [:low :medium :high]
-              :default-thinking-level
-              (or (:default-thinking-level config)
-                  (some-> (get-in config [:extra-body :reasoning :effort])
-                          keyword))
-              :input-modalities (images/input-modalities config #{:text :image})
-              :experimental true
-              :generate generator}))
-           (kernel/register-service! ctx :llm/generate generator)))
+           (kernel/track-effect! ctx ((:register! registry) initial))
+           (kernel/register-service! ctx :llm/generate (:generate initial))))
        nil))})

@@ -97,6 +97,9 @@ export const api = {
   resolveReferences: (id: string, message: string) => request<string>(`/api/workspaces/${encodeURIComponent(id)}/resolve-references`, { method: "POST", body: JSON.stringify({ message }) }),
   bootstrap: () => request<Bootstrap>("/api/bootstrap"),
   listPresets: () => request<AgentPresetSummary[]>("/api/presets"),
+  refreshChatGptModels: () => request<ProviderSettings & { reload: ProviderReloadResult }>("/api/providers/chatgpt/refresh", {
+    method: "POST", body: JSON.stringify({}),
+  }),
   listProviders: () => request<{ providers: ProviderSettings[]; presets: ProviderPreset[] }>("/api/providers"),
   saveProvider: (provider: ProviderInput) =>
     request<ProviderSettings & { reload: ProviderReloadResult }>("/api/providers", {

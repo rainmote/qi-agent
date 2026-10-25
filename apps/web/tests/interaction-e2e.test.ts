@@ -44,7 +44,7 @@ test("production Web trust, cancellation, recovery and composer E2E", { timeout:
     await writeFile(join(preset, "preset.edn"), '{:name "离线 E2E" :description "Deterministic browser fixture" :order 0}\n');
     await copyFile(join(repository, "test/fixtures/web-interaction-mock.edn"), join(preset, "agent.edn"));
     Object.assign(process.env, env);
-    host = await startWebHost({ port: 0, workspace: initial, stateDirectory: join(root, "web") });
+    host = await startWebHost({codexAuthFile:join(root,"fixture-only-missing-codex-auth.json"), port: 0, workspace: initial, stateDirectory: join(root, "web") });
     const environment = host.sessions.daemonEnvironment;
     daemon = spawn(process.env.QI_AGENT_BIN || join(repository, "apps/tui-rs/target/debug/qi-agent"),
       ["daemon", "serve", "--repository-root", repository, "--config", join(preset, "agent.edn")], {

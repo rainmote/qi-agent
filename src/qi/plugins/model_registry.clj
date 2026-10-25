@@ -176,6 +176,9 @@
                               (dissoc :generate)))
             :providers (fn []
                          (->> @providers vals
+                              (sort-by (fn [entry]
+                                         [(str (or (:settings-provider-id entry) (:id entry)))
+                                          (or (:catalog-order entry) 0) (str (:id entry))]))
                               (mapv #(some-> (with-thinking-level %
                                                                   @selected-thinking)
                                             (dissoc :generate)))))

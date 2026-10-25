@@ -32,7 +32,7 @@ test("cold and warm snapshot handoff each transfer history once and preserve int
   });
   await new Promise<void>(resolve=>daemon.listen(join(root,"daemon.sock"),resolve));
   const worker=new AgentWorker(workspace,join(root,"session.jsonl"),root,{runtimeDirectory:root});
-  const host=await startWebHost({port:0,workspace,stateDirectory:join(root,"web"),token:"handoff"});
+  const host=await startWebHost({codexAuthFile:join(root,"fixture-only-missing-codex-auth.json"),port:0,workspace,stateDirectory:join(root,"web"),token:"handoff"});
   host.sessions.worker=async()=>worker;
   const measurements=[];
   try {

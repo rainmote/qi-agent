@@ -1,0 +1,56 @@
+[
+  {
+    "name": "ascii",
+    "accountId": "fixture-account",
+    "accessToken": "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJleHAiOjQxMDI0NDQ4MDAsInN1YiI6ImZpeHR1cmUtdXNlci1hIn0.fixture-signature",
+    "identity": "f6d2bf5c1d05b21f38e6aa91b5c7cc16b8a20366a11a7a92c63a220592789d5c"
+  },
+  {
+    "name": "other-user-same-account",
+    "accountId": "fixture-account",
+    "accessToken": "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJleHAiOjQxMDI0NDQ4MDAsInN1YiI6ImZpeHR1cmUtdXNlci1iIn0.fixture-signature",
+    "identity": "702571e74d6c59a41456185226be78caa810d8017cdbc3a244610efb8bbb2875"
+  },
+  {
+    "name": "other-account-same-user",
+    "accountId": "fixture-account-2",
+    "accessToken": "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJleHAiOjQxMDI0NDQ4MDAsInN1YiI6ImZpeHR1cmUtdXNlci1hIn0.fixture-signature",
+    "identity": "88b7eff178cf30b5be4e15b1dba32f240392a14f4bff64f89d97f8d944cc03b9"
+  },
+  {
+    "name": "unicode-and-control",
+    "accountId": "fixture/账户\\\"",
+    "accessToken": "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJleHAiOjQxMDI0NDQ4MDAsInN1YiI6ImZpeHR1cmUg55So5oi3XG5cdPCQkIAifQ.fixture-signature",
+    "identity": "4c02c3a5f05f2f2705fed8e2b395b0f3326c39becaae161efde07314cd90453c"
+  },
+  {
+    "name": "empty-sub",
+    "accountId": "fixture-account",
+    "accessToken": "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJleHAiOjQxMDI0NDQ4MDAsInN1YiI6IiJ9.fixture-signature",
+    "identity": "1baa942c12d42a6b500d8bf10e84f7e8f0d6bdf1686b6818fdf1d3bbb6f9e559"
+  },
+  {
+    "name": "missing-sub",
+    "accountId": "fixture-account",
+    "accessToken": "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJleHAiOjQxMDI0NDQ4MDB9.fixture-signature",
+    "identity": "1baa942c12d42a6b500d8bf10e84f7e8f0d6bdf1686b6818fdf1d3bbb6f9e559"
+  },
+  {
+    "name": "numeric-sub",
+    "accountId": "fixture-account",
+    "accessToken": "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJleHAiOjQxMDI0NDQ4MDAsInN1YiI6N30.fixture-signature",
+    "identity": "1baa942c12d42a6b500d8bf10e84f7e8f0d6bdf1686b6818fdf1d3bbb6f9e559"
+  },
+  {
+    "name": "object-sub",
+    "accountId": "fixture-account",
+    "accessToken": "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJleHAiOjQxMDI0NDQ4MDAsInN1YiI6eyJiYWQiOiJzdWJqZWN0In19.fixture-signature",
+    "identity": "1baa942c12d42a6b500d8bf10e84f7e8f0d6bdf1686b6818fdf1d3bbb6f9e559"
+  },
+  {
+    "name": "opaque-token",
+    "accountId": "fixture-account",
+    "accessToken": "fixture-opaque-token",
+    "identity": "1baa942c12d42a6b500d8bf10e84f7e8f0d6bdf1686b6818fdf1d3bbb6f9e559"
+  }
+]

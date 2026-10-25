@@ -22,7 +22,7 @@ const protocolLabels: Partial<Record<ProviderProtocol, string>> = {
 
 function draftFromProvider(provider: ProviderSettings): ProviderDraft {
   const { apiKeyConfigured: _configured, authType: _authType, authStatus: _authStatus,
-    authSource: _authSource, authFile: _authFile, ...draft } = provider;
+    authSource: _authSource, authFile: _authFile, modelCatalogError: _catalogError, ...draft } = provider;
   return { ...draft, models: provider.models.map((model) => ({ ...model })), apiKey: "" };
 }
 
@@ -153,8 +153,12 @@ function ProviderEditor({ editor, presets, onEditor, onSaved }: {
   const refreshLogin = async () => {
     setBusy(true); setError(null);
     try {
-      await onSaved();
-      onEditor(null);
+      const result = await api.refreshChatGptModels();
+      await onSaved(result.reload);
+      if (result.modelCatalogError) {
+        onEditor({ ...editor, provider: result, draft: draftFromProvider(result) });
+        setError(result.modelCatalogError);
+      } else onEditor(null);
     } catch (value) { setError(value instanceof Error ? value.message : t("无法刷新登录状态")); }
     finally { setBusy(false); }
   };
@@ -199,7 +203,12 @@ function ProviderEditor({ editor, presets, onEditor, onSaved }: {
       <ModelCatalog models={draft.models} onChange={(models) => patch({ models })}
         onDiscover={() => void discover()} discovering={discovering} />
     </div>}
-    {editor.kind !== "custom" && !editor.advanced && !draft.models.length
+    {subscription && <section className="provider-model-catalog" aria-label={t("模型目录")}>
+      <strong>{t("模型目录")}</strong>
+      <p>{t("{0} 个可选模型", draft.models.length)}</p>
+      <ul>{draft.models.map(model => <li key={model.id}>{model.name} <code>{model.id}</code></li>)}</ul>
+    </section>}
+    {editor.kind !== "custom" && !subscription && !editor.advanced && !draft.models.length
       && <p className="provider-field-help">{t("展开自定义设置，获取或添加至少一个模型。")}</p>}
     {error && <p className="form-error">{error}</p>}
     <div className="provider-editor-actions">
@@ -284,6 +293,7 @@ export function ProviderSettingsPanel({ onChanged }: { onChanged?: () => Promise
           <button type="button" className="provider-edit-button" aria-label={t("编辑 {0} ({1})", provider.name, provider.id)}
             onClick={() => setEditor({ kind: "edit", draft: draftFromProvider(provider), advanced: false,
               apiKeyConfigured: provider.apiKeyConfigured, provider })}>{provider.authType === "chatgpt-subscription" ? t("查看") : t("编辑")}</button></div>
+        {provider.modelCatalogError && <p className="form-error">{provider.modelCatalogError}</p>}
         {activeProvider === provider.id && editor && <ProviderEditor editor={editor} presets={presets}
           onEditor={setEditor} onSaved={saved} />}
       </div>)}
