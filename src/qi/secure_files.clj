@@ -4,7 +4,8 @@
   (:import [java.io IOException]
            [java.nio.channels Channels]
            [java.nio.file FileAlreadyExistsException Files LinkOption OpenOption Path StandardOpenOption]
-           [java.nio.file.attribute PosixFileAttributes PosixFilePermission PosixFilePermissions]))
+           [java.nio.file.attribute PosixFilePermission PosixFilePermissions]
+           [java.util.concurrent TimeUnit]))
 
 (def ^:private owner-directory-permissions
   #{PosixFilePermission/OWNER_READ
@@ -135,25 +136,55 @@
             (protect-file! entry)))))
     (str root)))
 
+(def ^:private effective-user-id
+  ;; Account names may be unavailable for container UIDs. This process never
+  ;; changes OS identity; cache the effective UID, not a display name or env var.
+  (delay
+    (try
+      (let [builder (ProcessBuilder. ["/usr/bin/id" "-u"])]
+        (.clear (.environment builder))
+        (let [process (.start builder)]
+          (try
+            (when-not (.waitFor process 2 TimeUnit/SECONDS)
+              (throw (ex-info "Timed out resolving credential owner" {})))
+            (let [output (slurp (.getInputStream process))
+                  match (re-matches #"([0-9]+)\n?" output)]
+              (when-not (and (zero? (.exitValue process)) match)
+                (throw (ex-info "Cannot resolve credential owner" {})))
+              (Long/parseLong (second match)))
+            (finally
+              (when (.isAlive process)
+                (.destroyForcibly process)
+                (.waitFor process 1 TimeUnit/SECONDS))
+              (.close (.getInputStream process))
+              (.close (.getErrorStream process))
+              (.close (.getOutputStream process))))))
+      (catch Exception error
+        (throw (ex-info "Cannot verify current credential owner"
+                        {:code :insecure-credentials} error))))))
+
 (defn- owner-file-identity [^Path target]
   (try
-    (let [attributes (Files/readAttributes target PosixFileAttributes
+    (let [attributes (Files/readAttributes target "unix:*"
                                            (into-array LinkOption [LinkOption/NOFOLLOW_LINKS]))
-          owner (str (.owner attributes))
-          permissions (set (.permissions attributes))]
-      (when (.isSymbolicLink attributes)
+          uid (get attributes "uid")
+          ;; Unix UIDs are unsigned, while NIO exposes them as Java ints.
+          owner (when (integer? uid) (Integer/toUnsignedLong (int uid)))
+          permissions (get attributes "permissions")]
+      (when (get attributes "isSymbolicLink")
         (throw (ex-info "Refusing a symbolic-link credential file" {:code :insecure-credentials})))
-      (when-not (.isRegularFile attributes)
+      (when-not (true? (get attributes "isRegularFile"))
         (throw (ex-info "Private credential path must be a regular file" {:code :insecure-credentials})))
-      (when-not (and (= owner (System/getProperty "user.name"))
+      (when-not (and (= owner @effective-user-id)
+                     (some? permissions)
                      (every? owner-file-permissions permissions))
         (throw (ex-info "Credential file must be private and owner-only"
                         {:code :insecure-credentials})))
-      {:file-key (.fileKey attributes)
-       :size (.size attributes)
-       :modified (.lastModifiedTime attributes)
+      {:file-key (get attributes "fileKey")
+       :size (get attributes "size")
+       :modified (get attributes "lastModifiedTime")
        :owner owner
-       :permissions permissions})
+       :permissions (set permissions)})
     (catch UnsupportedOperationException error
       (throw (ex-info "Cannot verify private credential file permissions"
                       {:code :insecure-credentials} error)))))
