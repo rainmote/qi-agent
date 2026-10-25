@@ -48,10 +48,9 @@
   (let [base-url (or (:base-url config) default-base-url)]
     (if (:allow-custom-endpoint config)
       (when-not (and (= :settings (:credential-source config))
-                     (not (str/blank? (:api-key config)))
                      (nil? (:api-key-env config))
                      (valid-provider-base-url? base-url))
-        (throw (ex-info "Custom endpoint credentials must be explicitly saved settings keys"
+        (throw (ex-info "Custom endpoints require settings-scoped credentials without environment fallback"
                         {:provider :openai :code :credential-scope})))
       (when-not (valid-base-url? base-url)
         (throw (ex-info "Refusing to send an OpenAI API key outside https://api.openai.com/v1"
@@ -270,8 +269,10 @@
                 (api-key config))]
     (when (str/blank? key)
       (throw (ex-info
-              (str "Missing OpenAI API key; set "
-                   (or (:api-key-env config) "OPENAI_API_KEY"))
+              (if (= :settings (:credential-source config))
+                "Missing saved API key for this provider"
+                (str "Missing OpenAI API key; set "
+                     (or (:api-key-env config) "OPENAI_API_KEY")))
               {:provider :openai :code :missing-credentials :retryable false})))
     (let [tools (mapv tool-schema (:tools request))
           use-stream? (not= false (:stream config))

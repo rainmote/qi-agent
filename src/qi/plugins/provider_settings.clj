@@ -22,8 +22,7 @@
       (if-not (java.nio.file.Files/exists (.toPath file)
                   (into-array java.nio.file.LinkOption [java.nio.file.LinkOption/NOFOLLOW_LINKS]))
         []
-        (let [_ (secure/assert-owner-file! file)
-              state (json/parse-string (slurp file) true)]
+        (let [state (json/parse-string (secure/read-owner-file-text! file) true)]
           (when-not (= 1 (:version state))
             (throw (ex-info "Unsupported provider settings version"
                             {:path path :version (:version state)})))
@@ -70,8 +69,7 @@
                 :api-key (:apiKey provider)
                 :api-key-env (:apiKeyEnv provider)
                 :credential-source (if (:apiKeyEnv provider) :environment :settings)
-                :allow-custom-endpoint (and (nil? (:apiKeyEnv provider))
-                                            (not (str/blank? (:apiKey provider))))
+                :allow-custom-endpoint (nil? (:apiKeyEnv provider))
                 :model (:id model)
                 :display-name (or (:name model) (:id model))
                 :context-window (:contextWindow model)

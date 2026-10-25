@@ -1,8 +1,10 @@
 (ns qi.secure-files
   "Owner-only filesystem primitives for local agent state and credentials."
   (:require [clojure.java.io :as io])
-  (:import [java.nio.file FileAlreadyExistsException Files LinkOption Path]
-           [java.nio.file.attribute PosixFilePermission PosixFilePermissions]))
+  (:import [java.io IOException]
+           [java.nio.channels Channels]
+           [java.nio.file FileAlreadyExistsException Files LinkOption OpenOption Path StandardOpenOption]
+           [java.nio.file.attribute PosixFileAttributes PosixFilePermission PosixFilePermissions]))
 
 (def ^:private owner-directory-permissions
   #{PosixFilePermission/OWNER_READ
@@ -133,25 +135,60 @@
             (protect-file! entry)))))
     (str root)))
 
+(defn- owner-file-identity [^Path target]
+  (try
+    (let [attributes (Files/readAttributes target PosixFileAttributes
+                                           (into-array LinkOption [LinkOption/NOFOLLOW_LINKS]))
+          owner (str (.owner attributes))
+          permissions (set (.permissions attributes))]
+      (when (.isSymbolicLink attributes)
+        (throw (ex-info "Refusing a symbolic-link credential file" {:code :insecure-credentials})))
+      (when-not (.isRegularFile attributes)
+        (throw (ex-info "Private credential path must be a regular file" {:code :insecure-credentials})))
+      (when-not (and (= owner (System/getProperty "user.name"))
+                     (every? owner-file-permissions permissions))
+        (throw (ex-info "Credential file must be private and owner-only"
+                        {:code :insecure-credentials})))
+      {:file-key (.fileKey attributes)
+       :size (.size attributes)
+       :modified (.lastModifiedTime attributes)
+       :owner owner
+       :permissions permissions})
+    (catch UnsupportedOperationException error
+      (throw (ex-info "Cannot verify private credential file permissions"
+                      {:code :insecure-credentials} error)))))
+
 (defn assert-owner-file!
   "Reject linked, non-regular, foreign-owned or publicly accessible state files.
   Unlike protect-file!, this validates existing credentials without repairing them."
   [value]
-  (let [target (path value)
-        nofollow (into-array LinkOption [LinkOption/NOFOLLOW_LINKS])]
-    (when (Files/isSymbolicLink target)
-      (throw (ex-info "Refusing a symbolic-link credential file" {:code :insecure-credentials})))
-    (when-not (Files/isRegularFile target nofollow)
-      (throw (ex-info "Private credential path must be a regular file" {:code :insecure-credentials})))
-    (try
-      (let [owner (str (Files/getOwner target nofollow))
-            current (System/getProperty "user.name")
-            permissions (set (Files/getPosixFilePermissions target nofollow))]
-        (when-not (and (= owner current)
-                       (every? owner-file-permissions permissions))
-          (throw (ex-info "Credential file must be private and owner-only"
-                          {:code :insecure-credentials}))))
-      (catch UnsupportedOperationException _
-        (throw (ex-info "Cannot verify private credential file permissions"
-                        {:code :insecure-credentials}))))
+  (let [target (path value)]
+    (owner-file-identity target)
     (str target)))
+
+(defn read-owner-file-text!
+  "Read UTF-8 credentials through one no-follow open and verify private identity.
+  Path snapshots detect visible replacement, not sustained same-UID ABA attacks."
+  [value]
+  (let [target (path value)]
+    (try
+      (let [before (owner-file-identity target)
+            unchanged! (fn []
+                         (when-not (= before (owner-file-identity target))
+                           (throw (ex-info "Credential file changed while being read"
+                                           {:code :insecure-credentials}))))]
+        (when-not (:file-key before)
+          (throw (ex-info "Cannot verify private credential file identity"
+                          {:code :insecure-credentials})))
+        (assert-owner-file! target)
+        (with-open [channel (Files/newByteChannel
+                             target (into-array OpenOption
+                                                [StandardOpenOption/READ LinkOption/NOFOLLOW_LINKS]))
+                    input (Channels/newInputStream channel)]
+          (unchanged!)
+          (let [text (slurp input :encoding "UTF-8")]
+            (unchanged!)
+            text)))
+      (catch IOException error
+        (throw (ex-info "Could not safely read private credential file"
+                        {:code :insecure-credentials} error))))))

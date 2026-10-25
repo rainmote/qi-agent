@@ -146,7 +146,7 @@ function validateEnvironmentCredential(protocol: ProviderProtocol, baseUrl: stri
 async function readPrivateSettings(path: string): Promise<string> {
   let handle;
   try {
-    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     const info = await handle.stat();
     if (!info.isFile() || (info.mode & 0o077) !== 0
       || (process.getuid && info.uid !== process.getuid())) {
@@ -367,11 +367,16 @@ export class ProviderRegistry {
       throw new Error("ChatGPT 订阅模型由本地登录提供，无需调用 API 获取");
     }
     const baseUrl = validateBaseUrl(String(input.baseUrl || stored?.baseUrl || ""));
-    const explicitKey = input.apiKey || stored?.apiKey;
-    if (!explicitKey && stored?.apiKeyEnv) {
+    const explicitKey = String(input.apiKey || "").trim();
+    const storedKey = String(stored?.apiKey || "").trim();
+    if (!explicitKey && storedKey && baseUrl !== stored?.baseUrl) {
+      throw new Error("更换 API 地址时请重新输入密钥");
+    }
+    const settingsKey = explicitKey || storedKey;
+    if (!settingsKey && stored?.apiKeyEnv) {
       validateEnvironmentCredential(stored.protocol, baseUrl, stored.apiKeyEnv);
     }
-    const key = String(explicitKey
+    const key = String(settingsKey
       || (stored?.apiKeyEnv ? process.env[stored.apiKeyEnv] : "") || "").trim();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 15_000);

@@ -58,7 +58,7 @@ node maintenance/run.mjs verify --state /absolute/private/maintenance-state --id
 
 要实际调用 qi，操作人显式执行 `run --budgeted-live --budget /absolute/budget.json`；
 `--supervised-live --budget /absolute/budget.json` 是受监督 broker 模式的兼容入口。
-所有付费运行都经过宿主费用代理；容器断网，不接收宿主 API key 或其他环境变量透传。
+`run` 命令的 API 付费实现都经过宿主费用代理；容器断网，不接收宿主 API key 或其他环境变量透传。
 旧 `qi-supervised` 直连 driver 被拒绝。离线/无付费路径保持原行为。
 这是会产生模型请求的显式操作；已验证的基线和有效 red 必须先通过，才允许写入者开始。
 请求失败不会绕过验收。预算格式见 [有界无人值守维护](unattended-maintenance.md)。

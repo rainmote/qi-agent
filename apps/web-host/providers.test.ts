@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { chmod, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -185,5 +186,69 @@ test("provider settings readers refuse public files and symlinks", async () => {
     await symlink(target, registry.statePath);
     await assert.rejects(new ProviderRegistry(root).load(), /symbolic|private/i);
     assert.deepEqual(await readFile(target), bytes);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("model discovery never forwards a saved key to a different endpoint", async () => {
+  const root = await mkdtemp(join(tmpdir(), "qi-provider-saved-boundary-"));
+  const previousFetch = globalThis.fetch;
+  const requests: Array<{ url: string; authorization: string | null }> = [];
+  try {
+    const registry = new ProviderRegistry(root, { codexAuthFile: join(root, "fixture-auth-absent.json") });
+    await registry.load();
+    await registry.upsert({ id: "saved", name: "Saved", protocol: "openai-responses",
+      baseUrl: "https://saved.example/v1", apiKey: "saved-fixture-key",
+      models: [{ id: "fixture", name: "Fixture" }] });
+    globalThis.fetch = async (input, options) => {
+      requests.push({ url: String(input), authorization: new Headers(options?.headers).get("authorization") });
+      return Response.json({ data: [{ id: "fixture" }] });
+    };
+    for (const baseUrl of ["https://other.example/v1", "https://saved.example:8443/v1", "https://saved.example/v2"]) {
+      await assert.rejects(registry.discover({ providerId: "saved", baseUrl }), /密钥|credential|key/i);
+    }
+    assert.deepEqual(requests, [], "no saved credential leaves its stored endpoint");
+    await registry.discover({ providerId: "saved", baseUrl: "https://saved.example:443/v1/" });
+    assert.deepEqual(requests.pop(), { url: "https://saved.example/v1/models", authorization: "Bearer saved-fixture-key" });
+    await registry.discover({ providerId: "saved", baseUrl: "https://other.example/v1", apiKey: "new-explicit-fixture-key" });
+    assert.deepEqual(requests.pop(), { url: "https://other.example/v1/models", authorization: "Bearer new-explicit-fixture-key" });
+    await assert.rejects(registry.discover({ providerId: "saved", baseUrl: "https://other.example/v1", apiKey: "   " }), /密钥|credential|key/i);
+    assert.deepEqual(requests, [], "whitespace is not an explicit replacement credential");
+  } finally { globalThis.fetch = previousFetch; await rm(root, { recursive: true, force: true }); }
+});
+
+test("custom Responses configuration can be saved before its key is configured", async () => {
+  const root = await mkdtemp(join(tmpdir(), "qi-provider-missing-key-"));
+  try {
+    const authOptions = { codexAuthFile: join(root, "fixture-auth-absent.json") };
+    const registry = new ProviderRegistry(root, authOptions);
+    await registry.load();
+    const saved = await registry.upsert({ id: "keyless", name: "Keyless", protocol: "openai-responses",
+      baseUrl: "https://keyless.example/v1", models: [{ id: "fixture", name: "Fixture" }] });
+    assert.equal(saved.apiKeyConfigured, false);
+    assert.equal(saved.authStatus, "missing");
+    const restored = new ProviderRegistry(root, authOptions);
+    await restored.load();
+    assert.equal((await restored.list()).find(provider => provider.id === "keyless")?.authStatus, "missing");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("a provider settings FIFO is rejected without waiting for another process", { skip: process.platform === "win32" }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "qi-provider-fifo-"));
+  try {
+    const path = join(root, "providers.json");
+    execFileSync("mkfifo", ["-m", "600", path]);
+    // The child reports a pending read as data, then exits normally; the outer
+    // timeout is only a cleanup guard and cannot count as a passing assertion.
+    const program = `import { ProviderRegistry } from ${JSON.stringify(new URL("./providers.ts", import.meta.url).href)};
+      let timer;
+      const result = await Promise.race([
+        new ProviderRegistry(${JSON.stringify(root)}, {codexAuthFile:${JSON.stringify(join(root, "fixture-auth-absent.json"))}}).load().then(() => ({status:"accepted"}), error => ({status:"rejected", message:error.message})),
+        new Promise(resolve => { timer=setTimeout(() => resolve({status:"pending"}), 1000); })
+      ]);
+      clearTimeout(timer); console.log(JSON.stringify(result)); process.exit(0);`;
+    const result = JSON.parse(execFileSync(process.execPath,
+      ["--import", "tsx", "--input-type=module", "-e", program], { encoding: "utf8", timeout: 5000 }));
+    assert.equal(result.status, "rejected", "non-regular settings must be rejected before a FIFO peer is available");
+    assert.match(result.message, /private|owner|regular/i);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
