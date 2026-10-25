@@ -442,12 +442,21 @@ fn desktop_shutdown_preserves_sessions_but_not_explicit_stops_or_archives() {
     assert_eq!(status, "uncertain");
     let connection = rusqlite::Connection::open(&database).unwrap();
     for owner in [id.as_str(), "child-fixture"] {
-        for query in ["SELECT status FROM tasks WHERE task_id=?1",
-                      "SELECT status FROM goals WHERE goal_id=?1",
-                      "SELECT status FROM goal_runs WHERE request_id=?1"] {
-            let status: String = connection.query_row(query, [owner], |row| row.get(0)).unwrap();
-            assert_eq!(status, "uncertain", "unfinished root/child work must not be replayed: {owner}");
-            let done: String = connection.query_row(query, ["done"], |row| row.get(0)).unwrap();
+        for query in [
+            "SELECT status FROM tasks WHERE task_id=?1",
+            "SELECT status FROM goals WHERE goal_id=?1",
+            "SELECT status FROM goal_runs WHERE request_id=?1",
+        ] {
+            let status: String = connection
+                .query_row(query, [owner], |row| row.get(0))
+                .unwrap();
+            assert_eq!(
+                status, "uncertain",
+                "unfinished root/child work must not be replayed: {owner}"
+            );
+            let done: String = connection
+                .query_row(query, ["done"], |row| row.get(0))
+                .unwrap();
             assert_eq!(done, "completed", "terminal work must remain settled");
         }
     }

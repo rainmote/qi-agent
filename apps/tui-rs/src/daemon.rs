@@ -3528,11 +3528,14 @@ impl Runtime {
                     .then(|| agent.lifecycle.clone());
                 agent.status = "stopped".into();
                 agent.lifecycle = "archived".into();
-                agent.inactive_reason = Some(if resume_lifecycle.is_some() {
-                    "desktop-shutdown-pending"
-                } else {
-                    "explicit-stop"
-                }.into());
+                agent.inactive_reason = Some(
+                    if resume_lifecycle.is_some() {
+                        "desktop-shutdown-pending"
+                    } else {
+                        "explicit-stop"
+                    }
+                    .into(),
+                );
                 self.database.upsert_agent(agent)?;
                 (agent.clone(), resume_lifecycle)
             };
@@ -3649,7 +3652,8 @@ impl Runtime {
                 resumed.status = "inactive".into();
                 resumed.lifecycle = lifecycle;
                 resumed.inactive_reason = Some("desktop-shutdown".into());
-                self.database.set_worker_status(&agent.worker_id, "inactive")?;
+                self.database
+                    .set_worker_status(&agent.worker_id, "inactive")?;
                 self.database.upsert_agent(&resumed)?;
                 *agent = resumed;
                 return Ok(result);
@@ -3676,8 +3680,13 @@ impl Runtime {
         };
         let mut errors = Vec::new();
         for agent_id in agent_ids {
-            if self.stop_agent_inner(&agent_id, self.desktop_owned
-                && !self.desktop_startup_unknown.load(Ordering::SeqCst)).is_err() {
+            if self
+                .stop_agent_inner(
+                    &agent_id,
+                    self.desktop_owned && !self.desktop_startup_unknown.load(Ordering::SeqCst),
+                )
+                .is_err()
+            {
                 errors.push(format!("worker cleanup failed for agent {agent_id}"));
             }
         }
