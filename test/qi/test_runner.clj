@@ -15,6 +15,7 @@
             [qi.run-outcome-test]
             [qi.openai-integrity-test]
             [qi.credential-boundary-test]
+            [qi.chatgpt-catalog-test]
             [qi.owner-uid-test]
             [qi.responses-schema-test]
             [qi.tool-recovery-test]
@@ -3959,7 +3960,7 @@
         (try
           (let [registry (kernel/require-service ctx :llm/registry)
                 auth (kernel/require-service ctx :auth/store)]
-            (is (= #{:chatgpt} (set (map :id ((:providers registry))))))
+            (is (= #{"gpt-5.6-sol" "gpt-5.6-terra"} (set (map :model ((:providers registry))))))
             (is (= {:access-token "subscription-token"
                     :account-id "subscription-account"}
                    ((:resolve! auth) :chatgpt))))
@@ -4346,7 +4347,8 @@
 (defn -main []
   (let [{:keys [fail error]}
         (run-tests 'qi.test-runner 'qi.run-outcome-test 'qi.openai-integrity-test 'qi.tool-recovery-test 'qi.context-integrity-test 'qi.midturn-compaction-test 'qi.generation-test 'qi.provenance-test
-                   'qi.web-test 'qi.presets-test 'qi.responses-schema-test 'qi.credential-boundary-test 'qi.owner-uid-test
+                   'qi.web-test 'qi.presets-test 'qi.responses-schema-test 'qi.credential-boundary-test
+                          'qi.chatgpt-catalog-test 'qi.owner-uid-test
                    'qi.runtime-inspect-test 'qi.runtime-lab-test
                    'qi.session-title-test 'qi.runtime-recovery-test
                    'qi.remote-snapshot-test 'qi.remote-interaction-cancel-test

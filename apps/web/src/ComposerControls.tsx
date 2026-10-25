@@ -224,7 +224,7 @@ export function SettingsLanguageControl() {
 }
 
 const effortLabels: Record<string, string> = {
-  off: "Off", low: "Low", medium: "Medium", high: "High", max: "Max",
+  off: "Off", none: "None", minimal: "Minimal", low: "Low", medium: "Medium", high: "High", xhigh: "XHigh", max: "Max",
 };
 
 export function effortLabel(level?: string | null): string {

@@ -7,10 +7,15 @@ import { join } from "node:path";
 import test from "node:test";
 import { createHash } from "node:crypto";
 import { runInNewContext } from "node:vm";
-import { startWebHost } from "./server.js";
+import { startWebHost as startHost } from "./server.js";
 import { WorkspaceRegistry, workspaceId } from "./workspaces.js";
 import type { AgentWorker } from "./worker.js";
 import type { EventReplay, HostEvent } from "./types.js";
+
+// Tests never consult the developer's subscription login.
+const startWebHost = (options: Parameters<typeof startHost>[0] = {}) => startHost({
+  codexAuthFile: join(options.stateDirectory || tmpdir(), "fixture-only-missing-codex-auth.json"), ...options,
+});
 
 async function temporaryRoot() {
   return mkdtemp(join(tmpdir(), "qi-agent-web-test-"));
@@ -821,4 +826,43 @@ test("an opening snapshot cursor avoids SSE snapshots and Last-Event-ID takes pr
       abort.abort();
     }
   } finally {await fixture.close();}
+});
+
+test("subscription refresh persists catalog and reports worker reload and discovery failures independently", async () => {
+  const root = await temporaryRoot(), originalFetch = globalThis.fetch;
+  const workspace = join(root, "workspace"), authFile = join(root, "fixture-codex-auth.json");
+  await mkdir(workspace);
+  await writeFile(authFile, JSON.stringify({ auth_mode: "chatgpt", tokens: {
+    access_token: "fixture-only-token", account_id: "fixture-only-account" } }), { mode: 0o600 });
+  let requests = 0, unavailable = false, host: Awaited<ReturnType<typeof startWebHost>> | undefined;
+  globalThis.fetch = async (url, options) => {
+    if (String(url).startsWith("https://chatgpt.com/")) {
+      requests++;
+      assert.equal(String(url), "https://chatgpt.com/backend-api/codex/models?client_version=0.163.0");
+      if (unavailable) return new Response("private diagnostic", { status: 503 });
+      return Response.json({ models: [{ slug: `fixture-model-${requests}`, display_name: "Fixture",
+        visibility: "list", context_window: 500000, supported_reasoning_levels: [{ effort: "low" }], default_reasoning_level: "low" }] });
+    }
+    return originalFetch(url, options);
+  };
+  try {
+    host = await startWebHost({ port: 0, workspace, codexAuthFile: authFile,
+      stateDirectory: join(root, "state"), token: "fixture-auth" });
+    assert.equal(requests, 1, "startup discovers the signed-in account catalog");
+    let reloads = 0;
+    host.sessions.reloadProviderSettings = async () => { reloads++; return { scope: "open-web-sessions", applied: [],
+      failures: [{ sessionId: "failed-worker", sessionName: "Fixture worker", message: "fixture reload timeout" }] }; };
+    const url = `http://127.0.0.1:${host.port}/api/providers/chatgpt/refresh`;
+    assert.equal((await fetch(url, { method: "POST" })).status, 401);
+    assert.equal(requests, 1, "unauthenticated callers cannot refresh the subscription");
+    const post = () => fetch(url, { method: "POST", headers: { Authorization: "Bearer fixture-auth", "Content-Type": "application/json" }, body: "{}" });
+    const result = await (await post()).json() as any;
+    assert.equal(result.ok, true); assert.equal(result.result.models[0].id, "fixture-model-2");
+    assert.equal(result.result.reload.failures[0].sessionId, "failed-worker"); assert.equal(reloads, 1);
+    unavailable = true;
+    const failed = await (await post()).json() as any;
+    assert.equal(failed.ok, true); assert.match(failed.result.modelCatalogError, /HTTP 503/);
+    assert.equal(failed.result.models[0].id, "fixture-model-2"); assert.equal(reloads, 2);
+    assert.doesNotMatch(JSON.stringify(failed), /fixture-only-token|fixture-only-account|private diagnostic/);
+  } finally { globalThis.fetch = originalFetch; await host?.close(); await removeTemporaryRoot(root); }
 });

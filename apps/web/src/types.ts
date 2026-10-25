@@ -69,8 +69,8 @@ export interface ProviderModelSettings {
   id: string;
   name: string;
   contextWindow?: number;
-  thinkingLevels?: Array<"off" | "low" | "medium" | "high" | "max">;
-  defaultThinkingLevel?: "off" | "low" | "medium" | "high" | "max";
+  thinkingLevels?: Array<"off" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max">;
+  defaultThinkingLevel?: "off" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 }
 
 export interface ProviderSettings {
@@ -84,12 +84,13 @@ export interface ProviderSettings {
   authStatus: ProviderAuthStatus;
   authSource?: "settings" | "environment" | "codex-auth-cache";
   authFile?: string;
+  modelCatalogError?: string;
   models: ProviderModelSettings[];
   builtin?: boolean;
 }
 
 export type ProviderInput = Omit<ProviderSettings,
-  "apiKeyConfigured" | "authType" | "authStatus" | "authSource" | "authFile"> & { apiKey?: string };
+  "apiKeyConfigured" | "authType" | "authStatus" | "authSource" | "authFile" | "modelCatalogError"> & { apiKey?: string };
 
 export interface ProviderPreset {
   id: string;

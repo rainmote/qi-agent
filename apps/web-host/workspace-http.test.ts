@@ -11,7 +11,7 @@ import { snapshotTurnId } from "./turn-files.js";
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "qi-files-http-")), workspace = join(root, "workspace"); await mkdir(workspace);
-  const host = await startWebHost({ port: 0, token: "fixture", workspace, stateDirectory: join(root, "state") });
+  const host = await startWebHost({codexAuthFile:join(root,"fixture-only-missing-codex-auth.json"), port: 0, token: "fixture", workspace, stateDirectory: join(root, "state") });
   const id = host.workspaces.list()[0].id, base = `http://127.0.0.1:${host.port}`;
   const request = (path: string, input?: unknown) => fetch(`${base}${path}`, { method: input === undefined ? "GET" : "POST", headers: { Authorization: "Bearer fixture", "Content-Type": "application/json" }, ...(input === undefined ? {} : { body: JSON.stringify(input) }) });
   return { root, workspace, host, id, base, request, close: async () => { await host.close(); await rm(root, { recursive: true, force: true }); } };

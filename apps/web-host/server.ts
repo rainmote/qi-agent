@@ -35,6 +35,7 @@ const mimeTypes: Record<string, string> = {
 };
 
 interface WebHostOptions {
+  codexAuthFile?: string;
   /** Private socket directory owned and cleaned by the desktop supervisor. */
   externalDaemonRuntimeDirectory?: string;
   host?: string;
@@ -292,8 +293,11 @@ export async function startWebHost(options: WebHostOptions = {}) {
   const staticRoot = options.staticRoot || defaultStaticRoot;
   const workspaces = new WorkspaceRegistry(options.stateDirectory);
   await workspaces.load(options.workspace || process.cwd());
-  const providers = new ProviderRegistry(workspaces.stateDirectory);
+  const providers = new ProviderRegistry(workspaces.stateDirectory, { codexAuthFile: options.codexAuthFile });
   await providers.load();
+  if ((await providers.list()).some(provider => provider.id === "chatgpt" && provider.authStatus === "configured")) {
+    await providers.refreshChatGptModels();
+  }
   if (Boolean(options.verificationDirectory) !== Boolean(options.verificationControllerSha)) throw new Error("Verification requires both a receipt directory and trusted controller SHA");
   const files = new WorkspaceFiles(workspaces, {
     ...(options.stateDirectory ? { attachmentDirectory: join(workspaces.stateDirectory, "attachments") } : {}),
@@ -401,6 +405,11 @@ export async function startWebHost(options: WebHostOptions = {}) {
         const saved = await providers.upsert(input);
         const reload = await sessions.reloadProviderSettings();
         return json(response, 200, { ok: true, result: { ...saved, reload } });
+      }
+      if (url.pathname === "/api/providers/chatgpt/refresh" && request.method === "POST") {
+        const refreshed = await providers.refreshChatGptModels();
+        const reload = await sessions.reloadProviderSettings();
+        return json(response, 200, { ok: true, result: { ...refreshed, reload } });
       }
       if (url.pathname === "/api/providers/reload" && request.method === "POST") {
         const input = await body(request);

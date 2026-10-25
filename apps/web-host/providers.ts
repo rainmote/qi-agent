@@ -1,8 +1,9 @@
 import { constants } from "node:fs";
-import { open, readFile, stat } from "node:fs/promises";
+import { open } from "node:fs/promises";
 import { isIP } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { chatGptBaseUrl, fetchChatGptModels, readChatGptLogin } from "./chatgpt-catalog.js";
 import { ensurePrivateDirectory, writePrivateFileAtomically } from "./storage.js";
 
 export type ProviderProtocol = "openai-completions" | "openai-responses" | "anthropic-messages"
@@ -14,8 +15,8 @@ export interface ProviderModelSettings {
   id: string;
   name: string;
   contextWindow?: number;
-  thinkingLevels?: Array<"off" | "low" | "medium" | "high" | "max">;
-  defaultThinkingLevel?: "off" | "low" | "medium" | "high" | "max";
+  thinkingLevels?: Array<"off" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max">;
+  defaultThinkingLevel?: "off" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 }
 
 export interface ProviderSettings {
@@ -35,11 +36,13 @@ export interface PublicProviderSettings extends Omit<ProviderSettings, "apiKey">
   authStatus: ProviderAuthStatus;
   authSource?: "settings" | "environment" | "codex-auth-cache";
   authFile?: string;
+  modelCatalogError?: string;
 }
 
 interface ProviderState {
   version: 1;
   providers: ProviderSettings[];
+  chatGptCatalogIdentity?: string;
 }
 
 export interface ProviderPreset {
@@ -84,8 +87,7 @@ const defaultProviders: ProviderSettings[] = [
     protocol: "chatgpt-subscription",
     baseUrl: "https://chatgpt.com/backend-api/codex",
     builtin: true,
-    models: [{ id: "gpt-5.6-sol", name: "gpt-5.6-sol", contextWindow: 128_000,
-      thinkingLevels: ["low", "medium", "high"], defaultThinkingLevel: "medium" }],
+    models: [],
   },
   {
     id: "deepseek",
@@ -174,7 +176,7 @@ function normalizeModels(models: ProviderModelSettings[]): ProviderModelSettings
     if (contextWindow !== undefined && (!Number.isInteger(contextWindow) || contextWindow <= 0)) {
       throw new Error(`模型 ${id} 的上下文容量无效`);
     }
-    const allowedLevels = new Set(["off", "low", "medium", "high", "max"]);
+    const allowedLevels = new Set(["off", "none", "minimal", "low", "medium", "high", "xhigh", "max"]);
     const thinkingLevels = (model.thinkingLevels?.map(String)
       .filter((level, levelIndex, entries) => allowedLevels.has(level)
         && entries.indexOf(level) === levelIndex)) as ProviderModelSettings["thinkingLevels"];
@@ -219,7 +221,7 @@ function normalizeProvider(input: ProviderSettings, existing?: ProviderSettings)
     baseUrl,
     ...(apiKey ? { apiKey } : {}),
     ...(apiKeyEnv ? { apiKeyEnv } : {}),
-    models: normalizeModels(models),
+    models: protocol === "chatgpt-subscription" && models.length === 0 ? [] : normalizeModels(models),
     builtin: Boolean(existing?.builtin || input.builtin),
   };
 }
@@ -229,40 +231,9 @@ interface LoginInspection {
   authSource?: "codex-auth-cache";
 }
 
-function accessTokenExpired(token: string): boolean {
-  const payload = token.split(".")[1];
-  if (!payload) return false;
-  try {
-    const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { exp?: unknown };
-    return typeof claims.exp === "number" && claims.exp * 1000 <= Date.now();
-  } catch {
-    return false;
-  }
-}
-
 async function inspectChatGptLogin(authFile: string): Promise<LoginInspection> {
-  try {
-    const info = await stat(authFile);
-    if (!info.isFile()) return { authStatus: "missing" };
-    if (process.platform !== "win32" && (info.mode & 0o077) !== 0) {
-      return { authStatus: "insecure" };
-    }
-    const auth = JSON.parse(await readFile(authFile, "utf8")) as {
-      auth_mode?: unknown;
-      tokens?: { access_token?: unknown; account_id?: unknown };
-    };
-    const accessToken = auth.tokens?.access_token;
-    const accountId = auth.tokens?.account_id;
-    if (auth.auth_mode !== "chatgpt" || typeof accessToken !== "string" || !accessToken.trim()
-      || typeof accountId !== "string" || !accountId.trim()) {
-      return { authStatus: "invalid" };
-    }
-    if (accessTokenExpired(accessToken)) return { authStatus: "expired" };
-    return { authStatus: "configured", authSource: "codex-auth-cache" };
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { authStatus: "missing" };
-    return { authStatus: "invalid" };
-  }
+  const { authStatus } = await readChatGptLogin(authFile);
+  return { authStatus, ...(authStatus === "configured" ? { authSource: "codex-auth-cache" as const } : {}) };
 }
 
 async function publicProvider(provider: ProviderSettings, authFile: string): Promise<PublicProviderSettings> {
@@ -294,6 +265,8 @@ export class ProviderRegistry {
   readonly codexAuthFile: string;
   #providers = new Map<string, ProviderSettings>();
   #mutations = Promise.resolve();
+  #chatGptCatalogIdentity?: string;
+  #chatGptCatalogError?: string;
 
   constructor(stateDirectory: string, options: { codexAuthFile?: string } = {}) {
     this.stateDirectory = stateDirectory;
@@ -307,6 +280,7 @@ export class ProviderRegistry {
     for (const provider of defaultProviders) this.#providers.set(provider.id, provider);
     try {
       const parsed = JSON.parse(await readPrivateSettings(this.statePath)) as ProviderState;
+      this.#chatGptCatalogIdentity = parsed.chatGptCatalogIdentity;
       for (const raw of parsed.providers || []) {
         const existing = this.#providers.get(String(raw.id || ""));
         const provider = normalizeProvider(existing?.builtin
@@ -316,6 +290,11 @@ export class ProviderRegistry {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
+    const login = await readChatGptLogin(this.codexAuthFile);
+    if (!login.identity || login.identity !== this.#chatGptCatalogIdentity) {
+      this.#providers.set("chatgpt", { ...this.#providers.get("chatgpt")!, models: [] });
+      this.#chatGptCatalogIdentity = undefined;
+    }
     await this.save();
   }
 
@@ -324,7 +303,37 @@ export class ProviderRegistry {
       .sort((a, b) => Number(Boolean(b.builtin)) - Number(Boolean(a.builtin))
         || (builtinOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (builtinOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER)
         || a.name.localeCompare(b.name));
-    return Promise.all(providers.map((provider) => publicProvider(provider, this.codexAuthFile)));
+    const login = await readChatGptLogin(this.codexAuthFile);
+    return Promise.all(providers.map(provider => publicProvider(provider.id === "chatgpt"
+      && login.identity !== this.#chatGptCatalogIdentity ? { ...provider, models: [] } : provider,
+    this.codexAuthFile).then(value => provider.id === "chatgpt" && this.#chatGptCatalogError
+      ? { ...value, modelCatalogError: this.#chatGptCatalogError } : value)));
+  }
+
+  async refreshChatGptModels(): Promise<PublicProviderSettings> {
+    return this.mutate(async () => {
+      const previous = this.#providers.get("chatgpt")!, previousIdentity = this.#chatGptCatalogIdentity;
+      const previousError = this.#chatGptCatalogError;
+      const login = await readChatGptLogin(this.codexAuthFile);
+      let models = login.identity && login.identity === previousIdentity ? previous.models : [];
+      let identity = login.identity === previousIdentity ? previousIdentity : undefined;
+      try {
+        const catalog = await fetchChatGptModels(this.codexAuthFile);
+        models = catalog.models; identity = catalog.identity; this.#chatGptCatalogError = undefined;
+      } catch (error) {
+        this.#chatGptCatalogError = (error as Error).message;
+        const current = await readChatGptLogin(this.codexAuthFile);
+        if (!current.identity || current.identity !== previousIdentity) { models = []; identity = undefined; }
+      }
+      this.#providers.set("chatgpt", { ...previous, models });
+      this.#chatGptCatalogIdentity = identity;
+      try { await this.save(); }
+      catch (error) {
+        this.#providers.set("chatgpt", previous); this.#chatGptCatalogIdentity = previousIdentity;
+        this.#chatGptCatalogError = previousError; throw error;
+      }
+      return (await this.list()).find(provider => provider.id === "chatgpt")!;
+    });
   }
 
   presets(): ProviderPreset[] {
@@ -334,6 +343,9 @@ export class ProviderRegistry {
   async upsert(input: ProviderSettings): Promise<PublicProviderSettings> {
     const provider = await this.mutate(async () => {
       const existing = this.#providers.get(String(input.id || "").trim());
+      if (existing?.protocol === "chatgpt-subscription" || input.protocol === "chatgpt-subscription") {
+        throw new Error("ChatGPT 模型目录由登录账户提供，请刷新模型列表");
+      }
       const normalized = normalizeProvider(input, existing);
       this.#providers.set(normalized.id, normalized);
       try {
@@ -367,7 +379,10 @@ export class ProviderRegistry {
   async discover(input: { providerId?: string; baseUrl?: string; apiKey?: string }): Promise<ProviderModelSettings[]> {
     const stored = input.providerId ? this.#providers.get(input.providerId) : undefined;
     if (stored?.protocol === "chatgpt-subscription") {
-      throw new Error("ChatGPT 订阅模型由本地登录提供，无需调用 API 获取");
+      if (input.apiKey || (input.baseUrl && validateBaseUrl(input.baseUrl) !== chatGptBaseUrl)) {
+        throw new Error("ChatGPT 订阅凭据只能发送到官方 Codex 接口");
+      }
+      return (await fetchChatGptModels(this.codexAuthFile)).models;
     }
     const baseUrl = validateBaseUrl(String(input.baseUrl || stored?.baseUrl || ""));
     const explicitKey = String(input.apiKey || "").trim();
@@ -405,7 +420,8 @@ export class ProviderRegistry {
   }
 
   async save(): Promise<void> {
-    const state: ProviderState = { version: 1, providers: [...this.#providers.values()] };
+    const state: ProviderState = { version: 1, providers: [...this.#providers.values()],
+      ...(this.#chatGptCatalogIdentity ? { chatGptCatalogIdentity: this.#chatGptCatalogIdentity } : {}) };
     await writePrivateFileAtomically(this.statePath,
       `${JSON.stringify(state, null, 2)}\n`);
   }
