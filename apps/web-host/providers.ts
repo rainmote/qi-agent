@@ -197,9 +197,12 @@ function normalizeProvider(input: ProviderSettings, existing?: ProviderSettings)
   }
   const name = builtinNames.get(id) || String(input.name || "").trim();
   if (!name) throw new Error("显示名称不能为空");
-  const apiKey = protocol === "chatgpt-subscription" ? undefined
-    : typeof input.apiKey === "string" && input.apiKey.trim() ? input.apiKey.trim() : existing?.apiKey;
+  const explicitKey = typeof input.apiKey === "string" ? input.apiKey.trim() : "";
+  const apiKey = protocol === "chatgpt-subscription" ? undefined : explicitKey || existing?.apiKey;
   const baseUrl = validateBaseUrl(String(input.baseUrl || ""));
+  if (apiKey && !explicitKey && baseUrl !== existing?.baseUrl) {
+    throw new Error("更换 API 地址时请重新输入密钥");
+  }
   if (protocol === "chatgpt-subscription" && baseUrl !== "https://chatgpt.com/backend-api/codex") {
     throw new Error("ChatGPT 订阅凭据只能发送到官方 Codex 接口");
   }
