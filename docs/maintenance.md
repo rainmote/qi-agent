@@ -28,6 +28,12 @@ Web 写入 claim、Codex run 与真实 preflight 都复核同一回执。未知�
 
 `node maintenance/build-image.mjs /absolute/image.json [EXACT_BASELINE_SHA]` 从干净提交构建镜像。显式提供基线 SHA 时，镜像分别从当前源码和固定基线准备独立的 npm、Rust target、Chromium 缓存；构建回执同时记录 source_sha 和 baseline_sha。运行入口以 package-lock.json、TUI Cargo.lock 及存在时的 desktop supervisor Cargo.lock 的完整 SHA256 组合选择同一缓存槽的全部依赖，拒绝混搭或未知锁组合。旧基线没有 supervisor 锁时记录其缺席；不能借此注入未准备的桌面 Rust 依赖。历史基线保留自己的 npm/Playwright 版本，不用当前依赖覆盖旧证据；即使两份 npm 锁不同也不共享 node_modules 或浏览器版本。构建及完整离线验收仍必须在 Docker/CI 实际运行，单元 fixture 通过不能冒充镜像通过。
 
+当前压缩回归基线由附注标签 `fixtures/compaction-sqlite-fixed-v1` 保留，指向
+`5bc2acb72d8141d01d5e31f81bb539e8c4ed6149`。它在历史源码上修复 SQLite 死锁，保留压缩目标缺陷，
+供独立验收验证修复前失败、修复后通过。CI 仍固定该 SHA；`fetch-depth: 0` 获取完整历史和标签，
+无需保留专用基线分支。固定标签不得移动、复用或删除；新基线另建版本标签并重新审查和验收。
+标签获取、提交核对及离线 bundle 命令见 [远程宿主验证](remote-maintenance.md#镜像交付)。
+
 ## 手动使用
 
 先保留一个经过审查的控制器提交，再从它建干净 worktree。后续维护代码的改动不会自动更新已经保存的控制器材料。

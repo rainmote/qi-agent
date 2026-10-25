@@ -10,7 +10,19 @@
 2. 解压至新的独立目录；只接受上述固定文件，不覆盖旧证据。
 3. 核对 manifest 的 `source_sha`、`image`、`platform`，以及压缩镜像的 `archive.sha256` 和 `archive.bytes`。
 4. `docker image load --input /absolute/bundle/qi-toolchain.tar.gz`，随后 `docker image inspect IMAGE_ID` 确认相同不可变 ID 和 `linux/arm64`。
-5. 从同一提交准备完整 Git 仓库，包含验收所需基线。源 checkout 必须干净。当前基线为 `5bc2acb72d8141d01d5e31f81bb539e8c4ed6149`，保存在 `fixtures/compaction-sqlite-fixed` 分支；离线传递可用 `git bundle create source.bundle main fixtures/compaction-sqlite-fixed`。
+5. 从同一提交准备完整 Git 仓库，包含验收所需基线。源 checkout 必须干净。当前基线为 `5bc2acb72d8141d01d5e31f81bb539e8c4ed6149`，由附注标签 `fixtures/compaction-sqlite-fixed-v1` 保留。
+
+在导出仓库中显式获取标签，并核对其指向的提交。浅克隆应先补齐完整历史；下面的标签抓取不能替代完整历史：
+
+```sh
+git fetch --no-tags origin refs/tags/fixtures/compaction-sqlite-fixed-v1:refs/tags/fixtures/compaction-sqlite-fixed-v1 &&
+test "$(git rev-parse 'refs/tags/fixtures/compaction-sqlite-fixed-v1^{commit}')" = 5bc2acb72d8141d01d5e31f81bb539e8c4ed6149 &&
+git bundle create /absolute/source.bundle refs/heads/main refs/tags/fixtures/compaction-sqlite-fixed-v1
+```
+
+bundle 放在仓库外，包含完整 `main` 历史和基线标签；导出前须确认镜像 manifest 的 `source_sha` 已包含在该 `main` 历史中。离线宿主导入后再次核对标签指向上述基线 SHA，并检出 manifest 的 `source_sha` 再执行验收，无需访问远端。完整引用名避免把标签误当成开发分支；基线快照和 `qi-smoke` 继续使用上面的精确提交 SHA。
+
+该标签按固定版本保留，不得移动、复用或删除；需要新基线时另建 `v2` 等新标签，并独立审查和验收。此约定不代表已配置服务器端标签保护。
 
 此基线是明确标记的离线 fixture：以历史 `c40b3eb` 为父提交，只回移 `29aa3ce` 的 Cargo.toml、Cargo.lock、automation.rs 和 sqlite_wal.rs，消除历史 SQLite 连接死锁，保留 compaction 的目标缺陷。旧基线失败和新基线证据分别保存；不是悄悄替换旧提交的依赖，也不是模型能力题。基线仍必须通过完整测试，再由独立验收产生有效 red。
 
