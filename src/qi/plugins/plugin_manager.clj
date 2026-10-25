@@ -334,6 +334,6 @@
                                    "require SHA-256; Git also requires a full commit and relative EDN path. No install scripts, "
                                    "arbitrary code or HTML run. New packages install disabled. Changes affect this session "
                                    "and future sessions; other active sessions require restart.")
-                 :strict true :execution-mode :sequential :parameters arguments-schema
+                 :strict false :execution-mode :sequential :parameters arguments-schema
                  :execute (:execute! manager)})
               nil))})

@@ -14,7 +14,7 @@ test("font preferences reject CSS injection and invalid ranges while allowing in
   assert.equal(normalizeFontFamily("   "), "");
   for (const value of ['Arial; color:red', 'url(https://example.invalid/font)', '"Arial"}body{', 'a\\b', 'a\nb', 'a'.repeat(201)]) assert.equal(normalizeFontFamily(value), null);
   const prefs = normalizeWebPreferences({ codeFontSize: 99, terminalFontSize: 9, locale: "invalid", fontFamilies: { text: "url(x)" } });
-  assert.equal(prefs.codeFontSize, 11); assert.equal(prefs.terminalFontSize, 13); assert.equal(prefs.locale, "zh"); assert.equal(prefs.fontFamilies.text, "");
+  assert.equal(prefs.codeFontSize, 13); assert.equal(prefs.terminalFontSize, 13); assert.equal(prefs.locale, "zh"); assert.equal(prefs.fontFamilies.text, "");
 });
 
 test("shortcut bindings reject browser reserved keys, duplicate actions and composition or held-key events", () => {

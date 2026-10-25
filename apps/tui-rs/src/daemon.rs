@@ -1378,25 +1378,29 @@ impl Database {
     }
 
     fn mark_interrupted_agent_work_uncertain(&self, agent_id: &str) -> Result<()> {
+        self.mark_interrupted_work_uncertain(Some(agent_id))
+    }
+
+    fn mark_interrupted_work_uncertain(&self, agent_id: Option<&str>) -> Result<()> {
         let connection = self.connection()?;
         connection.execute_batch("BEGIN IMMEDIATE")?;
         let result = (|| -> Result<()> {
             connection.execute(
                 "UPDATE tasks SET status='uncertain',updated_at_ms=?2
-                 WHERE agent_id=?1 AND status='running'",
+                 WHERE (?1 IS NULL OR agent_id=?1) AND status='running'",
                 params![agent_id, now_ms_i64()],
             )?;
             connection.execute(
                 "UPDATE goal_runs SET status='uncertain',completed_at_ms=?2
                  WHERE status='running' AND goal_id IN
-                   (SELECT goal_id FROM goals WHERE agent_id=?1)",
+                   (SELECT goal_id FROM goals WHERE (?1 IS NULL OR agent_id=?1))",
                 params![agent_id, now_ms_i64()],
             )?;
             connection.execute(
                 "UPDATE goals SET status='uncertain',
                    last_error='machine restart interrupted a run; inspect side effects before continuing',
                    updated_at_ms=?2,revision=revision+1
-                 WHERE agent_id=?1 AND status IN ('active','paused')",
+                 WHERE (?1 IS NULL OR agent_id=?1) AND status IN ('active','paused')",
                 params![agent_id, now_ms_i64()],
             )?;
             Ok(())
@@ -3493,6 +3497,10 @@ impl Runtime {
     }
 
     fn stop_agent(&self, agent_id: &str) -> Result<Value> {
+        self.stop_agent_inner(agent_id, false)
+    }
+
+    fn stop_agent_inner(&self, agent_id: &str, preserve_session: bool) -> Result<Value> {
         let root = self
             .agents
             .lock()
@@ -3506,21 +3514,30 @@ impl Runtime {
                 Duration::from_secs(3),
             );
         }
-        let (agent, worker) = {
+        let (agent, worker, resume_lifecycle) = {
             let _residency = self
                 .residency
                 .lock()
                 .expect("runtime residency mutex poisoned");
             // Publish the stop while holding the hydration/adoption gate. A
             // missing or disconnected worker must never be started to stop it.
-            let agent = {
+            let (agent, resume_lifecycle) = {
                 let mut agents = self.agents.lock().expect("agents mutex poisoned");
                 let agent = agents.get_mut(agent_id).context("agent was not found")?;
+                let resume_lifecycle = (preserve_session && agent.status != "stopped")
+                    .then(|| agent.lifecycle.clone());
                 agent.status = "stopped".into();
                 agent.lifecycle = "archived".into();
-                agent.inactive_reason = Some("explicit-stop".into());
+                agent.inactive_reason = Some(
+                    if resume_lifecycle.is_some() {
+                        "desktop-shutdown-pending"
+                    } else {
+                        "explicit-stop"
+                    }
+                    .into(),
+                );
                 self.database.upsert_agent(agent)?;
-                agent.clone()
+                (agent.clone(), resume_lifecycle)
             };
             let worker = self
                 .workers
@@ -3528,7 +3545,7 @@ impl Runtime {
                 .expect("workers mutex poisoned")
                 .get(&agent.worker_id)
                 .cloned();
-            (agent, worker)
+            (agent, worker, resume_lifecycle)
         };
         // No residency/registry lock is held while waiting for an admitted RPC
         // or retiring its process tree. Hydration now observes the stopped root.
@@ -3598,6 +3615,10 @@ impl Runtime {
                 let mut stopped = descriptor;
                 stopped.pid = None;
                 stopped.child_pid = None;
+                // All recorded groups/helpers were proven absent above. Do not
+                // carry their stale OS identities into a later desktop launch.
+                stopped.child_process_group = None;
+                stopped.owned_helpers.clear();
                 stopped.status = "stopped".into();
                 write_descriptor(&descriptor_path, &stopped)?;
             }
@@ -3615,6 +3636,28 @@ impl Runtime {
             .get_mut(agent_id)
         {
             agent.controller_client_id = None;
+            if let Some(lifecycle) = resume_lifecycle
+                && agent.inactive_reason.as_deref() == Some("desktop-shutdown-pending")
+                && !self.desktop_startup_unknown.load(Ordering::SeqCst)
+            {
+                // Closing the desktop stops processes, not the saved session.
+                // Publish resumability only after confirmed cleanup and durable
+                // reconciliation; a concurrent explicit stop takes precedence.
+                // This private database belongs to the entire closing desktop.
+                // Children have distinct agent ids, so include their unfinished
+                // work too. This is reconciliation, not cleanup proof for the
+                // other roots; each still passes its own retirement gate.
+                self.database.mark_interrupted_work_uncertain(None)?;
+                let mut resumed = agent.clone();
+                resumed.status = "inactive".into();
+                resumed.lifecycle = lifecycle;
+                resumed.inactive_reason = Some("desktop-shutdown".into());
+                self.database
+                    .set_worker_status(&agent.worker_id, "inactive")?;
+                self.database.upsert_agent(&resumed)?;
+                *agent = resumed;
+                return Ok(result);
+            }
             self.database.upsert_agent(agent)?;
         }
         let _ = self.database.set_worker_status(&agent.worker_id, "stopped");
@@ -3637,7 +3680,13 @@ impl Runtime {
         };
         let mut errors = Vec::new();
         for agent_id in agent_ids {
-            if self.stop_agent(&agent_id).is_err() {
+            if self
+                .stop_agent_inner(
+                    &agent_id,
+                    self.desktop_owned && !self.desktop_startup_unknown.load(Ordering::SeqCst),
+                )
+                .is_err()
+            {
                 errors.push(format!("worker cleanup failed for agent {agent_id}"));
             }
         }

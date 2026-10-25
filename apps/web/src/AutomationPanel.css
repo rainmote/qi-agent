@@ -1,18 +1,20 @@
-.automation-panel { display: grid; gap: 20px; min-width: 0; }
-.automation-panel h2 { margin: 0; font-size: 17px; }
-.automation-panel h3 { margin: 0 0 8px; font-size: 15px; }
-.automation-panel p { margin: 8px 0; color: var(--text-3); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .automation-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-.automation-toolbar strong { min-width: 0; overflow-wrap: anywhere; font-size: 13px; white-space: pre-wrap; }
-.automation-toolbar span { flex-shrink: 0; color: var(--text-3); font-size: 12px; }
-.automation-form { display: grid; gap: 12px; margin: 16px 0; }
-.automation-form label { display: grid; gap: 6px; font-size: 12px; color: var(--text-2); }
-.automation-form :is(input, select, textarea) { width: 100%; min-width: 0; box-sizing: border-box; padding: 9px; border: 1px solid var(--border-2); border-radius: 8px; background: var(--layer-1); color: var(--text-1); font: inherit; }
-.automation-form textarea { min-height: 70px; resize: vertical; }
-.automation-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.automation-toolbar h2 { min-width: 0; }
+.automation-toolbar > button { flex-shrink: 0; }
+.automation-toolbar strong { min-width: 0; white-space: pre-wrap; }
+.automation-toolbar span { flex-shrink: 0; color: var(--text-2); font-size: 14px; }
+.automation-panel > section { min-width: 0; padding-top: 24px; border-top: 1px solid var(--border-2); }
+.automation-form { margin: 20px 0 24px; }
+.automation-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
 .automation-fields label:last-child { grid-column: 1 / -1; }
 .automation-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.automation-entry { padding: 14px 0; border-top: 1px solid var(--border-1); }
-.automation-panel .automation-error { color: var(--danger, #b44e43); }
-.automation-check { display: flex; align-items: center; gap: 8px; margin: 10px 0; font-size: 12px; }
-@media (max-width: 480px) { .automation-fields { grid-template-columns: 1fr; } .automation-actions .button { min-height: 40px; } }
+.automation-entry { margin-top: 16px; padding: 20px; border: 1px solid var(--border-2); border-radius: 12px; }
+.automation-entry .automation-toolbar { align-items: flex-start; }
+.automation-entry .automation-actions { margin-top: 16px; }
+.automation-check { display: flex; align-items: flex-start; gap: 10px; margin: 16px 0; font-size: 14px; color: var(--text-2); }
+.automation-check input { flex: none; width: 18px; height: 18px; margin: 2px 0 0; accent-color: var(--accent); }
+@media (max-width: 600px) {
+  .automation-fields { grid-template-columns: minmax(0, 1fr); }
+  .automation-entry { padding: 16px; }
+  .automation-entry .automation-toolbar { flex-direction: column; gap: 6px; }
+}

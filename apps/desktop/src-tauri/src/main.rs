@@ -10,7 +10,7 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tauri::{
     Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent,
@@ -257,7 +257,7 @@ fn main() {
         // Intentionally no invoke_handler and no remote capability grants.
         .setup(move |app| {
             let state = if let Some(mode) = &acceptance {
-                mode.root.join("state")
+                mode.state_directory()
             } else {
                 app.path().app_data_dir()?
             };
@@ -297,11 +297,19 @@ fn main() {
             let new_window_app = app.handle().clone();
             let page_shell = shell.clone();
             let page_app = app.handle().clone();
-            WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+            let window =
+                WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()));
+            // Keep the same persistent WebKit behavior as normal launches,
+            // isolated in a verifier-owned store shared only by its two phases.
+            let window = if let Some(mode) = &acceptance {
+                window.data_store_identifier(mode.data_store_identifier())
+            } else {
+                window
+            };
+            window
                 .initialization_script(
                     "Object.defineProperty(window,'__QI_DESKTOP_BROWSER__',{value:true});",
                 )
-                .incognito(acceptance.is_some())
                 .title("qì agent")
                 .inner_size(1280.0, 840.0)
                 .min_inner_size(360.0, 480.0)
@@ -389,9 +397,49 @@ fn main() {
                 let handle = app.handle().clone();
                 let acceptance_shell = shell.clone();
                 thread::spawn(move || {
-                    for _ in 0..300 {
+                    let deadline = Instant::now() + Duration::from_secs(45);
+                    while Instant::now() < deadline {
                         if mode.page_ready() {
                             break;
+                        }
+                        if let Some(window) = handle.get_webview_window("main") {
+                            let expected = acceptance_shell.origin.read().unwrap().clone();
+                            let current = window.url().ok();
+                            if expected.is_some()
+                                && current.as_ref().is_some_and(|url| {
+                                    expected.as_deref()
+                                        == Some(url.origin().ascii_serialization().as_str())
+                                        && url.path() == "/"
+                                        && url.query().is_none()
+                                })
+                            {
+                                let (send, receive) = std::sync::mpsc::channel();
+                                let evaluation = window.eval_with_callback(
+                                    include_str!("acceptance_probe.js"),
+                                    move |value| {
+                                        let _ = send.send(value);
+                                    },
+                                );
+                                let remaining = deadline.saturating_duration_since(Instant::now());
+                                let observed = if evaluation.is_ok() {
+                                    receive
+                                        .recv_timeout(remaining.min(Duration::from_secs(2)))
+                                        .ok()
+                                } else {
+                                    None
+                                };
+                                match observed
+                                    .as_deref()
+                                    .map(|value| mode.observe_auth_probe(value))
+                                {
+                                    Some(Ok(true)) => break,
+                                    Some(Ok(false)) => {}
+                                    _ => {
+                                        let _ = mode.record("startup_failed");
+                                        break;
+                                    }
+                                }
+                            }
                         }
                         thread::sleep(Duration::from_millis(100));
                     }

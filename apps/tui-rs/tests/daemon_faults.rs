@@ -148,6 +148,10 @@ impl Harness {
     fn kill_and_restart_daemon(&mut self) {
         self.child.kill().unwrap();
         self.child.wait().unwrap();
+        self.restart_daemon();
+    }
+
+    fn restart_daemon(&mut self) {
         let binary = daemon_binary();
         let mut command = Command::new(&binary);
         command
@@ -238,6 +242,223 @@ impl Drop for Harness {
             }
         }
         let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+#[test]
+fn desktop_shutdown_preserves_sessions_but_not_explicit_stops_or_archives() {
+    let parent = std::process::id().to_string();
+    let run_id = Uuid::new_v4().to_string();
+    let mut harness = Harness::start_with_env(
+        "examples/tui-mock.edn",
+        &[
+            ("QI_AGENT_DESKTOP_PARENT_PID", &parent),
+            ("QI_AGENT_DESKTOP_RUN_ID", &run_id),
+        ],
+    );
+    let mut client = TestClient::connect(&harness.socket, "desktop-persistence").unwrap();
+    let mut created = Vec::new();
+    for index in 0..3 {
+        let value = client
+            .call(
+                None,
+                "agent.create",
+                json!({"workspace": harness.workspace()}),
+                Some(&format!("create-{index}")),
+            )
+            .unwrap();
+        let id = value["agent"]["agent_id"].as_str().unwrap().to_owned();
+        client
+            .call(Some(&id), "agent.attach", json!({}), None)
+            .unwrap();
+        created.push((id, value));
+    }
+    let id = &created[0].0;
+    client
+        .call(
+            Some(id),
+            "session.rename",
+            json!({"name":"Desktop saved session"}),
+            Some("rename"),
+        )
+        .unwrap();
+    client
+        .call(
+            Some(id),
+            "session.preferences.set",
+            json!({"response_detail":"short"}),
+            Some("preference"),
+        )
+        .unwrap();
+    let saved = client
+        .call(Some(id), "session.snapshot", json!({}), None)
+        .unwrap();
+    let session_path = PathBuf::from(created[0].1["agent"]["session_path"].as_str().unwrap());
+    let transcript = fs::read_to_string(&session_path).unwrap();
+    client
+        .call(
+            Some(&created[1].0),
+            "agent.stop",
+            json!({}),
+            Some("explicit-stop"),
+        )
+        .unwrap();
+    let archive_source = PathBuf::from(created[2].1["agent"]["session_path"].as_str().unwrap());
+    let archive = harness
+        .workspace()
+        .join(".qi-agent/archive/sessions/archived.jsonl");
+    client
+        .call(
+            None,
+            "session.archive",
+            json!({"session_path":archive_source,"archive_path":archive}),
+            Some("archive"),
+        )
+        .unwrap();
+    // An unconfirmed task must not become a fresh continuation after shutdown.
+    let database = harness.root.join("s/supervisor.sqlite");
+    rusqlite::Connection::open(&database).unwrap().execute(
+        "INSERT INTO tasks(task_id,agent_id,run_id,status,created_at_ms,updated_at_ms) VALUES('unfinished',?1,'unfinished','running',1,1)",
+        [id]).unwrap();
+    {
+        // Child work has its own agent id in the private desktop database.
+        let connection = rusqlite::Connection::open(&database).unwrap();
+        for (owner, status) in [(id.as_str(), "active"), ("child-fixture", "paused")] {
+            connection.execute(
+                "INSERT INTO tasks(task_id,agent_id,run_id,status,created_at_ms,updated_at_ms) VALUES(?1,?1,?1,'running',1,1)",
+                [owner]).unwrap();
+            connection.execute(
+                "INSERT INTO goals(goal_id,agent_id,objective,status,max_continuations,created_at_ms,updated_at_ms) VALUES(?1,?1,'fixture',?2,2,1,1)",
+                [owner, status]).unwrap();
+            connection.execute(
+                "INSERT INTO goal_runs(request_id,goal_id,status,created_at_ms) VALUES(?1,?1,'running',1)",
+                [owner]).unwrap();
+        }
+        connection.execute_batch(
+            "INSERT INTO tasks(task_id,agent_id,status,created_at_ms,updated_at_ms) VALUES('done','child-fixture','completed',1,1);
+             INSERT INTO goals(goal_id,agent_id,objective,status,max_continuations,created_at_ms,updated_at_ms) VALUES('done','child-fixture','fixture','completed',2,1,1);
+             INSERT INTO goal_runs(request_id,goal_id,status,created_at_ms) VALUES('done','done','completed',1);").unwrap();
+    }
+    client
+        .call(None, "daemon.shutdown", json!({}), Some("desktop-shutdown"))
+        .unwrap();
+    drop(client);
+    let deadline = Instant::now() + PROCESS_TIMEOUT;
+    loop {
+        if let Some(exit) = harness.child.try_wait().unwrap() {
+            assert!(exit.success());
+            break;
+        }
+        assert!(Instant::now() < deadline, "desktop daemon failed to exit");
+        thread::sleep(Duration::from_millis(20));
+    }
+    let receipt: Value =
+        serde_json::from_slice(&fs::read(harness.root.join("r/desktop-shutdown.json")).unwrap())
+            .unwrap();
+    assert_eq!(receipt["ok"], true);
+    assert_eq!(receipt["run_id"], run_id);
+    // Reopen through a fresh desktop socket directory, as the actual shell does.
+    fs::remove_dir_all(harness.root.join("r")).unwrap();
+    fs::create_dir(harness.root.join("r")).unwrap();
+    harness
+        .extra_env
+        .iter_mut()
+        .find(|(key, _)| key == "QI_AGENT_DESKTOP_RUN_ID")
+        .unwrap()
+        .1 = Uuid::new_v4().to_string();
+    harness.restart_daemon();
+    let mut restored = TestClient::connect(&harness.socket, "desktop-restored").unwrap();
+    let agents = restored.call(None, "agent.list", json!({}), None).unwrap();
+    let agents = agents.as_array().unwrap();
+    assert_eq!(
+        agents.len(),
+        3,
+        "shutdown must not delete or duplicate agent identities"
+    );
+    let dormant = agents
+        .iter()
+        .find(|agent| agent["agent_id"] == *id)
+        .unwrap();
+    assert_eq!(
+        dormant["status"], "inactive",
+        "ordinary desktop close must keep sessions resumable"
+    );
+    assert_eq!(dormant["inactive_reason"], "desktop-shutdown");
+    for stopped_id in [&created[1].0, &created[2].0] {
+        assert_eq!(
+            agents
+                .iter()
+                .find(|agent| agent["agent_id"] == **stopped_id)
+                .unwrap()["status"],
+            "stopped"
+        );
+        assert!(
+            restored
+                .call(Some(stopped_id), "agent.attach", json!({}), None)
+                .is_err()
+        );
+    }
+    let attached = restored
+        .call(Some(id), "agent.attach", json!({}), None)
+        .unwrap();
+    assert_eq!(attached["snapshot"]["session_id"], saved["session_id"]);
+    assert_eq!(
+        restored
+            .call(
+                Some(id),
+                "session.preferences",
+                json!({}),
+                Some("read-preference")
+            )
+            .unwrap()["response_detail"],
+        "short"
+    );
+    assert!(
+        fs::read_to_string(&session_path)
+            .unwrap()
+            .starts_with(&transcript)
+    );
+    let agents = restored.call(None, "agent.list", json!({}), None).unwrap();
+    let resumed = agents
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|agent| agent["agent_id"] == *id)
+        .unwrap();
+    for key in ["agent_id", "worker_id", "session_path", "config_path"] {
+        assert_eq!(
+            resumed[key], created[0].1["agent"][key],
+            "identity changed: {key}"
+        );
+    }
+    let status: String = rusqlite::Connection::open(&database)
+        .unwrap()
+        .query_row(
+            "SELECT status FROM tasks WHERE task_id='unfinished'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(status, "uncertain");
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    for owner in [id.as_str(), "child-fixture"] {
+        for query in [
+            "SELECT status FROM tasks WHERE task_id=?1",
+            "SELECT status FROM goals WHERE goal_id=?1",
+            "SELECT status FROM goal_runs WHERE request_id=?1",
+        ] {
+            let status: String = connection
+                .query_row(query, [owner], |row| row.get(0))
+                .unwrap();
+            assert_eq!(
+                status, "uncertain",
+                "unfinished root/child work must not be replayed: {owner}"
+            );
+            let done: String = connection
+                .query_row(query, ["done"], |row| row.get(0))
+                .unwrap();
+            assert_eq!(done, "completed", "terminal work must remain settled");
+        }
     }
 }
 
@@ -1029,6 +1250,7 @@ fn settings_mutations_require_controller_and_are_journaled() {
         .to_string(),
     )
     .unwrap();
+    fs::set_permissions(&settings, fs::Permissions::from_mode(0o600)).unwrap();
     let harness = Harness::start_with_env(
         config.to_str().unwrap(),
         &[(

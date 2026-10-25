@@ -110,7 +110,10 @@
   (when-not (= "function" type)
     (throw (ex-info "ChatGPT adapter only supports function tools"
                     {:tool-type type})))
-  (assoc function :type "function"))
+  ;; Omitted strict defaults to server-side schema normalization. Preserve the
+  ;; tools' optional arguments; the runtime validates the original schema.
+  (cond-> (assoc function :type "function")
+    (nil? (:strict function)) (assoc :strict false)))
 
 (defn- fallback-assistant-items [message]
   (vec

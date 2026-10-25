@@ -1,6 +1,8 @@
 // Shared Harness copy adapted from reference 687f282 (MIT); see THIRD_PARTY_NOTICES.md.
 // qi-specific capabilities and safeguards retain their own semantics.
 export const english: Record<string, string> = {
+  "运行详情": "Run details",
+  "操作记录": "Operation history",
   "操作结果尚未确认，请先核对结果，避免重复执行。": "The operation's result is unconfirmed. Reconcile it first to avoid duplicate execution.",
   "没有需要核对的操作": "No operation needs reconciliation",
   "原操作失败": "The original operation failed",

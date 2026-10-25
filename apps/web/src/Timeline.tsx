@@ -6,11 +6,11 @@ import { MarkdownContent } from "./MarkdownContent";
 import { ToolResultImages } from "./ToolResultImages";
 import { PluginSlots, type PluginSlot } from "./PluginSlots";
 import type { Projection } from "./projection";
-import { type ToolBatch, type TimelineRow } from "./timeline-model";
+import { type ToolBatch } from "./timeline-model";
 import { captureAnchor, restoreAnchor, timelineLayout, visibleRange, type RowMeasurement, type ScrollAnchor } from "./virtual-timeline";
 import type { DurableEvent } from "./types";
 import { outcomeText, runOutcome } from "./run-outcome";
-import { displayTranscript, type CollapseTiming, type TranscriptView, type TurnControl } from "./transcript-display";
+import { displayTranscript, type CollapseTiming, type TranscriptView, type TranscriptRow, type StepControl } from "./transcript-display";
 
 function text(value: unknown): string {
   if (typeof value === "string") return value;
@@ -48,7 +48,7 @@ export function operationTarget(call: DurableEvent, maxLength = 96): string {
   } else if (name === "delegate_task" || name === "fork_agent") {
     target = oneLine(args.label || args.prompt || args.task);
   } else if (!target) {
-    target = oneLine(args.name || args.id || args.agent_id || args.query || args.command ||
+    target = oneLine(args.title || args.name || args.id || args.agent_id || args.query || args.command ||
       args.code || args.prompt || args);
   }
   return truncated(target || "—", maxLength);
@@ -97,6 +97,7 @@ const toolCategories: Record<string, string> = {
   read: "读取", read_file: "读取", write: "写入", write_file: "写入", edit: "编辑", edit_file: "编辑",
   grep: "搜索", find: "搜索", lsp_query: "代码查询", bash: "命令", bb_repl: "代码执行",
   delegate_task: "子任务", fork_agent: "子任务", web_search: "网页搜索", web_fetch: "网页读取",
+  computer_js: "电脑操作", computer_js_reset: "电脑操作", terminal: "命令",
 };
 
 export function toolBatchLabel(batch: ToolBatch): string {
@@ -108,6 +109,32 @@ export function toolBatchLabel(batch: ToolBatch): string {
   }
   const categories = [...counts].slice(0, 3).map(([name, count]) => `${name} ×${count}`);
   return `${categories.join(" · ")}${counts.size > 3 ? t(" · 等 {0} 项", batch.calls.length) : ""}`;
+}
+
+function CompactStepHeader({ row, results, activeCalls, onToggle }: {
+  row: StepControl; results: ReadonlyMap<string, DurableEvent>; activeCalls: ReadonlySet<string>; onToggle: () => void;
+}) {
+  const { failed, missing } = toolBatchStatus(row.batch, results, false);
+  const waiting = row.batch.calls.filter(call => activeCalls.has(call.id) && !results.has(callId(call))).length;
+  const running = waiting > 0, unconfirmed = missing - waiting;
+  const counts = new Map<string, number>();
+  if (row.reasoningCount) counts.set(t("思考"), row.reasoningCount);
+  for (const call of row.batch.calls) {
+    const name = String(call.data.name || "tool"), label = t(toolCategories[name] || name);
+    counts.set(label, (counts.get(label) || 0) + 1);
+  }
+  const label = [...counts].map(([name, count]) => `${name} ×${count}`).join(" · ") || t("操作记录");
+  const warnings = [failed ? t("{0} 失败", failed) : "",
+    unconfirmed ? t("{0} 项结果未确认", unconfirmed) : ""].filter(Boolean).join(" · ");
+  const failure = row.batch.calls.map(call => results.get(callId(call))).find(result => result?.data.ok === false);
+  return <div className={`compact-step-group ${failed ? "is-error" : running ? "is-running" : ""}`}>
+    <button type="button" className="compact-step-toggle" aria-expanded={row.open} onClick={onToggle}>
+      <Icon name={row.batch.calls.length ? "terminal" : "think"} />
+      <span>{label}{running ? ` · ${t("执行中")}` : ""}{warnings ? ` · ${warnings}` : ""}</span>
+      <Icon name="chevron" />
+    </button>
+    {!row.open && failure && <p className="tool-failure">{truncated(oneLine(failure.data.error || failure.data.content) || t("调用失败，展开查看参数"), 140)}</p>}
+  </div>;
 }
 
 function ToolDetails({ call, result, pluginSlots }: {
@@ -233,17 +260,21 @@ function Message({ event, reasoningOpen, onReasoningToggle, hideReasoning = fals
           if (event.target !== event.currentTarget) return;
           onReasoningToggle(event.currentTarget.open);
           if (!event.currentTarget.open) setReasoningBodyOpen(false);
-        }}><summary><Icon name="think" /><span>{t("已完成分析")}</span><Icon name="chevron" /></summary>
+        }}><summary onClick={event => {
+          if (compact) { event.preventDefault(); onReasoningToggle(!reasoningOpen); }
+        }}><Icon name="think" /><span>{t("已完成分析")}</span><Icon name="chevron" /></summary>
         <div className="reasoning-group-body"><details className="reasoning-content" open={reasoningBodyOpen}
           onToggle={event => setReasoningBodyOpen(event.currentTarget.open)}>
-          <summary><Icon name={reasoningBodyOpen ? "chevron" : "think"} /><span>{t("思考")}</span>{!reasoningBodyOpen && <span className="reasoning-first-line">{reasoning.split(/\r?\n/, 1)[0].replaceAll("**", "")}</span>}</summary>
+          <summary onClick={event => {
+            if (compact) { event.preventDefault(); setReasoningBodyOpen(open => !open); }
+          }}><Icon name={reasoningBodyOpen ? "chevron" : "think"} /><span>{t("思考")}</span>{!compact && !reasoningBodyOpen && <span className="reasoning-first-line">{reasoning.split(/\r?\n/, 1)[0].replaceAll("**", "")}</span>}</summary>
           <div><MarkdownContent content={reasoning} /></div>
         </details></div></details>}
       {content && (role === "assistant"
         ? <MarkdownContent content={content} />
         : <div className="message-content">{content}</div>)}
       {role === "user" && <UserMessageAttachments content={message.content} />}
-      {!content && calls > 0 && <div className="message-muted">{t("准备调用") + " "}{calls}{" " + t("个工具")}</div>}
+      {!compact && !content && calls > 0 && <div className="message-muted">{t("准备调用") + " "}{calls}{" " + t("个工具")}</div>}
       {content && (role !== "assistant" || showActions) && <div className="message-actions"><button type="button" aria-label={t("复制")}
         onClick={() => void navigator.clipboard.writeText(content)}><Icon name="copy" /></button>
         <time>{t("{0}月{1}日 {2}", new Date(event.at).getMonth() + 1, new Date(event.at).getDate(), new Date(event.at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }))}</time></div>}
@@ -251,7 +282,7 @@ function Message({ event, reasoningOpen, onReasoningToggle, hideReasoning = fals
   </article>;
 }
 
-type DisplayRow = TimelineRow | TurnControl | { id: string; kind: "stream" | "run-error" };
+type DisplayRow = TranscriptRow | { id: string; kind: "stream" | "run-error" };
 
 function estimateRow(row: DisplayRow, width: number): number {
   if (row.kind === "tools") return 52;
@@ -292,8 +323,11 @@ export function Timeline({ projection, scrollRef, pluginSlots = [], view = "stan
   const partialReasoning = String(projection.state["partial-reasoning"] || projection.state.partialReasoning || "");
   const streaming = projection.state.phase !== "idle" && Boolean(partialAssistant || partialReasoning);
   const transcript = useMemo(() => displayTranscript(projection.timeline, view, choices, focusedRow, collapseTiming), [projection.timeline, view, choices, focusedRow, collapseTiming, locale]);
+  const activeToolRow = projection.timeline.activeToolRow === null ? undefined : projection.timeline.rows[projection.timeline.activeToolRow];
+  const activeCalls = new Set(activeToolRow?.kind === "tools" && (projection.state.phase !== "idle" || projection.interactions.length > 0)
+    ? activeToolRow.batch.calls.map(call => call.id) : []);
   const rememberFocusedProcess = () => {
-    const retained = transcript.rows.filter(row => row.kind === "turn-control" && row.open
+    const retained = transcript.rows.filter(row => (row.kind === "turn-control" || row.kind === "step-control") && row.open
       && focusedRow !== null && row.members.includes(focusedRow));
     if (!retained.length) return;
     setExpanded(current => {
@@ -408,8 +442,22 @@ export function Timeline({ projection, scrollRef, pluginSlots = [], view = "stan
     if (row.kind === "outcome") { if (finalAssistantId) finalAssistantIds.add(finalAssistantId); finalAssistantId = null; }
   }
   if (finalAssistantId) finalAssistantIds.add(finalAssistantId);
+  const holdCompactPosition = () => {
+    const element = scrollRef.current;
+    if (view !== "compact" || !element) return;
+    // A disclosure can grow the timeline between pointer-down and click.
+    // Keep the user's anchor instead of moving the target to follow the tail.
+    follow.current = false;
+    setFollowing(element.scrollHeight - element.clientHeight - element.scrollTop <= 64);
+    ignoredScrollTop.current = null;
+    anchor.current = captureAnchor(layoutRef.current, element.scrollTop - origin.current);
+  };
   return <div className="timeline-inner virtualized-timeline" ref={inner} data-total-rows={rows.length}
+    onPointerDownCapture={event => {
+      if ((event.target as HTMLElement).closest("button, summary")) holdCompactPosition();
+    }}
     onFocusCapture={event => {
+      holdCompactPosition();
       rememberFocusedProcess();
       const target = event.target as HTMLElement;
       const row = target.closest<HTMLElement>("[data-row-id]")?.dataset.rowId || null;
@@ -432,7 +480,7 @@ export function Timeline({ projection, scrollRef, pluginSlots = [], view = "stan
         data-row-id={row.id} ref={(element) => {
           if (element) nodes.current.set(row.id, element); else nodes.current.delete(row.id);
         }}>
-        {row.kind === "turn-control" && <button type="button" aria-label={row.label} className="turn-process-toggle" aria-expanded={row.open}
+        {row.kind === "turn-control" && <button type="button" aria-label={view === "compact" ? `${row.label} · ${row.caption}` : row.label} className="turn-process-toggle" aria-expanded={row.open}
           onClick={() => {
             if (!row.open) setExpandedRow(row.id, true);
             else setExpanded(current => {
@@ -442,6 +490,9 @@ export function Timeline({ projection, scrollRef, pluginSlots = [], view = "stan
               return next;
             });
           }}><span>{row.caption}</span><Icon name="chevron" /></button>}
+        {row.kind === "step-control" && <CompactStepHeader row={row} results={projection.timeline.results}
+          activeCalls={activeCalls}
+          onToggle={() => setExpandedRow(row.id, !row.open)} />}
         {row.kind === "message" && <Message event={row.event} reasoningOpen={expanded.has(row.id)}
           hideReasoning={transcript.hiddenReasoning.has(row.id)} compact={view === "compact"} showActions={finalAssistantIds.has(row.id)}
           onReasoningToggle={(open) => setExpandedRow(row.id, open)} />}
@@ -449,7 +500,7 @@ export function Timeline({ projection, scrollRef, pluginSlots = [], view = "stan
           active={projection.timeline.activeToolRow !== null && projection.timeline.rows[projection.timeline.activeToolRow]?.id === row.id
             && (projection.state.phase !== "idle" || projection.interactions.length > 0)}
           expanded={expanded} onToolToggle={setExpandedRow} pluginSlots={pluginSlots}
-          ungrouped={view === "verbose" || (view === "detailed" && (focusedUngroupedRow === row.id || (transcript.activeRows.has(row.id)
+          ungrouped={view === "compact" || view === "verbose" || (view === "detailed" && (focusedUngroupedRow === row.id || (transcript.activeRows.has(row.id)
             && (projection.state.phase !== "idle" || projection.interactions.length > 0))))}
           open={choices.get(row.id) ?? false}
           onToggle={() => setExpandedRow(row.id, !(choices.get(row.id) ?? false))} />}

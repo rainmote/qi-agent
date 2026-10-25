@@ -1,0 +1,48 @@
+/* Shared reading and form rhythm for the plugin and automation drawers. */
+.management-workbench { width: min(720px, 100vw); }
+.management-workbench .workbench-heading { padding-inline: 24px; font-size: 16px; }
+.management-workbench .workbench-heading button { color: var(--text); font-size: 16px; }
+.management-panel { display: grid; gap: 24px; min-width: 0; padding: 24px; font-size: 15px; line-height: 1.6; }
+.management-panel > *, .management-panel :is(form, label, article) { min-width: 0; }
+.management-panel :is(h2, h3, p, strong, small, span, code) { overflow-wrap: anywhere; }
+.management-panel h2 { margin: 0; font-size: 20px; line-height: 1.4; }
+.management-panel h3 { margin: 0 0 8px; font-size: 17px; line-height: 1.5; }
+.management-panel p { margin: 8px 0; font-size: 15px; line-height: 1.6; color: var(--text-2); }
+.management-panel strong { font-size: 16px; }
+.management-panel :is(small, code) { font-size: 14px; }
+.management-panel small { color: var(--text-2); }
+.management-intro p { margin-bottom: 0; }
+.management-form, .management-panel .automation-form { display: grid; gap: 16px; }
+.management-form label, .management-panel .automation-form label { display: grid; gap: 8px; font-size: 14px; font-weight: 500; color: var(--text-2); }
+.management-panel :is(input:not([type="checkbox"]), select, textarea) {
+  box-sizing: border-box; width: 100%; min-width: 0; min-height: 44px; padding: 10px 12px;
+  border: 1px solid var(--border-2); border-radius: 8px; background: var(--input); color: var(--text);
+  font: inherit; font-size: 16px; font-weight: 400; line-height: 1.5;
+}
+.management-panel :is(input, textarea)::placeholder { color: var(--text-2); opacity: 1; }
+.management-panel textarea { resize: vertical; }
+.management-panel .button { min-height: 44px; height: auto; max-width: 100%; padding: 10px 14px; font-size: 14px; line-height: 1.5; white-space: normal; overflow-wrap: anywhere; }
+.management-panel .button.primary { background: var(--dsw-static-deepseek-600, #4868b2); color: #fff; }
+.management-panel .button.primary:hover:not(:disabled) { background: var(--dsw-static-deepseek-700, #35548f); }
+.management-panel :is(input, textarea, select, button):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.management-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.plugin-install-form { padding: 20px; border: 1px solid var(--border-2); border-radius: 12px; background: var(--layer-2); }
+.plugin-install-form > .button { justify-self: start; }
+.plugin-package-list { display: grid; gap: 16px; }
+.plugin-package { padding: 20px; border: 1px solid var(--border-2); border-radius: 12px; }
+.plugin-package-heading { display: flex; align-items: baseline; gap: 8px 12px; flex-wrap: wrap; }
+.plugin-package-heading > strong { flex: 1 1 100%; min-width: 0; }
+.plugin-package-heading > span, .plugin-package-heading > small { color: var(--text-2); font-size: 14px; }
+.plugin-package .management-actions { margin-top: 16px; }
+.plugin-package-details { margin-top: 16px; padding-top: 8px; border-top: 1px solid var(--border-2); overflow-wrap: anywhere; }
+.plugin-slot-source { opacity: .65; }
+.management-panel .plugin-slot-source { display: block; margin-top: 12px; opacity: 1; }
+.management-panel .plugin-slots table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.management-panel .plugin-slots :is(td, th) { padding: 8px; border-bottom: 1px solid var(--border-2); text-align: left; vertical-align: top; font-size: 15px; overflow-wrap: anywhere; }
+.management-panel .plugin-slots a { color: var(--text); text-decoration: underline; }
+.management-panel .form-error, .management-panel .automation-error { color: var(--danger); }
+@media (max-width: 600px) {
+  .management-workbench .workbench-heading { padding-inline: 16px; }
+  .management-panel { padding: 20px 16px; }
+  .plugin-install-form, .plugin-package { padding: 16px; }
+}

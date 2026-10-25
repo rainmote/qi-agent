@@ -1,8 +1,11 @@
 (ns qi.secure-files
   "Owner-only filesystem primitives for local agent state and credentials."
   (:require [clojure.java.io :as io])
-  (:import [java.nio.file FileAlreadyExistsException Files LinkOption Path]
-           [java.nio.file.attribute PosixFilePermission PosixFilePermissions]))
+  (:import [java.io IOException]
+           [java.nio.channels Channels]
+           [java.nio.file FileAlreadyExistsException Files LinkOption OpenOption Path StandardOpenOption]
+           [java.nio.file.attribute PosixFilePermission PosixFilePermissions]
+           [java.util.concurrent TimeUnit]))
 
 (def ^:private owner-directory-permissions
   #{PosixFilePermission/OWNER_READ
@@ -132,3 +135,91 @@
             (Files/isRegularFile entry (make-array LinkOption 0))
             (protect-file! entry)))))
     (str root)))
+
+(def ^:private effective-user-id
+  ;; Account names may be unavailable for container UIDs. This process never
+  ;; changes OS identity; cache the effective UID, not a display name or env var.
+  (delay
+    (try
+      (let [builder (ProcessBuilder. ["/usr/bin/id" "-u"])]
+        (.clear (.environment builder))
+        (let [process (.start builder)]
+          (try
+            (when-not (.waitFor process 2 TimeUnit/SECONDS)
+              (throw (ex-info "Timed out resolving credential owner" {})))
+            (let [output (slurp (.getInputStream process))
+                  match (re-matches #"([0-9]+)\n?" output)]
+              (when-not (and (zero? (.exitValue process)) match)
+                (throw (ex-info "Cannot resolve credential owner" {})))
+              (Long/parseLong (second match)))
+            (finally
+              (when (.isAlive process)
+                (.destroyForcibly process)
+                (.waitFor process 1 TimeUnit/SECONDS))
+              (.close (.getInputStream process))
+              (.close (.getErrorStream process))
+              (.close (.getOutputStream process))))))
+      (catch Exception error
+        (throw (ex-info "Cannot verify current credential owner"
+                        {:code :insecure-credentials} error))))))
+
+(defn- owner-file-identity [^Path target]
+  (try
+    (let [attributes (Files/readAttributes target "unix:*"
+                                           (into-array LinkOption [LinkOption/NOFOLLOW_LINKS]))
+          uid (get attributes "uid")
+          ;; Unix UIDs are unsigned, while NIO exposes them as Java ints.
+          owner (when (integer? uid) (Integer/toUnsignedLong (int uid)))
+          permissions (get attributes "permissions")]
+      (when (get attributes "isSymbolicLink")
+        (throw (ex-info "Refusing a symbolic-link credential file" {:code :insecure-credentials})))
+      (when-not (true? (get attributes "isRegularFile"))
+        (throw (ex-info "Private credential path must be a regular file" {:code :insecure-credentials})))
+      (when-not (and (= owner @effective-user-id)
+                     (some? permissions)
+                     (every? owner-file-permissions permissions))
+        (throw (ex-info "Credential file must be private and owner-only"
+                        {:code :insecure-credentials})))
+      {:file-key (get attributes "fileKey")
+       :size (get attributes "size")
+       :modified (get attributes "lastModifiedTime")
+       :owner owner
+       :permissions (set permissions)})
+    (catch UnsupportedOperationException error
+      (throw (ex-info "Cannot verify private credential file permissions"
+                      {:code :insecure-credentials} error)))))
+
+(defn assert-owner-file!
+  "Reject linked, non-regular, foreign-owned or publicly accessible state files.
+  Unlike protect-file!, this validates existing credentials without repairing them."
+  [value]
+  (let [target (path value)]
+    (owner-file-identity target)
+    (str target)))
+
+(defn read-owner-file-text!
+  "Read UTF-8 credentials through one no-follow open and verify private identity.
+  Path snapshots detect visible replacement, not sustained same-UID ABA attacks."
+  [value]
+  (let [target (path value)]
+    (try
+      (let [before (owner-file-identity target)
+            unchanged! (fn []
+                         (when-not (= before (owner-file-identity target))
+                           (throw (ex-info "Credential file changed while being read"
+                                           {:code :insecure-credentials}))))]
+        (when-not (:file-key before)
+          (throw (ex-info "Cannot verify private credential file identity"
+                          {:code :insecure-credentials})))
+        (assert-owner-file! target)
+        (with-open [channel (Files/newByteChannel
+                             target (into-array OpenOption
+                                                [StandardOpenOption/READ LinkOption/NOFOLLOW_LINKS]))
+                    input (Channels/newInputStream channel)]
+          (unchanged!)
+          (let [text (slurp input :encoding "UTF-8")]
+            (unchanged!)
+            text)))
+      (catch IOException error
+        (throw (ex-info "Could not safely read private credential file"
+                        {:code :insecure-credentials} error))))))

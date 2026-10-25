@@ -995,22 +995,41 @@ export function App() {
   useLayoutEffect(() => {
     const input = composerInput.current;
     if (!input) return;
+    const view = input.closest(".session-view");
+    const wrap = input.closest(".composer-wrap");
+    const content = view?.querySelector(".timeline");
+    // Reserve the measured trust/approval controls, toolbar and summary before
+    // growing a draft. Their height changes with content and narrow windows.
+    const measure = () => ({
+      width: input.clientWidth,
+      available: view && wrap && content
+        ? view.getBoundingClientRect().bottom - content.getBoundingClientRect().top
+          - wrap.getBoundingClientRect().height + input.getBoundingClientRect().height
+        : 336,
+    });
+    let previous = measure();
     const resize = () => {
+      const minimum = parseFloat(getComputedStyle(input).minHeight) || (activeSession ? 36 : 52);
+      const maximum = Math.max(minimum, Math.min(336, Math.floor(measure().available)));
       input.style.height = "0px";
-      const nextHeight = input.value ? Math.max(activeSession ? 36 : 52, Math.min(input.scrollHeight, 336)) : activeSession ? 36 : 52;
+      const nextHeight = input.value ? Math.max(minimum, Math.min(input.scrollHeight, maximum)) : minimum;
       input.style.height = `${nextHeight}px`;
-      input.style.overflowY = input.scrollHeight > 336 ? "auto" : "hidden";
+      input.style.overflowY = input.value && input.scrollHeight > input.clientHeight ? "auto" : "hidden";
+      previous = measure();
     };
     resize();
-    let width = input.clientWidth;
+    let frame = 0;
     const observer = new ResizeObserver(() => {
-      if (input.clientWidth === width) return;
-      width = input.clientWidth;
-      resize();
+      const next = measure();
+      if (next.width === previous.width && next.available === previous.available) return;
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(resize);
     });
-    observer.observe(input);
-    return () => observer.disconnect();
-  }, [activeSession?.id, composer]);
+    // Observe the fixed siblings too: a zero-height timeline can move without
+    // resizing when the run overview expands. Rebind when that row is inserted.
+    for (const element of [input, view, ...Array.from(view?.children || [])]) if (element) observer.observe(element);
+    return () => { observer.disconnect(); cancelAnimationFrame(frame); };
+  }, [activeSession?.id, composer, phase, pendingOperation, stopping]);
 
   const chooseCommand = (index = commandIndex) => {
     const command = commandSuggestions[index];
@@ -1308,7 +1327,7 @@ export function App() {
             ? `${phaseLabel(phase)} ${projection.state.compaction["completed-chunks"]}/${projection.state.compaction["total-chunks"]}` : phase}
           turns={projection?.summary.turns ?? 0} steps={projection?.summary.steps ?? 0}
           calls={projection?.summary.calls ?? 0} waitingCount={projection?.interactions.length ?? 0}
-          context={contextStatus} />}
+          context={contextStatus} compact={stepsView === "compact" && conversationView === "chat"} />}
         <div className={`timeline ${conversationView === "trajectory" ? "trajectory-mode" : ""}`} ref={timeline} tabIndex={0} aria-label={t("会话内容")}>
           {conversationView === "chat" && projection && <Timeline key={activeSession.id} projection={projection} scrollRef={timeline} pluginSlots={pluginSlots} view={stepsView} collapseTiming={stepsCollapseTiming} />}
           {conversationView === "trajectory" && <Trajectory key={activeSession.id} events={projection?.events || []} />}
@@ -1348,7 +1367,8 @@ export function App() {
       <DesktopBrowser workspaceId={workspaceId} sessionId={activeSession?.id} newTabSerial={browserNewTabSerial} visible={workbench === "browser" && !settingsOpen && !shortcutsOpen && !workspaceDialogOpen && !fullAccessDialogOpen && !trust.dialog && !projection?.interactions.length}
         onClose={() => setWorkbench(null)} />
     </section>}
-    {workbench && workbench !== "browser" && workspaceId && <section ref={workbenchElement} className="workbench-drawer" aria-label={t("工作台")}
+    {workbench && workbench !== "browser" && workspaceId && <section ref={workbenchElement}
+      className={`workbench-drawer${workbench === "plugins" || workbench === "automation" ? " management-workbench" : ""}`} aria-label={t("工作台")}
       role={workbenchModal ? "dialog" : undefined} aria-modal={workbenchModal || undefined} onKeyDown={event => {
         if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setWorkbench(null); }
         if (event.key === "Tab") {

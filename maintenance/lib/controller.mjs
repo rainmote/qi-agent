@@ -371,13 +371,14 @@ export async function implement({ root, id, lock, driver, budget, execute = cont
   if (state.status !== 'scoped') throw new Error('Implementation requires a freshly scoped task');
   const usage = usageLedger(events.filter((event) => event.type === 'usage/request' && event.data.task_id === id).map((event) => event.data));
   const brokered = driver.mode === 'qi-budgeted';
+  if (driver.paid === true && !brokered) throw new Error('Paid execution requires the host budget broker');
   if (brokered) {
     validateBudget(budget);
     if (budgetSnapshot(events, id).uncertain.length) return transition(root, lock, id, state.revision, 'blocked', { reason: 'unknown-cost' });
   }
   const denied = mayAttempt({ policy, startedAt: state.started_at, attempts: state.attempts, usage, paid: driver.paid && !brokered, unattended: driver.unattended });
   if (denied) return transition(root, lock, id, state.revision, 'blocked', { reason: denied });
-  if ((driver.unattended && !brokered) || !['offline', 'qi-supervised', 'qi-budgeted'].includes(driver.mode)) throw new Error('Unattended execution requires the host budget broker');
+  if ((driver.unattended && !brokered) || !['offline', 'qi-budgeted'].includes(driver.mode)) throw new Error('Unattended execution requires the host budget broker');
   if (driver.unattended && !events.some((e) => e.type === 'queue/enqueued' && e.data.task_id === id &&
       e.data.contract_hash === state.contract_hash && e.data.budget_hash === digest(encode(budget)) && e.data.controller_sha === state.controller_sha)) throw new Error('Missing exact task/controller/budget authorization');
   if ((driver.mode === 'offline') !== (driver.paid === false)) throw new Error('Paid status must match the driver mode');
@@ -405,8 +406,8 @@ export async function implement({ root, id, lock, driver, budget, execute = cont
       argv = ['node', '/controller/maintenance/relay.mjs', '/gateway', ...argv];
     }
     execution = await execute({ image: task.image, argv, workspace: state.workspace, readonly: false, mounts,
-      timeoutMs: Math.max(1, deadline - Date.now()), network: driver.paid === true && !brokered,
-      envNames: driver.paid === true && !brokered ? ['OPENAI_API_KEY'] : [], name: state.container, owner: state.container_owner,
+      timeoutMs: Math.max(1, deadline - Date.now()), network: false,
+      envNames: [], name: state.container, owner: state.container_owner,
       environment: state.environment_binding, resources: task.resources, shouldStop: async () => !!broker?.failure() || await paused() });
   } catch (error) {
     if (execute === containerCommand) {

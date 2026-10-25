@@ -1,5 +1,7 @@
 /* finesse · register=product · shell=compact-sidebar + unified-task-surface · density=compact */
 .desktop-preview-notice { flex: 0 0 auto; margin: 0; padding: 8px 18px; color: var(--text-2); background: var(--layer-1); border-bottom: 1px solid var(--border-2); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.main-panel:has(> .desktop-preview-notice) { display: flex; flex-direction: column; }
+.desktop-preview-notice + :is(.new-session-view, .session-view) { flex: 1; height: auto; }
 :root {
   font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   font-synthesis: none;

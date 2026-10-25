@@ -67,10 +67,10 @@ export function PluginSlots({ slots, slot = "panel", toolName, data }: {
   if (!visible.length) return null;
   return <div className="plugin-slots" style={{ display: "grid", gap: 12, minWidth: 0 }}>
     {visible.map((entry) => <section key={`${entry["package-id"]}:${entry.id}`} aria-label={entry.title}
-      style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 14, minWidth: 0, overflowWrap: "anywhere" }}>
+      style={{ border: "1px solid var(--border-2)", borderRadius: 10, padding: 14, minWidth: 0, overflowWrap: "anywhere" }}>
       <strong>{entry.title}</strong>
       <SlotContent slot={entry} data={data === undefined ? entry.data : data} />
-      <small style={{ opacity: 0.65 }}>{entry["package-id"]} · {entry.version}</small>
+      <small className="plugin-slot-source">{entry["package-id"]} · {entry.version}</small>
     </section>)}
   </div>;
 }

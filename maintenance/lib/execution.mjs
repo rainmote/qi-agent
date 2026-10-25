@@ -112,6 +112,8 @@ export async function cleanupContainer(name, owner, run = runProcess, environmen
 export async function containerCommand({ image, argv, workspace, readonly = true, mounts = [], timeoutMs = 30000, envNames = [], network = false,
   name = 'qi-maint-' + randomUUID(), owner = randomUUID(), resources, environment, shouldStop = async () => false }) {
   const deadline = Date.now() + timeoutMs;
+  if (!Array.isArray(envNames) || envNames.length) throw new Error('Credential passthrough is forbidden; use the host broker');
+  if (network !== false) throw new Error('Network access is forbidden in maintenance containers; use the host broker');
   immutableImage(image);
   const limits = resourceLimits(resources);
   if (!Array.isArray(argv) || !argv.length || argv.some((v) => typeof v !== 'string' || v.includes('\0'))) throw new Error('Expected a nonempty argv array');
@@ -119,7 +121,7 @@ export async function containerCommand({ image, argv, workspace, readonly = true
   const args = ['run', '--rm', '--name', name, '--init', '--read-only', '--cap-drop=ALL', '--security-opt=no-new-privileges',
     '--label', 'qi.maintenance.owner=' + owner,
     '--pids-limit=' + limits.pids, '--memory=' + limits.memory_mb + 'm', '--memory-swap=' + limits.memory_mb + 'm', '--cpus=' + limits.cpus,
-    `--user=${process.getuid?.() || 1000}:${process.getgid?.() || 1000}`, '--network', network ? 'bridge' : 'none',
+    `--user=${process.getuid?.() || 1000}:${process.getgid?.() || 1000}`, '--network', 'none',
     '--tmpfs', '/tmp:rw,exec,mode=1777,size=' + limits.tmp_mb + 'm', '--env', 'HOME=/tmp/qi-home', '--env', 'NO_COLOR=1'];
   if (readonly) args.push('--mount', `type=bind,src=${workspace},dst=/inputs,readonly`, '--tmpfs', '/work:rw,exec,mode=1777,size=' + limits.work_mb + 'm');
   else args.push('--mount', `type=bind,src=${workspace},dst=/work`);
@@ -127,11 +129,6 @@ export async function containerCommand({ image, argv, workspace, readonly = true
     if (!path.isAbsolute(source) || !/^\/(controller|profile|acceptance|gateway)(\/|$)/.test(target) || /[,\0\r\n]/.test(source + target) ||
         (writable && target !== '/gateway')) throw new Error('Invalid trusted mount');
     args.push('--mount', `type=bind,src=${source},dst=${target}${writable ? '' : ',readonly'}`);
-  }
-  for (const key of envNames) {
-    if (key !== 'OPENAI_API_KEY') throw new Error('Only the explicit maintenance provider credential is allowed');
-    if (!process.env[key]) throw new Error('Missing provider credential: ' + key);
-    args.push('--env', key);
   }
   if (!path.isAbsolute(workspace) || /[,\0\r\n]/.test(workspace)) throw new Error('Invalid workspace');
   args.push('--workdir', '/work', image, 'sh', '-c',

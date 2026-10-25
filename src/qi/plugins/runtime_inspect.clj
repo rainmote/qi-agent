@@ -44,7 +44,7 @@
                          "Lists loaded plugins, model tools, registered service ownership, "
                          "commands, and hook counts. Service values and executable functions "
                          "are never returned.")
-       :strict true
+       :strict false
        :parameters {:type "object"
                     :additionalProperties false
                     :properties

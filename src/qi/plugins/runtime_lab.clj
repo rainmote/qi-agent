@@ -342,7 +342,7 @@
                            "with bounded state; symbols, Vars, Java interop, filesystem, network, eval, "
                            "and load-string are unavailable.")
          :execution-mode :sequential
-         :strict true
+         :strict false
          :parameters {:type "object"
                       :additionalProperties false
                       :properties

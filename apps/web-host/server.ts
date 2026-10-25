@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { constants, createReadStream } from "node:fs";
 import { access, readFile, readdir, realpath, rm, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -20,6 +20,11 @@ import { readSessionReference, resolveReferences } from "./workspace-references.
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const defaultStaticRoot = join(repositoryRoot, "apps", "web", "dist");
 const cookieName = "qi_agent_web";
+// Commit a same-origin document before navigating with the Strict cookie.
+// WebKit withholds that cookie throughout a cross-site HTTP redirect chain.
+// Build the target from the current URL without reflecting any request text.
+const bootstrapNavigation = 'const target = new URL(window.location.href); target.search = ""; target.hash = ""; window.location.replace(target.href);';
+const bootstrapScriptHash = createHash("sha256").update(bootstrapNavigation).digest("base64");
 const mimeTypes: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
   ".html": "text/html; charset=utf-8",
@@ -354,11 +359,14 @@ export async function startWebHost(options: WebHostOptions = {}) {
         return json(response, status.ok ? 200 : 503, status);
       }
       if (url.searchParams.get("token") === token && request.method === "GET") {
+        securityHeaders(response);
         response.setHeader("Set-Cookie",
           `${cookieName}=${token}; HttpOnly; SameSite=Strict; Path=/`
           + (networkExposed ? "; Secure" : ""));
-        response.writeHead(303, { Location: url.pathname || "/" });
-        return response.end();
+        response.setHeader("Content-Security-Policy",
+          `default-src 'none'; script-src 'sha256-${bootstrapScriptHash}'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`);
+        response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+        return response.end(`<!doctype html><html><head><meta charset="utf-8"><title>qì agent</title></head><body>正在连接本地服务…<script>${bootstrapNavigation}</script></body></html>`);
       }
       if (!hasToken(request, token)) {
         return json(response, 401, { ok: false, error: { message: "Open the authenticated URL printed by bb web." } });

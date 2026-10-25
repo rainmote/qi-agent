@@ -88,7 +88,7 @@ export function AutomationPanel({ rpc, agentId, readOnly = false }: { rpc: Autom
     () => { setEditingGoal(null); setObjective(""); });
   };
   const disabled = busy || readOnly;
-  return <div className="automation-panel" aria-busy={busy}>
+  return <div className="management-panel automation-panel" aria-busy={busy}>
     <div className="automation-toolbar"><h2>{t("计划任务与长期目标")}</h2>
       <button type="button" className="button secondary" disabled={busy} onClick={() => {
         const generation = scope.current; setBusy(true); setError("");

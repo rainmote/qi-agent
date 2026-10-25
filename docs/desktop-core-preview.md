@@ -43,6 +43,33 @@ npm run desktop:verify-preview
 不制作/挂载 DMG、不发布、不自动安装，不使用签名密钥或公证服务。
 用户试用应直接打开交付的 `.app`，无需重走构建；本机 ad-hoc 包不等于已公证发行。
 
+桌面从 Tauri 页面进入本地 Host 时，认证先经过受 CSP 限制的同源落地页，再移除 URL 中的
+token；保留 `HttpOnly + SameSite=Strict`，避免 WebKit 在跨站 303 链中未发送 Cookie 而显示 401。
+原生验收使用 schema 2：两个独立进程共享私有 fixture 的 state 和专用持久 WebKit store。
+必须同时观察到无 token 的地址、真实可输入 App DOM，以及 WebKit 自身仅通过 Cookie 的
+`/api/bootstrap` 成功；`PageLoadFinished` 和 Rust Bearer 探针不再单独构成启动通过。
+第一阶段清理未知时不启动第二阶段，测试不复用用户应用状态或凭据。
+
+插件与自动化管理使用独立的 720px 抽屉样式，保留内容内边距；窄窗口改为单列表单。
+正文为 15px、表单输入为 16px、说明与状态至少 14px，卡片和按钮使用有效的主题颜色。
+这些样式不改变插件安装、任务调度和权限行为。页面验收覆盖明暗主题及三种窗口尺寸，
+按钮参数与只读状态使用离线 fixture 检查；该证据不能替代真实安装或自动化执行验收。
+
+界面与会话采用本地系统字体，中文使用苹方等本机后备字体；自定义字体仍优先，缺失时
+回退到完整的无衬线或等宽字体栈。未设置时，会话默认 15px、代码默认 13px，标题为
+600 字重，正文与代码行高随字号缩放。已有显式字体和字号保持原值，不下载远程字体。
+Preview 提示条与会话共享窗口高度，输入框随字号增高，避免底部发送按钮被裁切。
+
+ChatGPT 登录复用本机 Codex 的正常凭据读取路径，不把登录信息写入应用包。
+含可选参数的内置工具使用 `strict: false`；两个 Responses 适配器对未声明的
+`strict` 也明确发送 `false`，避免服务端将可选字段改为必填。显式且兼容的
+`strict: true` 保留，执行前仍使用原 schema 做本地参数校验并经过原权限流程。
+协议依据见 [OpenAI function calling](https://developers.openai.com/api/docs/guides/function-calling#strict-mode)。
+
+桌面应用正常退出时，已确认清理的会话保留为可恢复的 inactive 状态；再次打开
+复用原会话、worker 身份和配置快照。显式停止、归档以及普通 daemon 的退出语义
+保持不变。清理结果未知时不会发布可恢复状态，未结算任务记录为 uncertain。
+
 原生终端沿用 [明确的清理与权限范围](desktop-workspace-runtime.md)：登记进程组与
 直接子进程回收，脱组后代和 TTY 路径复用风险仍存在。它的组件验收已完成；本包还
 须实际验证启动、配置/会话、合成命令/终端、关闭和再次启动。Office、Platform、

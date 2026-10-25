@@ -5,6 +5,8 @@ import { createServer, request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { createHash } from "node:crypto";
+import { runInNewContext } from "node:vm";
 import { startWebHost } from "./server.js";
 import { WorkspaceRegistry, workspaceId } from "./workspaces.js";
 import type { AgentWorker } from "./worker.js";
@@ -101,6 +103,50 @@ test("web transport rejects malformed Host without terminating the server", { ti
     }
     assert.equal((await fetch(`${fixture.base}/health`)).status, 200);
     assert.equal((await fetch(`${fixture.base}/api/bootstrap`)).status, 401);
+  } finally { await fixture.close(); }
+});
+
+test("token bootstrap commits a protected same-origin document before using the Strict cookie", async () => {
+  const fixture = await streamFixture();
+  try {
+    for (const path of ["/", "//outside.invalid/path", "/%3Cscript%3E"]) {
+      const url = `${fixture.base}${path}?token=stream-test&return=https://outside.invalid/`;
+      const response = await fetch(url, { redirect: "manual" });
+      assert.equal(response.status, 200, "bootstrap must commit a document instead of a cross-site HTTP redirect");
+      assert.equal(response.headers.get("location"), null);
+      assert.match(response.headers.get("content-type") || "", /^text\/html/);
+      assert.equal(response.headers.get("cache-control"), "no-store");
+      assert.equal(response.headers.get("referrer-policy"), "no-referrer");
+      const cookie = response.headers.get("set-cookie") || "";
+      assert.match(cookie, /^qi_agent_web=stream-test; HttpOnly; SameSite=Strict; Path=\/$/);
+      const body = await response.text();
+      assert.equal(body.includes("stream-test"), false, "token must not be reflected in the document");
+      assert.equal(body.includes("outside.invalid"), false, "request parameters must not be reflected");
+      const scripts = [...body.matchAll(/<script>([\s\S]*?)<\/script>/g)];
+      assert.equal(scripts.length, 1);
+      const script = scripts[0][1];
+      const digest = createHash("sha256").update(script).digest("base64");
+      assert.equal(response.headers.get("content-security-policy"),
+        `default-src 'none'; script-src 'sha256-${digest}'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`);
+      let destination = "";
+      runInNewContext(script, { URL, window: { location: { href: url, replace: (target: string) => { destination = target; } } } });
+      const target = new URL(destination);
+      assert.equal(target.origin, fixture.base);
+      assert.equal(target.pathname, new URL(url).pathname);
+      assert.equal(target.search, "");
+      assert.equal(target.hash, "");
+      assert.equal((await fetch(`${fixture.base}/api/bootstrap`, { headers: { Cookie: cookie.split(";")[0] } })).status, 200);
+    }
+    for (const path of ["/", "/?token=wrong", "/api/bootstrap?token=wrong"]) {
+      const response = await fetch(`${fixture.base}${path}`);
+      assert.equal(response.status, 401);
+      assert.equal(response.headers.get("set-cookie"), null);
+    }
+    const foreign = await fetch(`${fixture.base}/api/workspaces`, {
+      method: "POST", headers: { Cookie: "qi_agent_web=stream-test", Origin: "https://outside.invalid", "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "/tmp" }),
+    });
+    assert.equal(foreign.status, 403);
   } finally { await fixture.close(); }
 });
 
@@ -651,7 +697,7 @@ test("network-exposed web host accepts an HTTPS proxy origin and secures its coo
       headers: { "X-Forwarded-Host": proxyHeaders["X-Forwarded-Host"] },
       redirect: "manual",
     });
-    assert.equal(cookie.status, 303);
+    assert.equal(cookie.status, 200);
     assert.match(cookie.headers.get("set-cookie") || "", /; Secure$/);
 
     const accepted = await fetch(`${base}/api/workspaces`, {

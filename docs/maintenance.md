@@ -56,7 +56,12 @@ node maintenance/run.mjs run --state /absolute/private/maintenance-state \
 node maintenance/run.mjs verify --state /absolute/private/maintenance-state --id TASK_ID
 ```
 
-要实际调用 qi，操作人显式执行 `run --supervised-live`，只传入环境中的 `OPENAI_API_KEY`。这个命令会产生模型请求，不是离线验收。已验证的基线和有效 red 必须先通过，才允许写入者开始。请求失败不会绕过验收。
+要实际调用 qi，操作人显式执行 `run --budgeted-live --budget /absolute/budget.json`；
+`--supervised-live --budget /absolute/budget.json` 是受监督 broker 模式的兼容入口。
+`run` 命令的 API 付费实现都经过宿主费用代理；容器断网，不接收宿主 API key 或其他环境变量透传。
+旧 `qi-supervised` 直连 driver 被拒绝。离线/无付费路径保持原行为。
+这是会产生模型请求的显式操作；已验证的基线和有效 red 必须先通过，才允许写入者开始。
+请求失败不会绕过验收。预算格式见 [有界无人值守维护](unattended-maintenance.md)。
 
 预算为一个活动任务、一个写入者、最多三次实现尝试、45 分钟总墙钟，其中 10 分钟预留给验收和保存。失败后 `retry --revision N` 只能重开已知失败，沿用原期限、累计次数，使用新 run_id。相同交付指纹再次失败会因无进展停止。旧直连模式费用账本不完整时，不允许无人值守付费或第二次付费尝试；新的 budgeted 模式由宿主代理逐请求预留额度，未知调用仍阻断后续任务。
 

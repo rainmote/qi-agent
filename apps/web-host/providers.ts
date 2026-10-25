@@ -1,4 +1,5 @@
-import { readFile, stat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { open, readFile, stat } from "node:fs/promises";
 import { isIP } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -128,6 +129,38 @@ function validateBaseUrl(value: string): string {
   return parsed.toString().replace(/\/$/, "");
 }
 
+const environmentBindings: Record<string, { protocols: ProviderProtocol[]; baseUrl: string }> = {
+  OPENAI_API_KEY: { protocols: ["openai-responses", "openai-completions"], baseUrl: "https://api.openai.com/v1" },
+  DEEPSEEK_API_KEY: { protocols: ["openai-completions"], baseUrl: "https://api.deepseek.com" },
+  ANTHROPIC_API_KEY: { protocols: ["anthropic-messages"], baseUrl: "https://api.anthropic.com" },
+};
+
+function validateEnvironmentCredential(protocol: ProviderProtocol, baseUrl: string, env?: string): void {
+  if (env === undefined) return;
+  const binding = environmentBindings[env];
+  if (!binding || !binding.protocols.includes(protocol) || baseUrl !== binding.baseUrl) {
+    throw new Error("Credential environment binding does not match its canonical endpoint/protocol");
+  }
+}
+
+async function readPrivateSettings(path: string): Promise<string> {
+  let handle;
+  try {
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const info = await handle.stat();
+    if (!info.isFile() || (info.mode & 0o077) !== 0
+      || (process.getuid && info.uid !== process.getuid())) {
+      throw new Error("Provider credential file must be private and owner-only");
+    }
+    return await handle.readFile("utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ELOOP") {
+      throw new Error("Refusing a symbolic-link credential file");
+    }
+    throw error;
+  } finally { await handle?.close(); }
+}
+
 function normalizeModels(models: ProviderModelSettings[]): ProviderModelSettings[] {
   if (!Array.isArray(models) || models.length === 0) throw new Error("至少添加一个模型");
   const seen = new Set<string>();
@@ -164,12 +197,17 @@ function normalizeProvider(input: ProviderSettings, existing?: ProviderSettings)
   }
   const name = builtinNames.get(id) || String(input.name || "").trim();
   if (!name) throw new Error("显示名称不能为空");
-  const apiKey = protocol === "chatgpt-subscription" ? undefined
-    : typeof input.apiKey === "string" && input.apiKey.trim() ? input.apiKey.trim() : existing?.apiKey;
+  const explicitKey = typeof input.apiKey === "string" ? input.apiKey.trim() : "";
+  const apiKey = protocol === "chatgpt-subscription" ? undefined : explicitKey || existing?.apiKey;
   const baseUrl = validateBaseUrl(String(input.baseUrl || ""));
+  if (apiKey && !explicitKey && baseUrl !== existing?.baseUrl) {
+    throw new Error("更换 API 地址时请重新输入密钥");
+  }
   if (protocol === "chatgpt-subscription" && baseUrl !== "https://chatgpt.com/backend-api/codex") {
     throw new Error("ChatGPT 订阅凭据只能发送到官方 Codex 接口");
   }
+  const apiKeyEnv = protocol === "chatgpt-subscription" ? undefined : input.apiKeyEnv ?? existing?.apiKeyEnv;
+  validateEnvironmentCredential(protocol, baseUrl, apiKeyEnv);
   const models = input.models.map((model) => {
     const previous = existing?.models.find((entry) => entry.id === model.id);
     return previous ? { ...previous, ...model } : model;
@@ -180,8 +218,7 @@ function normalizeProvider(input: ProviderSettings, existing?: ProviderSettings)
     protocol,
     baseUrl,
     ...(apiKey ? { apiKey } : {}),
-    ...(protocol !== "chatgpt-subscription" && (input.apiKeyEnv || existing?.apiKeyEnv)
-      ? { apiKeyEnv: input.apiKeyEnv || existing?.apiKeyEnv } : {}),
+    ...(apiKeyEnv ? { apiKeyEnv } : {}),
     models: normalizeModels(models),
     builtin: Boolean(existing?.builtin || input.builtin),
   };
@@ -269,7 +306,7 @@ export class ProviderRegistry {
     await ensurePrivateDirectory(this.stateDirectory);
     for (const provider of defaultProviders) this.#providers.set(provider.id, provider);
     try {
-      const parsed = JSON.parse(await readFile(this.statePath, "utf8")) as ProviderState;
+      const parsed = JSON.parse(await readPrivateSettings(this.statePath)) as ProviderState;
       for (const raw of parsed.providers || []) {
         const existing = this.#providers.get(String(raw.id || ""));
         const provider = normalizeProvider(existing?.builtin
@@ -333,7 +370,16 @@ export class ProviderRegistry {
       throw new Error("ChatGPT 订阅模型由本地登录提供，无需调用 API 获取");
     }
     const baseUrl = validateBaseUrl(String(input.baseUrl || stored?.baseUrl || ""));
-    const key = String(input.apiKey || stored?.apiKey
+    const explicitKey = String(input.apiKey || "").trim();
+    const storedKey = String(stored?.apiKey || "").trim();
+    if (!explicitKey && storedKey && baseUrl !== stored?.baseUrl) {
+      throw new Error("更换 API 地址时请重新输入密钥");
+    }
+    const settingsKey = explicitKey || storedKey;
+    if (!settingsKey && stored?.apiKeyEnv) {
+      validateEnvironmentCredential(stored.protocol, baseUrl, stored.apiKeyEnv);
+    }
+    const key = String(settingsKey
       || (stored?.apiKeyEnv ? process.env[stored.apiKeyEnv] : "") || "").trim();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 15_000);

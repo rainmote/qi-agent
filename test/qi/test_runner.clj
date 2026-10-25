@@ -14,6 +14,9 @@
             [qi.runtime-recovery-test]
             [qi.run-outcome-test]
             [qi.openai-integrity-test]
+            [qi.credential-boundary-test]
+            [qi.owner-uid-test]
+            [qi.responses-schema-test]
             [qi.tool-recovery-test]
             [qi.context-integrity-test]
             [qi.midturn-compaction-test]
@@ -3816,7 +3819,8 @@
         settings (io/file directory "providers.json")
         write-settings!
         (fn [providers]
-          (spit settings (json/generate-string {:version 1 :providers providers})))]
+          (spit settings (json/generate-string {:version 1 :providers providers}))
+          (fs/set-posix-file-permissions settings "rw-------"))]
     (try
       (write-settings!
        [{:id "acme"
@@ -3884,6 +3888,7 @@
                                                                 :models models}]})))]
     (try
       (write! (mapv model ["A" "B" "C"]))
+      (fs/set-posix-file-permissions file "rw-------")
       (let [ctx (plugin/boot! {:plugins [{:ns 'qi.plugins.model-registry :config {:default-provider :review}}
                                        {:ns 'qi.plugins.auth-store}
                                        {:ns 'qi.plugins.provider-settings :config {:path (str file)}}]})]
@@ -3940,6 +3945,7 @@
                 :baseUrl "https://chatgpt.com/backend-api/codex"
                 :models [{:id "gpt-5.6-sol" :name "gpt-5.6-sol"}
                          {:id "gpt-5.6-terra" :name "gpt-5.6-terra"}]}]}))
+      (fs/set-posix-file-permissions settings "rw-------")
       (let [ctx (plugin/boot!
                  {:plugins
                   [{:ns 'qi.plugins.model-registry}
@@ -4282,10 +4288,65 @@
           (kernel/dispose-all! ctx)
           (delete-tree! directory))))))
 
+
+(deftest provider-settings-binds-environment-credentials-to-endpoints
+  (let [directory (fs/create-temp-dir)
+        file (io/file (str directory) "providers.json")
+        boot (fn [] (plugin/boot!
+                     {:plugins [{:ns 'qi.plugins.model-registry}
+                                {:ns 'qi.plugins.auth-store}
+                                {:ns 'qi.plugins.provider-settings :config {:path (str file)}}]}))]
+    (try
+      (doseq [provider [{:id "openai" :protocol "openai-responses"
+                        :baseUrl "https://example.com/v1" :apiKeyEnv "OPENAI_API_KEY"}
+                       {:id "openai" :protocol "openai-completions"
+                        :baseUrl "https://example.com/v1" :apiKeyEnv "OPENAI_API_KEY"}
+                       {:id "deepseek" :protocol "openai-completions"
+                        :baseUrl "https://api.deepseek.com:8443" :apiKeyEnv "DEEPSEEK_API_KEY"}
+                       {:id "other" :protocol "anthropic-messages"
+                        :baseUrl "https://api.anthropic.com" :apiKeyEnv "HOME"}]]
+        (spit file (json/generate-string {:version 1 :providers [(assoc provider :models [{:id "test"}])]}))
+        (fs/set-posix-file-permissions file "rw-------")
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"[Cc]redential" (boot))
+            (str "reject unsafe environment binding: " (dissoc provider :apiKeyEnv))))
+      (spit file (json/generate-string {:version 1 :providers
+                                      [{:id "openai" :protocol "openai-responses"
+                                        :baseUrl "https://api.openai.com/v1"
+                                        :apiKey "explicit-test-key" :models [{:id "test"}]}]}))
+      (fs/set-posix-file-permissions file "rw-------")
+      (let [ctx (boot)]
+        (try (is (= {:api-key "explicit-test-key"}
+                    ((:resolve! (kernel/require-service ctx :auth/store)) :openai)))
+             (finally (kernel/dispose-all! ctx))))
+      (fs/set-posix-file-permissions file "rw-r--r--")
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"[Oo]wner|[Pp]rivate" (boot)))
+      (let [link (io/file (str directory) "linked.json")]
+        (fs/set-posix-file-permissions file "rw-------")
+        (fs/create-sym-link link file)
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"[Ss]ymbolic"
+              (plugin/boot! {:plugins [{:ns 'qi.plugins.model-registry}
+                                      {:ns 'qi.plugins.auth-store}
+                                      {:ns 'qi.plugins.provider-settings :config {:path (str link)}}]}))))
+      (finally (fs/delete-tree directory)))))
+
+(deftest responses-direct-entry-and-generate-enforce-credential-scope
+  (let [ctx (kernel/create-context)
+        config {:model "test" :base-url "https://example.com/v1" :api-key "must-not-leak"}]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Refusing"
+          (qi.plugins.openai-responses/provider-entry ctx config)))
+    (with-redefs [http/post (fn [& _] (throw (ex-info "Unexpected HTTP dispatch" {})))]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Refusing"
+            (qi.plugins.openai-responses/generate ctx config {:messages []}))))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"[Cc]redential"
+          (qi.plugins.openai-responses/provider-entry ctx
+            (assoc config :allow-custom-endpoint true :api-key-env "OPENAI_API_KEY"))))
+    (is (map? (qi.plugins.openai-responses/provider-entry ctx
+                (assoc config :allow-custom-endpoint true :credential-source :settings))))))
+
 (defn -main []
   (let [{:keys [fail error]}
         (run-tests 'qi.test-runner 'qi.run-outcome-test 'qi.openai-integrity-test 'qi.tool-recovery-test 'qi.context-integrity-test 'qi.midturn-compaction-test 'qi.generation-test 'qi.provenance-test
-                   'qi.web-test 'qi.presets-test
+                   'qi.web-test 'qi.presets-test 'qi.responses-schema-test 'qi.credential-boundary-test 'qi.owner-uid-test
                    'qi.runtime-inspect-test 'qi.runtime-lab-test
                    'qi.session-title-test 'qi.runtime-recovery-test
                    'qi.remote-snapshot-test 'qi.remote-interaction-cancel-test

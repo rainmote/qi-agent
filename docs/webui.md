@@ -27,7 +27,9 @@ bb web
 
 默认从 `127.0.0.1:3080` 开始监听；端口已占用时会逐一尝试后续端口，直至成功或到达端口
 范围上限。启动日志会打印一个只使用一次的带 token URL；首次打开后，
-Host 把随机 token 换成 `HttpOnly + SameSite=Strict` Cookie，并重定向到不含 token 的地址。
+Host 把随机 token 换成 `HttpOnly + SameSite=Strict` Cookie，先提交仅允许固定脚本的同源落地页，
+再导航到不含 token 的地址。落地页禁止缓存和 Referrer，不反射请求参数；它避免 WebKit
+在跨站 HTTP 重定向链中扣留 Strict Cookie，认证和 Origin 检查保持不变。
 可以显式选择首个工作区或端口：
 
 ```bash
@@ -149,6 +151,8 @@ SSE 客户端断开都会默认 deny。最终 policy decision 仍作为 `approva
 集中到“+”菜单，保留访问权限、模型、上下文和发送/停止控件，支持中文输入法与键盘导航。
 新会话将工作区、Agent 模式、输入框和快捷开始放在同一个任务区；会话标题、对话/轨迹
 切换及详情入口共用一行，正文与输入框保持同宽。手机导航独立于桌面的侧栏收起状态。
+会话输入框按当前窗口的可用高度增长，先为信任提示、审批、工具栏和底部状态条留位；
+长草稿超出可用高度时在输入框内滚动。只缩小窗口高度或展开运行详情，也会重新计算，空输入不因占位文字出现滚动条。
 同一步的工具调用默认收成类别与数量摘要，展开后可逐项查看参数、结果、截图和插件输出。
 失败提示在收起时仍可见，停止后缺少结果的调用显示“结果未确认”。
 模型超过四个时提供搜索；菜单支持方向键、Home/End、Escape 和焦点返回，并按视口自动定位。
@@ -161,10 +165,14 @@ Host 的边界：
 - 浏览器只能打开 allowlist 中经过 `realpath` 解析的工作区，会话路径完全由 Host 生成；
 - 远程命令拒绝带任意目标路径的 `/fork`，运行时状态不会返回 context 正文或认证信息；
 - session JSONL、工作区清单和凭据都不会打包进前端产物。
-- 模型 API 密钥只写入本机 Web Host 状态目录的 `providers.json`，文件权限为 `0600`；
+- Web Host 与 worker 读取 `providers.json` 时拒绝符号链接、非当前用户所有或组/其他用户可访问的文件，
+  不会通过改权限掩盖已有的不安全设置。模型 API 密钥只写入本机 Web Host 状态目录，文件权限为 `0600`；
   列表和保存响应只返回“是否已配置”，不会把密钥回传给浏览器。
 - OpenAI API 与 ChatGPT 订阅是两个独立提供方。前者使用 `OPENAI_API_KEY` 或 Web
-  保存的 API Key；后者自动检查 `$CODEX_HOME/auth.json`（默认 `~/.codex/auth.json`）的
+  保存的 API Key；环境变量引用仅允许 `OPENAI_API_KEY`、`DEEPSEEK_API_KEY`、`ANTHROPIC_API_KEY`，
+  分别绑定固定的官方地址和协议，编辑地址或发现模型时同样校验。自定义端点使用显式保存/输入的 key；
+  Responses 注册与请求入口默认都只接受官方地址，Web 用 `:allow-custom-endpoint true` 与
+  `:credential-source :settings` 显式启用自定义 key，禁止回退读取宿主环境。后者自动检查 `$CODEX_HOME/auth.json`（默认 `~/.codex/auth.json`）的
   本地 Codex 登录状态。Web 只返回状态和文件路径，不返回 access token、account id 或
   refresh token；过期、格式无效及权限过宽会分别显示为不可用状态。
 - `/health/live` 只检查进程存活；`/health/ready` 还会检查静态产物、运行配置、daemon
@@ -205,3 +213,41 @@ Vite production build，以及桌面和 375px 视口的实际浏览器检查。
 浏览器回归另覆盖审批期间阅读上下文、草稿保留、审批失败重试、工具摘要与逐项展开、
 未确认结果、模型搜索空态、键盘选择与焦点恢复。
 首次运行需 `npx playwright install chromium`；可通过 `QI_AGENT_E2E_ARTIFACTS` 指定截图目录。
+
+### 无头 UI 自动化
+
+沿用锁定版本的 Playwright，不需要启动可见浏览器。首次准备依赖和浏览器后，一条命令运行真实 Host 的离线 E2E，再检查 Core Preview 输入区：
+
+```bash
+npm ci
+npx playwright install --with-deps chromium webkit
+npm run test:ui:e2e
+```
+
+完整入口还需要现有 E2E 的 Rust 和 Babashka。只验证前端时运行 `npm run test:web-headless`，仅需 Node 与浏览器；默认依次运行 Chromium、WebKit，各 11 个场景。
+它构建独立的生产 Core Preview 资源，不覆盖 `apps/web/dist`。顶部提示条来自真实编译常量，不能用普通 Web 构建或注入 CSS 代替。
+场景覆盖信任/受限提示、待审批、运行中、360×480 最小窗口、长草稿、窄屏、缩窗、只缩高度和展开运行详情；断言检查完整输入卡、底部状态条、工具栏按钮、输入内部滚动和页面横向溢出。
+
+```bash
+# 单个引擎，或把证据写入指定父目录（每轮创建新子目录）
+npm run test:web-headless -- --browser webkit --artifacts /absolute/ui-evidence
+# 直接检查已交付 macOS 包里的生产资源，不重新构建
+npm run test:web-headless -- --ui-root '/absolute/qi-agent Preview.app/Contents/Resources/runtime/apps/web/dist'
+```
+
+每轮默认写入 `out/web-headless/<独立运行目录>/`，包含总结果、引擎版本、源码与控制器指纹、实际 UI 资源哈希、每场景几何 JSON/截图、原始日志和失败场景的 Playwright trace。
+失败、缺少场景/截图、浏览器未安装、资源缺失或超时均返回非零；无自动重试。可用 `npx playwright show-trace /absolute/failed-trace.zip` 查看失败步骤。
+默认每引擎的场景执行限时 180 秒，`--timeout-ms` 仅允许在 1–180 秒之间设置；另有浏览器启动 30 秒和有界退出清理时间。`--source-root` 供冻结在候选外的已审查测试控制器指向被测仓库。
+
+CI 在 Linux Chromium 和 macOS WebKit 自动执行该专项，并通过 `always()` 上传证据，保留 7 天。现有 Chromium 六组回归与真实 Host E2E 继续运行。
+专项使用真实浏览器和生产 DOM，但 API 为隔离 fixture；它不替代真实 Host 测试，也不证明 WKWebView 原生启动、真实模型或 LCU 桌面操作。
+
+
+### 简洁工作步骤展示
+
+设置 → 通用设置 → 工作步骤展示中的“简洁”只控制展示，不改变模型请求、权限或会话事件。
+连续的思考、工具调用及已批准记录默认合成一个可展开的分类计数行；运行时不预览路径、命令或代码。
+助手正文、用户插话与拒绝记录保留在组外。完成的轮次按“工作步骤收起时机”折叠，保留最终回答和真实验收状态；
+失败、取消、结果未知不做整轮自动折叠，组头继续显示失败或未确认结果。待审批仍在输入区处理。
+手动展开后可逐项查看参数、结果与审批记录；已完成思考不显示首行预览。运行统计放入“运行详情”。
+该行为参照 DeepSeek Harness `687f282` 的 compact 展示策略；其他展示模式保持既有行为。
