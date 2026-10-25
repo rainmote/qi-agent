@@ -195,7 +195,7 @@ jobs:
 
   artifact-producer:
     name: Artifact transport producer (no publish)
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.number == 1 || github.event.pull_request.number == 13 || github.event.pull_request.number == 14)
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -205,9 +205,8 @@ jobs:
     env:
       SOURCE_SHA: ${{ github.sha }}
       EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
-      # Frozen reviewed integration base; refresh only after new-base review.
-      # Old PR event/API base metadata can lag behind the actual merge tree.
-      EXPECTED_BASE: 3eb2468921ce48189ded21af68cbad5cfe60cfd2
+      # Require the exact event base/head as merge parents; stale metadata fails.
+      EXPECTED_BASE: ${{ github.event.pull_request.base.sha }}
       EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -344,7 +343,7 @@ jobs:
   artifact-consumer-v8:
     name: Artifact transport consumer v8 (no publish)
     needs: artifact-producer
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.number == 1 || github.event.pull_request.number == 13 || github.event.pull_request.number == 14)
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
