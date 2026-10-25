@@ -33,6 +33,8 @@
           (kernel/track-effect! (kernel/plugin-context ctx :llm/openai-responses)
             ((:upsert! registry)
              (responses/provider-entry ctx
-               (assoc provider-config :base-url broker-url :api-key "maintenance-broker" :stream false :max-retries 0))))))
+               (assoc provider-config :base-url broker-url :api-key "maintenance-broker"
+                      :api-key-env nil :credential-source :settings :allow-custom-endpoint true
+                      :stream false :max-retries 0))))))
       (protocol/json-once! ctx prompt)
          (finally (kernel/dispose-all! ctx)))))

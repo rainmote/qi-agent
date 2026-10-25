@@ -16,9 +16,10 @@
 (def ^:private max-retry-delay-ms 10000)
 (def ^:private transient-statuses #{408 409 429 500 502 503 504})
 
-(defn- api-key [{:keys [api-key api-key-env]}]
+(defn- api-key [{:keys [api-key api-key-env] :as config}]
   (or api-key
-      (System/getenv (or api-key-env "OPENAI_API_KEY"))))
+      (when-not (= :settings (:credential-source config))
+        (System/getenv (or api-key-env "OPENAI_API_KEY")))))
 
 (defn- valid-base-url? [base-url]
   (try
@@ -26,11 +27,35 @@
           path (str/replace (or (.getPath uri) "") #"/+$" "")]
       (and (= "https" (.getScheme uri))
            (= "api.openai.com" (.getHost uri))
+           (contains? #{-1 443} (.getPort uri))
            (= "/v1" path)
            (nil? (.getUserInfo uri))
            (nil? (.getQuery uri))
            (nil? (.getFragment uri))))
     (catch Throwable _ false)))
+
+(defn- valid-provider-base-url? [base-url]
+  (try
+    (let [uri (URI. base-url)]
+      (and (contains? #{"https" "http"} (.getScheme uri))
+           (not (str/blank? (.getHost uri)))
+           (nil? (.getUserInfo uri))
+           (nil? (.getQuery uri))
+           (nil? (.getFragment uri))))
+    (catch Throwable _ false)))
+
+(defn- validate-credential-endpoint! [config]
+  (let [base-url (or (:base-url config) default-base-url)]
+    (if (:allow-custom-endpoint config)
+      (when-not (and (= :settings (:credential-source config))
+                     (not (str/blank? (:api-key config)))
+                     (nil? (:api-key-env config))
+                     (valid-provider-base-url? base-url))
+        (throw (ex-info "Custom endpoint credentials must be explicitly saved settings keys"
+                        {:provider :openai :code :credential-scope})))
+      (when-not (valid-base-url? base-url)
+        (throw (ex-info "Refusing to send an OpenAI API key outside https://api.openai.com/v1"
+                        {:provider :openai :code :credential-scope}))))))
 
 (defn- endpoint [base-url]
   (str (str/replace base-url #"/+$" "") "/responses"))
@@ -236,9 +261,11 @@
           response)))))
 
 (defn generate [ctx config request]
+  (validate-credential-endpoint! config)
   (images/require-tool-images! config #{:text :image} :openai request)
   (let [auth-id (or (:auth-id config) (:provider-id config) :openai)
-        key (or (when-let [store (kernel/service ctx :auth/store)]
+        key (or (when-let [store (when-not (= :settings (:credential-source config))
+                                  (kernel/service ctx :auth/store))]
                   (:api-key ((:resolve! store) auth-id)))
                 (api-key config))]
     (when (str/blank? key)
@@ -310,16 +337,6 @@
          :usage (:usage parsed)
          :model (:model parsed)}))))
 
-(defn- valid-provider-base-url? [base-url]
-  (try
-    (let [uri (URI. base-url)]
-      (and (contains? #{"https" "http"} (.getScheme uri))
-           (not (str/blank? (.getHost uri)))
-           (nil? (.getUserInfo uri))
-           (nil? (.getQuery uri))
-           (nil? (.getFragment uri))))
-    (catch Throwable _ false)))
-
 (defn provider-entry
   "Build an OpenAI Responses registry entry for a validated provider config."
   [ctx config]
@@ -329,9 +346,7 @@
     (when (str/blank? (:model config))
       (throw (ex-info "OpenAI Responses plugin requires :model"
                       {:provider :openai})))
-    (when-not (valid-provider-base-url? base-url)
-      (throw (ex-info "OpenAI Responses base URL is invalid"
-                      {:provider :openai :base-url base-url})))
+    (validate-credential-endpoint! config)
     (when-not (and (nat-int? max-retries) (<= max-retries 10)
                    (pos-int? retry-delay)
                    (pos-int? (or (:timeout-ms config) default-timeout-ms)))
@@ -359,12 +374,7 @@
    :provides #{:llm/generate}
    :start
    (fn [ctx config]
-     (let [base-url (or (:base-url config) default-base-url)
-           entry (provider-entry ctx config)]
-       (when-not (valid-base-url? base-url)
-         (throw (ex-info
-                 "Refusing to send an OpenAI API key outside https://api.openai.com/v1"
-                 {:provider :openai :base-url base-url})))
+     (let [entry (provider-entry ctx config)]
        (when-let [store (kernel/service ctx :auth/store)]
          (kernel/track-effect!
           ctx

@@ -315,3 +315,17 @@ test('worker/container failures close the broker and preserve an uncertain termi
     execute: async (options) => options.readonly ? f.execute(options) : Promise.reject(new Error('container cleanup unknown')) });
   assert.equal(closed, true); assert.equal(result.status, 'uncertain'); assert.match(result.reason, /cleanup unknown/);
 });
+
+
+test('direct paid credentials are refused before any implementation or check dispatch', async (t) => {
+  const f = await fixture(t);
+  const scoped = await f.init();
+  let calls = 0;
+  await assert.rejects(implement({ ...f, id: f.task.task_id,
+    driver: { mode: 'qi-supervised', paid: true, unattended: false },
+    execute: async () => { calls++; throw new Error('unexpected dispatch'); } }), /[Pp]aid.*broker/);
+  assert.equal(calls, 0);
+  const events = await readJournal(f.root);
+  assert.equal(events.some(event => event.type === 'task/transition' && event.data?.status === 'implementing'), false);
+  assert.equal(scoped.attempts, 0);
+});

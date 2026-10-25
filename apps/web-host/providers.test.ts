@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -142,4 +142,48 @@ test("provider registry discovers OpenAI-compatible model catalogs", async () =>
     await new Promise<void>((resolve) => modelServer.close(() => resolve()));
     await rm(root, { recursive: true, force: true });
   }
+});
+
+
+test("environment credentials stay bound during edits and model discovery", async () => {
+  const root = await mkdtemp(join(tmpdir(), "qi-provider-boundary-"));
+  try {
+    const registry = new ProviderRegistry(root);
+    await registry.load();
+    for (const [baseUrl, protocol, apiKeyEnv] of [
+      ["https://example.com/v1", "openai-responses", "OPENAI_API_KEY"],
+      ["https://api.openai.com:8443/v1", "openai-responses", "OPENAI_API_KEY"],
+      ["https://example.com/v1", "anthropic-messages", "HOME"],
+    ] as const) {
+      await assert.rejects(registry.upsert({ id: "unsafe", name: "Unsafe", baseUrl, protocol,
+        apiKeyEnv, models: [{ id: "test", name: "Test" }] }), /credential/i);
+    }
+    let requests = 0;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => { requests++; return Response.json({ data: [] }); };
+    try {
+      await assert.rejects(registry.discover({ providerId: "openai", baseUrl: "https://example.com/v1" }),
+        /credential/i);
+      assert.equal(requests, 0);
+      await registry.discover({ providerId: "openai", baseUrl: "https://example.com/v1", apiKey: "explicit" });
+      assert.equal(requests, 1, "an explicit caller key can target a custom endpoint");
+    } finally { globalThis.fetch = originalFetch; }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("provider settings readers refuse public files and symlinks", async () => {
+  const root = await mkdtemp(join(tmpdir(), "qi-provider-private-"));
+  try {
+    const registry = new ProviderRegistry(root);
+    await registry.load();
+    const bytes = await readFile(registry.statePath);
+    await chmod(registry.statePath, 0o644);
+    await assert.rejects(new ProviderRegistry(root).load(), /private|owner/i);
+    await rm(registry.statePath);
+    const target = join(root, "target.json");
+    await writeFile(target, bytes, { mode: 0o600 });
+    await symlink(target, registry.statePath);
+    await assert.rejects(new ProviderRegistry(root).load(), /symbolic|private/i);
+    assert.deepEqual(await readFile(target), bytes);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

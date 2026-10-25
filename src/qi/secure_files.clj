@@ -132,3 +132,26 @@
             (Files/isRegularFile entry (make-array LinkOption 0))
             (protect-file! entry)))))
     (str root)))
+
+(defn assert-owner-file!
+  "Reject linked, non-regular, foreign-owned or publicly accessible state files.
+  Unlike protect-file!, this validates existing credentials without repairing them."
+  [value]
+  (let [target (path value)
+        nofollow (into-array LinkOption [LinkOption/NOFOLLOW_LINKS])]
+    (when (Files/isSymbolicLink target)
+      (throw (ex-info "Refusing a symbolic-link credential file" {:code :insecure-credentials})))
+    (when-not (Files/isRegularFile target nofollow)
+      (throw (ex-info "Private credential path must be a regular file" {:code :insecure-credentials})))
+    (try
+      (let [owner (str (Files/getOwner target nofollow))
+            current (System/getProperty "user.name")
+            permissions (set (Files/getPosixFilePermissions target nofollow))]
+        (when-not (and (= owner current)
+                       (every? owner-file-permissions permissions))
+          (throw (ex-info "Credential file must be private and owner-only"
+                          {:code :insecure-credentials}))))
+      (catch UnsupportedOperationException _
+        (throw (ex-info "Cannot verify private credential file permissions"
+                        {:code :insecure-credentials}))))
+    (str target)))

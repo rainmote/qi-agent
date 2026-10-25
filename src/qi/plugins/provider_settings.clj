@@ -2,6 +2,7 @@
   "Load Web-managed provider/model settings and reconcile the live registries."
   (:require [qi.env :as qenv]
             [qi.kernel :as kernel]
+            [qi.secure-files :as secure]
             [qi.plugins.anthropic :as anthropic]
             [qi.plugins.openai :as openai]
             [qi.plugins.openai-responses :as openai-responses]
@@ -18,9 +19,11 @@
   (if (str/blank? path)
     []
     (let [file (io/file path)]
-      (if-not (.isFile file)
+      (if-not (java.nio.file.Files/exists (.toPath file)
+                  (into-array java.nio.file.LinkOption [java.nio.file.LinkOption/NOFOLLOW_LINKS]))
         []
-        (let [state (json/parse-string (slurp file) true)]
+        (let [_ (secure/assert-owner-file! file)
+              state (json/parse-string (slurp file) true)]
           (when-not (= 1 (:version state))
             (throw (ex-info "Unsupported provider settings version"
                             {:path path :version (:version state)})))
@@ -41,6 +44,23 @@
 (defn- identity-of [entry]
   [(or (:settings-provider-id entry) (:id entry)) (:model entry)])
 
+(def ^:private environment-bindings
+  {"OPENAI_API_KEY" {:protocols #{"openai-responses" "openai-completions"}
+                     :base-url "https://api.openai.com/v1"}
+   "DEEPSEEK_API_KEY" {:protocols #{"openai-completions"}
+                       :base-url "https://api.deepseek.com"}
+   "ANTHROPIC_API_KEY" {:protocols #{"anthropic-messages"}
+                        :base-url "https://api.anthropic.com"}})
+
+(defn- validate-provider-credentials! [provider]
+  (when-let [env (:apiKeyEnv provider)]
+    (let [{:keys [protocols base-url]} (get environment-bindings env)]
+      (when-not (and (contains? protocols (:protocol provider))
+                     (= base-url (str/replace (or (:baseUrl provider) "") #"/+$" "")))
+        (throw (ex-info "Credential environment binding does not match its canonical endpoint/protocol"
+                        {:code :credential-scope})))))
+  provider)
+
 (defn- model-entry [ctx provider model]
   (let [provider-id (provider-keyword (:id provider))
         config {:provider-id (runtime-id provider-id (:id model))
@@ -49,6 +69,9 @@
                 :base-url (:baseUrl provider)
                 :api-key (:apiKey provider)
                 :api-key-env (:apiKeyEnv provider)
+                :credential-source (if (:apiKeyEnv provider) :environment :settings)
+                :allow-custom-endpoint (and (nil? (:apiKeyEnv provider))
+                                            (not (str/blank? (:apiKey provider))))
                 :model (:id model)
                 :display-name (or (:name model) (:id model))
                 :context-window (:contextWindow model)
@@ -85,7 +108,7 @@
                    auth (kernel/require-service ctx :auth/store)
                    selected ((:current registry))
                    previous ((:providers registry))
-                   providers (read-providers path)
+                   providers (mapv validate-provider-credentials! (read-providers path))
                    managed (remove #(= "chatgpt-subscription" (:protocol %)) providers)
                    ;; Validate and construct the complete replacement before
                    ;; removing working registrations.

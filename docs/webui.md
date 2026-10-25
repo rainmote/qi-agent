@@ -165,10 +165,14 @@ Host 的边界：
 - 浏览器只能打开 allowlist 中经过 `realpath` 解析的工作区，会话路径完全由 Host 生成；
 - 远程命令拒绝带任意目标路径的 `/fork`，运行时状态不会返回 context 正文或认证信息；
 - session JSONL、工作区清单和凭据都不会打包进前端产物。
-- 模型 API 密钥只写入本机 Web Host 状态目录的 `providers.json`，文件权限为 `0600`；
+- Web Host 与 worker 读取 `providers.json` 时拒绝符号链接、非当前用户所有或组/其他用户可访问的文件，
+  不会通过改权限掩盖已有的不安全设置。模型 API 密钥只写入本机 Web Host 状态目录，文件权限为 `0600`；
   列表和保存响应只返回“是否已配置”，不会把密钥回传给浏览器。
 - OpenAI API 与 ChatGPT 订阅是两个独立提供方。前者使用 `OPENAI_API_KEY` 或 Web
-  保存的 API Key；后者自动检查 `$CODEX_HOME/auth.json`（默认 `~/.codex/auth.json`）的
+  保存的 API Key；环境变量引用仅允许 `OPENAI_API_KEY`、`DEEPSEEK_API_KEY`、`ANTHROPIC_API_KEY`，
+  分别绑定固定的官方地址和协议，编辑地址或发现模型时同样校验。自定义端点使用显式保存/输入的 key；
+  Responses 注册与请求入口默认都只接受官方地址，Web 用 `:allow-custom-endpoint true` 与
+  `:credential-source :settings` 显式启用自定义 key，禁止回退读取宿主环境。后者自动检查 `$CODEX_HOME/auth.json`（默认 `~/.codex/auth.json`）的
   本地 Codex 登录状态。Web 只返回状态和文件路径，不返回 access token、account id 或
   refresh token；过期、格式无效及权限过宽会分别显示为不可用状态。
 - `/health/live` 只检查进程存活；`/health/ready` 还会检查静态产物、运行配置、daemon

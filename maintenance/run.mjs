@@ -19,7 +19,7 @@ definitions.help = { type: 'boolean' };
 const usage = `qi maintenance (controller checkout must be clean for prepare)
   prepare --state ABS --repo ABS --task contract.json
   run --state ABS --id ID --driver offline-driver.json
-  run --state ABS --id ID --supervised-live
+  run --state ABS --id ID --supervised-live --budget budget.json (brokered alias)
   run --state ABS --id ID --budgeted-live --budget budget.json
   record-trial --state ABS --id ID
   enqueue --state ABS --repo ABS --task contract.json --budget budget.json --approval approval.json
@@ -59,10 +59,11 @@ try {
         policy: await readJSON(path.join(controller, 'maintenance/policy.json')) }); break;
       case 'run': {
         if ([args.driver, args['supervised-live'], args['budgeted-live']].filter(Boolean).length !== 1) throw new Error('Choose one offline, supervised or budgeted driver');
-        const driver = args['budgeted-live'] ? { mode: 'qi-budgeted', paid: true, unattended: false } :
-          args['supervised-live'] ? { mode: 'qi-supervised', paid: true, unattended: false } : await readJSON(args.driver);
-        if (args.driver && driver.mode !== 'offline') throw new Error('Paid admission requires the explicit --supervised-live flag');
-        result = await implement({ ...common, driver, budget: args['budgeted-live'] ? await readJSON(args.budget) : undefined }); break;
+        const paid = args['budgeted-live'] || args['supervised-live'];
+        if (paid && !args.budget) throw new Error('Paid execution requires --budget and the host broker');
+        const driver = paid ? { mode: 'qi-budgeted', paid: true, unattended: false } : await readJSON(args.driver);
+        if (args.driver && driver.mode !== 'offline') throw new Error('Paid admission requires --budgeted-live or --supervised-live with --budget');
+        result = await implement({ ...common, driver, budget: paid ? await readJSON(args.budget) : undefined }); break;
       }
       case 'enqueue': result = await enqueue({ ...common, controller, repo: args.repo, task: await readJSON(args.task),
         policy: await readJSON(path.join(controller, 'maintenance/policy.json')), budget: await readJSON(args.budget), approval: await readJSON(args.approval) }); break;
