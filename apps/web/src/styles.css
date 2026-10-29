@@ -391,6 +391,7 @@ svg { flex: 0 0 auto; }
 .message-actions svg { width: 14px; height: 14px; }
 .message-actions time { color: var(--text-4); font-size: 10px; }
 .message-muted { color: var(--text-3); font-size: 13px; }
+.queue-status { margin-bottom: 6px; color: var(--text-3); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }
 .reasoning-row { margin: 0 0 12px; color: var(--text-3); font-size: 13px; }
 .reasoning-row summary { display: flex; align-items: center; gap: 7px; width: fit-content; list-style: none; cursor: pointer; }
 .reasoning-row summary::-webkit-details-marker { display: none; }

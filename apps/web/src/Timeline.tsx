@@ -6,7 +6,7 @@ import { MarkdownContent } from "./MarkdownContent";
 import { ToolResultImages } from "./ToolResultImages";
 import { PluginSlots, type PluginSlot } from "./PluginSlots";
 import type { Projection } from "./projection";
-import { type ToolBatch } from "./timeline-model";
+import { type ToolBatch, type QueuedState } from "./timeline-model";
 import { captureAnchor, restoreAnchor, timelineLayout, visibleRange, type RowMeasurement, type ScrollAnchor } from "./virtual-timeline";
 import type { DurableEvent } from "./types";
 import { outcomeText, runOutcome } from "./run-outcome";
@@ -240,6 +240,26 @@ export function UserMessageAttachments({ content }: { content: unknown }) {
   </div>;
 }
 
+function QueuedMessage({ event, state }: { event: DurableEvent; state: QueuedState }) {
+  const content = messageText(event.data.message);
+  const reasons: Record<string, string> = {
+    aborted: "运行已取消", error: "运行失败", "tool-terminated": "工具已结束本轮运行",
+  };
+  const reason = reasons[String(event.data.reason)];
+  const status = state === "uncertain" ? t("发送状态未确认")
+    : state === "discarded" ? `${t("未发送")}${reason ? ` · ${t(reason)}` : ""}`
+    : event.data.kind === "steer" ? t("等待插话") : t("等待发送");
+  return <article className="message message-user message-queued">
+    <div className="message-body">
+      <div className="queue-status" role="status">{status}</div>
+      {content && <div className="message-content">{content}</div>}
+      <UserMessageAttachments content={event.data.message} />
+      {content && <div className="message-actions"><button type="button" aria-label={t("复制")}
+        onClick={() => void navigator.clipboard.writeText(content)}><Icon name="copy" /></button></div>}
+    </div>
+  </article>;
+}
+
 function Message({ event, reasoningOpen, onReasoningToggle, hideReasoning = false, compact = false, showActions = true }: {
   event: DurableEvent; reasoningOpen: boolean; onReasoningToggle: (open: boolean) => void;
   hideReasoning?: boolean; compact?: boolean; showActions?: boolean;
@@ -288,11 +308,11 @@ function estimateRow(row: DisplayRow, width: number): number {
   if (row.kind === "tools") return 52;
   if (row.kind === "decision" || row.kind === "error" || row.kind === "run-error" || row.kind === "outcome") return 64;
   if (!("event" in row)) return 100;
-  const message = row.event.data.message as Record<string, unknown>;
-  const content = text(message.content);
+  const content = row.kind === "queued" ? messageText(row.event.data.message)
+    : text((row.event.data.message as Record<string, unknown>).content);
   const lines = content.split("\n").reduce((total, line) =>
     total + Math.max(1, Math.ceil(line.length / Math.max(20, width / 10))), 0);
-  return Math.min(2_000, 62 + lines * 23);
+  return Math.min(2_000, (row.kind === "queued" ? 90 : 62) + lines * 23);
 }
 
 export function Timeline({ projection, scrollRef, pluginSlots = [], view = "standard", collapseTiming = "completion" }: {
@@ -496,6 +516,7 @@ export function Timeline({ projection, scrollRef, pluginSlots = [], view = "stan
         {row.kind === "message" && <Message event={row.event} reasoningOpen={expanded.has(row.id)}
           hideReasoning={transcript.hiddenReasoning.has(row.id)} compact={view === "compact"} showActions={finalAssistantIds.has(row.id)}
           onReasoningToggle={(open) => setExpandedRow(row.id, open)} />}
+        {row.kind === "queued" && <QueuedMessage event={row.event} state={row.state} />}
         {row.kind === "tools" && <ToolBatchCard batch={row.batch} results={projection.timeline.results}
           active={projection.timeline.activeToolRow !== null && projection.timeline.rows[projection.timeline.activeToolRow]?.id === row.id
             && (projection.state.phase !== "idle" || projection.interactions.length > 0)}

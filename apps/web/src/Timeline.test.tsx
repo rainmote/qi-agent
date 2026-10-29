@@ -11,6 +11,44 @@ function event(id: string, type: string, data: Record<string, unknown> = {}): Du
   return { id, type, data, seq: Number(id.replace(/\D/g, "")) || 1, at: "2026-08-19T00:00:00Z" };
 }
 
+test("queued content survives cancellation and snapshot replay in all transcript views", () => {
+  const message = [{ type: "text", text: "Keep this follow-up" }, { type: "attachment", id: "queue-file-001",
+    workspaceId: "0123456789abcdef", name: "notes.txt", mime: "text/plain", size: 12 }];
+  for (const view of ["compact", "standard", "detailed", "verbose"] as const) {
+    const snapshot = fixtureSnapshot(0);
+    snapshot.events = [event("q1", "queue/added", { id: "queued-a", kind: "follow-up", message })];
+    const render = () => renderToStaticMarkup(<Timeline projection={fromSnapshot(snapshot)} scrollRef={createRef()} view={view} />);
+    assert.match(render(), /等待发送/);
+    snapshot.events.push(event("q2", "queue/discarded", { id: "queued-a", kind: "follow-up", message, reason: "aborted" }));
+    const html = render();
+    assert.match(html, /未发送 · 运行已取消/);
+    assert.equal(html.split("Keep this follow-up").length - 1, 1);
+    assert.match(html, /attachments\/queue-file-001\?download=1/);
+    assert.match(html, /aria-label="复制"/);
+    assert.doesNotMatch(html, /等待发送/);
+  }
+});
+
+test("interrupted queue delivery is unconfirmed while the next run still waits", () => {
+  const snapshot = fixtureSnapshot(0);
+  snapshot.events = [
+    event("r1", "agent/run/start", { "run-id": "old" }),
+    event("r2", "queue/added", { id: "a", message: "Interrupted follow-up" }),
+    event("r3", "message", { message: { role: "user", content: "Interrupted follow-up" } }),
+    event("r4", "agent/run/end", { "run-id": "old", status: "uncertain", reason: "restored" }),
+    event("r5", "agent/run/start", { "run-id": "new" }),
+    event("r6", "queue/added", { id: "b", message: "New follow-up" }),
+    event("r7", "agent/run/end", { "run-id": "old", status: "uncertain", host_arbitrated: true }),
+  ];
+  const projection = fromSnapshot(snapshot);
+  const html = renderToStaticMarkup(<Timeline projection={projection} scrollRef={createRef()} />);
+  assert.match(html, /发送状态未确认/);
+  assert.match(html, /等待发送/);
+  assert.doesNotMatch(html, /未发送/);
+  assert.equal(projection.timeline.rows.filter(row => row.kind === "message").length, 1);
+  assert.deepEqual(projection.events, snapshot.events);
+});
+
 test("groups all tool calls from the same runtime step", () => {
   const events = [
     event("step1", "step/start", { step: 1 }),

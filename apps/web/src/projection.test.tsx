@@ -10,6 +10,40 @@ function envelope(event: DurableEvent): HostEvent {
     event_id: event.id, seq: event.seq, at: event.at, event: event.type, data: event.data };
 }
 
+test("queued inputs hand off by identity and stay retired after replay or clear", () => {
+  const snapshot = fixtureSnapshot(0);
+  const make = (seq: number, type: string, data: Record<string, unknown>): DurableEvent =>
+    ({ id: `queue-event-${seq}`, seq, type, data, at: "2026-10-29T00:00:00Z" });
+  const a = make(1, "queue/added", { id: "a", kind: "follow-up", message: "same content" });
+  const b = make(2, "queue/added", { id: "b", kind: "follow-up", message: "same content" });
+  const user = make(3, "message", { message: { role: "user", content: "same content" } });
+  const consumed = make(4, "queue/consumed", { id: "a", kind: "follow-up" });
+  let projection = fromSnapshot({ ...snapshot, events: [a, b, user, consumed] });
+  assert.deepEqual(projection.timeline.rows.map(row => row.id), ["queue:b", user.id]);
+  projection = applyHostEvent(projection, envelope({ ...a, id: "late-added", seq: 5 }));
+  assert.equal(projection.timeline.rows.length, 2);
+  projection = applyHostEvent(projection, envelope(make(6, "session/clear", {})));
+  projection = applyHostEvent(projection, envelope(make(7, "queue/discarded", { id: "b", message: "same content", reason: "aborted" })));
+  assert.equal(projection.timeline.rows.length, 0);
+  assert.deepEqual(projection.timeline, fromSnapshot({ ...snapshot, events: projection.events }).timeline);
+  const reordered = fromSnapshot({ ...snapshot, events: [user, consumed] });
+  assert.equal(applyHostEvent(reordered, envelope(a)).timeline.rows.length, 1);
+});
+
+test("consuming a queued row preserves the active tool batch after indices shift", () => {
+  const make = (seq: number, type: string, data: Record<string, unknown>): DurableEvent =>
+    ({ id: `queue-tools-${seq}`, seq, type, data, at: "2026-10-29T00:00:00Z" });
+  const timeline = buildTimeline([
+    make(1, "queue/added", { id: "a", message: "after tools" }),
+    make(2, "tool/call", { name: "read", "call-id": "first" }),
+    make(3, "queue/consumed", { id: "a" }),
+    make(4, "tool/call", { name: "read", "call-id": "second" }),
+  ]);
+  assert.equal(timeline.rows.length, 1);
+  const batch = timeline.rows[timeline.activeToolRow!];
+  assert.equal(batch.kind === "tools" && batch.batch.calls.length, 2);
+});
+
 test("snapshot IDs are unique and ordered; event indexes remain immutable across branches", () => {
   const snapshot = fixtureSnapshot(1);
   const first = snapshot.events[0];
