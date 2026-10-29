@@ -1,5 +1,6 @@
 (ns qi.runtime-recovery-test
   (:require [qi.cancellation :as cancellation]
+            [qi.env :as env]
             [qi.kernel :as kernel]
             [qi.plugin :as plugin]
             [qi.plugins.runtime :as runtime]
@@ -679,3 +680,28 @@
         (is (every? :read-only (:steps plan)))
         (is (= 1 (get-in plan [:budget :requests-used]))))
       (finally (kernel/dispose-all! ctx)))))
+
+(deftest shipped-children-mount-the-authenticated-provider-registry
+  (doseq [path ["agent.edn" "presets/standard/agent.edn" "presets/creator/agent.edn"]]
+    (let [root (fs/create-temp-dir {:prefix "qi-child-provider-"})
+          config (->> (:plugins (plugin/read-config path))
+                      (some #(when (= 'qi.plugins.subagent-in-process (:ns %))
+                               (get-in % [:config :child-profile]))))
+          isolated (update config :plugins
+                     #(mapv (fn [spec]
+                              (update spec :config
+                                (fn [options]
+                                  (cond-> (or options {})
+                                    (contains? options :root) (assoc :root (str root)))))) %))]
+      (try
+        (with-redefs [env/get (fn [& _] nil) env/home (constantly (str root))]
+          (let [result (try {:ctx (plugin/boot! isolated)}
+                           (catch Throwable e {:error (ex-message e) :details (ex-data e)}))]
+            (is (some? (:ctx result)) (str path " must mount its real child profile: " (dissoc result :ctx)))
+            (when-let [ctx (:ctx result)]
+              (try
+                (is (some? (kernel/service ctx :auth/store)) path)
+                (is (some? (kernel/service ctx :provider/settings)) path)
+                (is (some? ((:current (kernel/require-service ctx :llm/registry)))) path)
+                (finally (kernel/dispose-all! ctx))))))
+        (finally (fs/delete-tree root))))))

@@ -267,3 +267,131 @@
             (is (= 1 (count (filter #(= "subagent/run/start" (:type %)) events))))
             (is (= 1 (count (filter #(= "subagent/run/end" (:type %)) events)))))))
       (finally (deliver result {:stop-reason :aborted}) (kernel/dispose-all! ctx)))))
+
+(deftest duplicate-child-message-preserves-terminal-job-and-events
+  (doseq [status [:completed :failed :cancelled :uncertain]]
+    (testing (name status)
+      (let [result (promise)
+            ctx (plugin/boot! {:plugins [{:ns 'qi.plugins.session} {:ns 'qi.plugins.subagent}]})]
+        (try
+          (let [registry (kernel/require-service ctx :subagents/runtime)
+                store (kernel/require-service ctx :session/store)]
+            ((:register! registry)
+             {:id :test :capabilities {}
+              :start (fn [_] {:result result
+                              :message! (constantly {:accepted true :duplicate true :queued true
+                                                     :message_id "seen" :inbox_event_id "inbox"})
+                              :cancel! (constantly true) :dispose! (fn [])})})
+            (let [job ((:start! registry) {:provider :test :prompt "first"})]
+              (deliver result {:status status :output "original"})
+              (is (= status (:status ((:wait! registry) (:id job) 2000))))
+              (let [before ((:job registry) (:id job))
+                    events ((:events store))
+                    ack ((:send! registry) (:id job) {:message "same" :message_id "seen"})]
+                (is (true? (:duplicate ack)))
+                (is (= (:run-id before) (:run_id ack)))
+                (is (= before ((:job registry) (:id job))) "Duplicate must not mutate terminal state or result")
+                (is (= events ((:events store))) "Duplicate must not append parent events")
+                (is (= (:result before) ((:wait! registry) (:id job) 0))))))
+          (finally (deliver result {:status :cancelled}) (kernel/dispose-all! ctx)))))))
+
+(deftest daemon-routed-child-message-updates-registry-lifecycle
+  (let [initial (promise)
+        next-result (promise)
+        messages (atom [])
+        ctx (plugin/boot! {:plugins [{:ns 'qi.plugins.session} {:ns 'qi.plugins.subagent}]})]
+    (try
+      (let [registry (kernel/require-service ctx :subagents/runtime)
+            store (kernel/require-service ctx :session/store)
+            payload {:from "parent" :message "continue" :message_id "follow-up"}]
+        ((:register! registry)
+         {:id :test :capabilities {}
+          :start (fn [_] {:result initial
+                          :message! (fn [message]
+                                      (swap! messages conj message)
+                                      {:accepted true :result next-result :message_id (:message_id message)})
+                          :invoke! (fn [method params]
+                                     (if (= method "agent.message.receive")
+                                       {:accepted true :message_id (:message_id params)}
+                                       {:method method :params params}))
+                          :cancel! (constantly true) :dispose! (fn [])})})
+        (let [job ((:start! registry) {:provider :test :prompt "first"})]
+          (deliver initial {:status :completed :output "old"})
+          (is (= "old" (:output ((:wait! registry) (:id job) 2000))))
+          (let [ack ((:invoke! registry) (:id job) "agent.message.receive" payload)
+                running ((:job registry) (:id job))]
+            (is (= :running (:status running)))
+            (is (not= (:run-id job) (:run-id running)))
+            (is (= [payload] @messages))
+            (is (not (contains? ack :result)))
+            (deliver next-result {:status :completed :run-id "execution-next" :output "new"})
+            (let [done ((:wait! registry) (:id job) 2000)
+                  events ((:events store))]
+              (is (= "new" (:output done)))
+              (is (= (:run-id running) (:run-id done)))
+              (is (= "execution-next" (:execution-run-id done)))
+              (is (= 2 (count (filter #(= "subagent/run/start" (:type %)) events))))
+              (is (= 2 (count (filter #(= "subagent/run/end" (:type %)) events))))
+              (is (empty? (filter #(= "agent/message/sent" (:type %)) events)) "Receiving must not forge a parent sent event")))
+          (is (= {:method "session.snapshot" :params {}}
+                 ((:invoke! registry) (:id job) "session.snapshot" {})))))
+      (finally (deliver initial {:status :cancelled}) (deliver next-result {:status :cancelled})
+               (kernel/dispose-all! ctx)))))
+
+
+(deftest queued-child-receipt-cannot-reopen-a-run-that-finished-during-delivery
+  (doseq [route [:send :invoke]]
+    (let [result (promise)
+          finished (atom nil)
+          ctx (plugin/boot! {:plugins [{:ns 'qi.plugins.session} {:ns 'qi.plugins.subagent}]})]
+      (try
+        (let [registry (kernel/require-service ctx :subagents/runtime)]
+          ((:register! registry)
+           {:id :test :capabilities {}
+            :start (fn [request]
+                     {:result result
+                      :message! (fn [_]
+                                  (deliver result {:status :completed :output "finished-during-receipt"})
+                                  ((:wait! registry) (:agent-id request) 2000)
+                                  (reset! finished ((:job registry) (:agent-id request)))
+                                  {:accepted true :queued true})
+                      :cancel! (constantly true) :dispose! (fn [])})})
+          (let [job ((:start! registry) {:provider :test :prompt "first"})
+                ack (if (= route :send)
+                      ((:send! registry) (:id job) "queued")
+                      ((:invoke! registry) (:id job) "agent.message.receive" {:message "queued"}))
+                after ((:job registry) (:id job))]
+            (is (true? (:queued ack)))
+            (is (= :completed (:status @finished)))
+            (is (= (select-keys @finished [:status :run-id :result :completed-at])
+                   (select-keys after [:status :run-id :result :completed-at])))
+            (is (= (:run-id job) (:run_id ack)))
+            (is (= "finished-during-receipt" (:output ((:wait! registry) (:id job) 0))))))
+        (finally (deliver result {:status :cancelled}) (kernel/dispose-all! ctx))))))
+
+(deftest late-child-message-receipt-cannot-resurrect-stopped-or-deleted-job
+  (doseq [retire [:stop! :delete!] route [:send :invoke]]
+    (let [initial (promise) next-result (promise) retired (atom nil)
+          ctx (plugin/boot! {:plugins [{:ns 'qi.plugins.session} {:ns 'qi.plugins.subagent}]})]
+      (try
+        (let [registry (kernel/require-service ctx :subagents/runtime)
+              store (kernel/require-service ctx :session/store)]
+          ((:register! registry)
+           {:id :test :capabilities {}
+            :start (fn [request]
+                     {:result initial
+                      :message! (fn [_]
+                                  ((retire registry) (:agent-id request))
+                                  (reset! retired ((:job registry) (:agent-id request)))
+                                  {:accepted true :result next-result})
+                      :cancel! (constantly true) :dispose! (fn [])})})
+          (let [job ((:start! registry) {:provider :test :prompt "first"})]
+            (deliver initial {:status :completed :output "original"})
+            (is (= :completed (:status ((:wait! registry) (:id job) 2000))))
+            (if (= route :send)
+              ((:send! registry) (:id job) "follow-up")
+              ((:invoke! registry) (:id job) "agent.message.receive" {:message "follow-up"}))
+            (is (= @retired ((:job registry) (:id job))))
+            (is (= 1 (count (filter #(= "subagent/run/start" (:type %)) ((:events store))))))))
+        (finally (deliver initial {:status :cancelled}) (deliver next-result {:status :cancelled})
+                 (kernel/dispose-all! ctx))))))

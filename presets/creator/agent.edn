@@ -123,6 +123,7 @@
     :child-profile
     {:plugins
      [{:ns qi.plugins.session :config {:path nil :ephemeral true}}
+      {:ns qi.plugins.auth-store}
       {:ns qi.plugins.model-registry
        :config {:default-provider :chatgpt}}
       {:ns qi.plugins.openai-responses

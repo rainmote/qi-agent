@@ -339,43 +339,74 @@
                  false)
                (throw (ex-info "Subagent run was not found"
                                {:agent-id agent-id}))))
-           invoke!
-           (fn [agent-id method params]
-             (let [job (hydrate! agent-id)
-                   invoke (get-in job [:handle :invoke!])]
-               (when-not (fn? invoke)
-                 (throw (ex-info "Subagent is not currently routable"
-                                 {:agent-id agent-id :status (:status job)})))
-               (invoke method params)))
-           send!
-           (fn [agent-id message]
-             (let [job (hydrate! agent-id)
+           dispatch-message!
+           (fn [job message record-sent?]
+             (let [agent-id (:id job)
                    message! (get-in job [:handle :message!])]
                (when-not (fn? message!)
                  (throw (ex-info "Subagent is not currently routable"
                                  {:agent-id agent-id :status (:status job)})))
-               (let [{:keys [result queued] :as accepted} (message! message)
-                     completion (when-not queued (promise))
-                     run-id (if queued (:run-id job) (str (random-uuid)))]
-                 (when (and (not queued)
-                            (not (instance? clojure.lang.IDeref result)))
-                   (throw (ex-info "Subagent message did not return a run result"
-                                   {:agent-id agent-id})))
-                 (swap! jobs update agent-id
-                        #(cond-> (assoc % :status :running :run-id run-id
-                                         :updated-at (System/currentTimeMillis))
-                           completion (assoc :completion completion)))
-                 (when store
-                   ((:append! store) "agent/message/sent"
-                    {:to agent-id :message message :run_id run-id}))
-                 (persist!)
-                 (when completion
-                   (record-run! ctx store :start (get @jobs agent-id))
-                   (watch! agent-id (:provider job) (:depth job) run-id
-                           completion result))
-                 (merge {:id agent-id :agent_id agent-id :run_id run-id
-                         :accepted true}
-                        (dissoc accepted :result :task)))))
+               (let [{:keys [result queued duplicate] :as accepted} (message! message)
+                     receipt (dissoc accepted :result :task)]
+                 ;; An inbox replay does not admit work. In particular, it must
+                 ;; not move an already terminal job back to :running.
+                 (if (true? duplicate)
+                   (merge {:id agent-id :agent_id agent-id :run_id (:run-id job)
+                           :accepted true} receipt)
+                   (let [completion (when-not queued (promise))
+                         run-id (if queued (:run-id job) (str (random-uuid)))]
+                     (when (and (not queued)
+                                (not (instance? clojure.lang.IDeref result)))
+                       (throw (ex-info "Subagent message did not return a run result"
+                                       {:agent-id agent-id})))
+                     ;; Queued work belongs to the existing watcher. It may
+                     ;; already have finished while message! returned its ack.
+                     (let [tracked
+                           (when completion
+                             (get (swap! jobs
+                                    (fn [current]
+                                      (let [live (get current agent-id)]
+                                        ;; Stop/delete can retire the handle
+                                        ;; while the provider accepts a message.
+                                        (if (and live
+                                                 (identical? (:handle job) (:handle live))
+                                                 (not (contains? #{:stopped :deleted :inactive}
+                                                                 (:status live))))
+                                          (assoc current agent-id
+                                                 (assoc live :status :running :run-id run-id
+                                                        :updated-at (System/currentTimeMillis)
+                                                        :completion completion))
+                                          current))))
+                                  agent-id))
+                           watching? (and completion (identical? completion (:completion tracked)))
+                           receipt-run-id (if (or queued watching?) run-id (:run-id tracked))]
+                       (when (and store record-sent?)
+                         ((:append! store) "agent/message/sent"
+                          {:to agent-id :message message :run_id receipt-run-id}))
+                       (when watching?
+                         (persist!)
+                         (record-run! ctx store :start tracked)
+                         (watch! agent-id (:provider job) (:depth job) run-id
+                                 completion result))
+                       (merge {:id agent-id :agent_id agent-id :run_id receipt-run-id
+                               :accepted true} receipt)))))))
+           send!
+           (fn [agent-id message]
+             (dispatch-message! (hydrate! agent-id) message true))
+           invoke!
+           (fn [agent-id method params]
+             (let [job (hydrate! agent-id)
+                   invoke (get-in job [:handle :invoke!])]
+               (if (and (= method "agent.message.receive")
+                        (fn? (get-in job [:handle :message!])))
+                 ;; Daemon-routed delivery needs the same completion watcher
+                 ;; as send!, but the daemon records the sender separately.
+                 (dispatch-message! job params false)
+                 (do
+                   (when-not (fn? invoke)
+                     (throw (ex-info "Subagent is not currently routable"
+                                     {:agent-id agent-id :status (:status job)})))
+                   (invoke method params)))))
            passivate!
            (fn [agent-id]
              (locking jobs
