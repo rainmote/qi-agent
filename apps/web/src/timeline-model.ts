@@ -29,7 +29,11 @@ export function appendTimeline(model: TimelineModel, event: DurableEvent, buildi
     queueStates: new Map([...model.queueStates.keys()].map(id => [id, "cleared" as const])) };
   if (event.type === "agent/run/start") {
     const id = event.data["run-id"] ?? event.data.run_id;
-    return typeof id === "string" && id ? { ...model, activeRunId: id } : model;
+    if (typeof id !== "string" || !id) return model;
+    // Runtime opens admission just before persisting the run envelope.
+    const rows = model.rows.map(row => row.kind === "queued" && row.runId === null && row.state === "pending"
+      ? { ...row, runId: id } : row);
+    return { ...model, rows, activeRunId: id };
   }
   if (["queue/added", "queue/consumed", "queue/discarded"].includes(event.type)) {
     const queueId = event.data.id;

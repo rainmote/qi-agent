@@ -49,6 +49,19 @@ test("interrupted queue delivery is unconfirmed while the next run still waits",
   assert.deepEqual(projection.events, snapshot.events);
 });
 
+test("admission before the run envelope still reconciles interrupted delivery", () => {
+  const snapshot = fixtureSnapshot(0);
+  snapshot.events = [
+    event("early1", "queue/added", { id: "early", message: "Early follow-up" }),
+    event("early2", "agent/run/start", { "run-id": "run" }),
+    event("early3", "agent/run/end", { "run-id": "run", status: "uncertain", reason: "restored" }),
+  ];
+  const html = renderToStaticMarkup(<Timeline projection={fromSnapshot(snapshot)} scrollRef={createRef()} />);
+  assert.match(html, /Early follow-up/);
+  assert.match(html, /发送状态未确认/);
+  assert.doesNotMatch(html, /等待发送|未发送/);
+});
+
 test("groups all tool calls from the same runtime step", () => {
   const events = [
     event("step1", "step/start", { step: 1 }),
