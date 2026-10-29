@@ -352,8 +352,10 @@ export async function startWebHost(options: WebHostOptions = {}) {
     return { ok: Object.values(checks).every(Boolean), checks };
   };
 
+  let isClosing = false;
   const server = createServer(async (request, response) => {
     try {
+      if (isClosing) return errorResponse(response, new Error("Web Host is closing"), 503);
       const url = new URL(request.url || "/", `http://${request.headers.host || `${host}:${port}`}`);
       if (url.pathname === "/health" || url.pathname === "/health/live") {
         return json(response, 200, { ok: true });
@@ -651,6 +653,7 @@ export async function startWebHost(options: WebHostOptions = {}) {
   });
 
   const actualPort = await listenOnAvailablePort(server, host, port);
+  let closing: Promise<void> | undefined;
   return {
     host,
     port: actualPort,
@@ -660,18 +663,24 @@ export async function startWebHost(options: WebHostOptions = {}) {
     sessions,
     files,
     candidates,
-    close: async () => {
-      if (options.stateDirectory && !options.externalDaemonRuntimeDirectory) await sessions.shutdownDaemon();
-      await sessions.closeAll();
-      await turnFiles.close();
-      const closed = new Promise<void>((resolve) => server.close(() => resolve()));
-      server.closeAllConnections();
-      await closed;
+    close: () => closing ||= (async () => {
+      isClosing = true;
+      // Already admitted requests may reconnect, but cannot replace the daemon
+      // after its cleanup proof has been observed.
+      sessions.daemonEnvironment.allowLaunch = false;
+      try {
+        if (options.stateDirectory && !options.externalDaemonRuntimeDirectory) await sessions.shutdownDaemon();
+      } finally {
+        await sessions.closeAll();
+        await turnFiles.close();
+        const closed = new Promise<void>((resolve) => server.close(() => resolve()));
+        server.closeAllConnections();
+        await closed;
+      }
       if (ownedDaemonEnvironment && !options.externalDaemonRuntimeDirectory) {
-        await new Promise((resolve) => setTimeout(resolve, 100));
         await rm(ownedDaemonEnvironment.runtimeDirectory, { recursive: true, force: true });
       }
-    },
+    })(),
   };
 }
 

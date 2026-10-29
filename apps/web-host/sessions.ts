@@ -6,6 +6,7 @@ import type { WorkspaceRegistry } from "./workspaces.js";
 import { AgentWorker, type DaemonEnvironment } from "./worker.js";
 import { ensurePrivateDirectory, writePrivateFileAtomically } from "./storage.js";
 import { SessionCatalog } from "./session-catalog.js";
+import { waitForDaemonShutdown } from "./shutdown.js";
 
 interface OpenSession {
   summary: SessionSummary;
@@ -533,12 +534,16 @@ export class SessionManager {
     try {
       // The final session may already be archived or detached. Shutdown is
       // daemon-level control and must never hydrate that session to work.
-      await worker.callDaemon("daemon.shutdown", {}, 2_000);
-    } catch {
-      // The isolated daemon may already be stopping.
+      const hello = await worker.callDaemon("daemon.hello") as { capabilities?: string[] };
+      const runtime = this.daemonEnvironment.runtimeDirectory;
+      if (!runtime || !hello.capabilities?.includes("daemon.shutdown-preserve.v1")) {
+        throw new Error("Daemon does not support preserving sessions on close; runtime retained");
+      }
+      const accepted = await worker.callDaemon("daemon.shutdown", { preserve_sessions: true }, 2_000);
+      await waitForDaemonShutdown(runtime, accepted);
+      this.#daemonWorkspace = null;
     } finally {
       if (!active) await worker.close();
-      this.#daemonWorkspace = null;
     }
   }
 

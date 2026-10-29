@@ -198,6 +198,14 @@ session 现在沿三条互不替代的轴公开状态：
 惰性恢复；`session_id` 保持不变，worker `generation` 递增。显式 `qi-agent stop`/`qi-agent shutdown` 才把 lifecycle
 推进到 `archived`。
 
+私有 Web Host 关闭使用 `daemon.shutdown {preserve_sessions: true}`，正常退出后将仍可恢复的
+会话保留为 `inactive`，不改变已经显式停止或归档的记录。省略参数的 CLI 关闭语义保持不变；
+参数必须为布尔值。同一 daemon 首次接纳的关闭模式固定，冲突请求被拒绝。
+`daemon.hello` 的 `daemon.shutdown-preserve.v1` 能力用于版本检查。接纳响应携带本实例的
+`shutdown_id` 和回执路径；清理结束才原子写入 `shutdown-<id>.json`（0600），报告 `ok/errors`。
+Host 必须核对实例、保留模式、成功回执及旧 socket 消失，才能删除临时 runtime。
+未知结果保留现场，不重复发送关闭命令；历史已完成的关闭回执不会关闭新 daemon 实例。
+
 默认阈值为 90 分钟，可通过 daemon 环境变量配置：
 
 ```text

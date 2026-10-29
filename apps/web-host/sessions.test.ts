@@ -421,8 +421,12 @@ test("shutdown after archiving the last session uses a daemon control connection
   await writeFile(path, `${JSON.stringify({ type: "session/start", data: { session_id: "last" } })}\n`);
   const calls: string[] = [];
   const workers: FakeWorker[] = [];
+  const runtime = join(value.root, "runtime");
+  const shutdownId = "00000000-0000-4000-8000-000000000001";
+  const receiptPath = join(runtime, `shutdown-${shutdownId}.json`);
+  await mkdir(runtime);
   try {
-    const manager = new SessionManager(value.registry, value.root, {}, () => {
+    const manager = new SessionManager(value.registry, value.root, { runtimeDirectory: runtime }, () => {
       const worker = new FakeWorker(new Error("Control must not hydrate a session"), async (method, params) => {
         calls.push(method);
         if (method === "session.archive") {
@@ -431,8 +435,12 @@ test("shutdown after archiving the last session uses a daemon control connection
           await rename(path, target);
           return { archived: true, session_path: target };
         }
+        if (method === "daemon.hello") return { capabilities: ["daemon.shutdown-preserve.v1"] };
         assert.equal(method, "daemon.shutdown");
-        return {};
+        assert.deepEqual(params, { preserve_sessions: true });
+        await writeFile(receiptPath, JSON.stringify({ schema_version: 1, shutdown_id: shutdownId,
+          preserve_sessions: true, ok: true, errors: [] }));
+        return { shutting_down: true, preserve_sessions: true, shutdown_id: shutdownId, receipt_path: receiptPath };
       });
       workers.push(worker);
       return worker;
@@ -441,7 +449,7 @@ test("shutdown after archiving the last session uses a daemon control connection
     assert.equal(workers.length, 0, "A host that never used the daemon must not launch it on close");
     await manager.archive("last");
     await manager.shutdownDaemon();
-    assert.deepEqual(calls, ["session.archive", "daemon.shutdown"]);
+    assert.deepEqual(calls, ["session.archive", "daemon.hello", "daemon.shutdown"]);
     assert.ok(workers.every((worker) => worker.closed));
   } finally {
     await rm(value.root, { recursive: true, force: true });

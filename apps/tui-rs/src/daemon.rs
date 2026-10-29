@@ -262,6 +262,11 @@ impl WorkerConnection {
     }
 }
 
+struct ShutdownRequest {
+    preserve_sessions: bool,
+    scheduled: bool,
+}
+
 struct Runtime {
     paths: RuntimePaths,
     repository_root: PathBuf,
@@ -271,6 +276,8 @@ struct Runtime {
     workers: Mutex<HashMap<String, Arc<WorkerConnection>>>,
     residency: Mutex<()>,
     shutdown: AtomicBool,
+    shutdown_id: String,
+    shutdown_request: Mutex<Option<ShutdownRequest>>,
     desktop_owned: bool,
     desktop_startup_unknown: AtomicBool,
     idle_sweep_running: AtomicBool,
@@ -1624,6 +1631,8 @@ pub fn serve(repository_root: Option<&Path>, config_path: Option<&Path>) -> Resu
         workers: Mutex::new(HashMap::new()),
         residency: Mutex::new(()),
         shutdown: AtomicBool::new(false),
+        shutdown_id: Uuid::new_v4().to_string(),
+        shutdown_request: Mutex::new(None),
         desktop_owned: desktop_parent.is_some(),
         desktop_startup_unknown: AtomicBool::new(false),
         idle_sweep_running: AtomicBool::new(false),
@@ -1672,11 +1681,21 @@ pub fn serve(repository_root: Option<&Path>, config_path: Option<&Path>) -> Resu
     }
 
     let cleanup_errors = runtime.stop_all_workers_checked();
+    runtime.write_shutdown_receipt(&cleanup_errors)?;
     if let Some(run_id) = desktop_run {
         crate::desktop_owner::shutdown_receipt(&paths.runtime_dir, &run_id, &cleanup_errors)?;
         if !cleanup_errors.is_empty() {
             bail!("desktop worker cleanup incomplete; retained descriptors require reconciliation");
         }
+    }
+    if runtime
+        .shutdown_request
+        .lock()
+        .expect("shutdown request mutex poisoned")
+        .is_some()
+        && !cleanup_errors.is_empty()
+    {
+        bail!("worker cleanup incomplete; retained descriptors require reconciliation");
     }
     let _ = fs::remove_file(&paths.public_socket);
     drop(lock_file);
@@ -1684,6 +1703,71 @@ pub fn serve(repository_root: Option<&Path>, config_path: Option<&Path>) -> Resu
 }
 
 impl Runtime {
+    fn prepare_shutdown(&self, params: &Value) -> Result<Value> {
+        let requested = match params.get("preserve_sessions") {
+            None => false,
+            Some(Value::Bool(value)) => *value,
+            Some(_) => bail!("preserve_sessions must be a boolean"),
+        };
+        // Desktop ownership keeps its existing close semantics. Ordinary CLI
+        // shutdown still archives sessions unless its caller explicitly opts in.
+        let preserve_sessions = self.desktop_owned || requested;
+        let mut request = self
+            .shutdown_request
+            .lock()
+            .expect("shutdown request mutex poisoned");
+        if let Some(existing) = request.as_ref() {
+            if existing.preserve_sessions != preserve_sessions {
+                bail!("daemon shutdown already requested with a different preservation policy");
+            }
+        } else {
+            *request = Some(ShutdownRequest {
+                preserve_sessions,
+                scheduled: false,
+            });
+        }
+        Ok(json!({
+            "shutting_down": true,
+            "preserve_sessions": preserve_sessions,
+            "shutdown_id": self.shutdown_id,
+            "receipt_path": self.paths.runtime_dir.join(format!("shutdown-{}.json", self.shutdown_id)),
+        }))
+    }
+
+    fn write_shutdown_receipt(&self, errors: &[String]) -> Result<()> {
+        let request = self
+            .shutdown_request
+            .lock()
+            .expect("shutdown request mutex poisoned");
+        let Some(request) = request.as_ref() else {
+            return Ok(());
+        };
+        let destination = self
+            .paths
+            .runtime_dir
+            .join(format!("shutdown-{}.json", self.shutdown_id));
+        let temporary = self
+            .paths
+            .runtime_dir
+            .join(format!(".shutdown-{}.tmp", self.shutdown_id));
+        let data = json!({
+            "schema_version": 1,
+            "shutdown_id": self.shutdown_id,
+            "preserve_sessions": request.preserve_sessions,
+            "ok": errors.is_empty(),
+            "errors": errors,
+        });
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temporary)?;
+        file.write_all(&serde_json::to_vec(&data)?)?;
+        file.sync_all()?;
+        fs::rename(temporary, destination)?;
+        Ok(())
+    }
+
     fn retain_failed_desktop_start(&self, descriptor: &Path, pid: Option<u32>) -> bool {
         let Some(pid) = pid.filter(|_| self.desktop_owned) else {
             return false;
@@ -1703,17 +1787,10 @@ impl Runtime {
     }
 
     fn list_presets(&self) -> Result<Value> {
-        // This bb helper is a daemon child too. Drain it before a desktop
-        // cleanup receipt; materialization already runs under create's gate.
-        let _desktop_process = if self.desktop_owned {
-            Some(crate::desktop_owner::process_admission(
-                true,
-                &self.shutdown,
-                &self.residency,
-            )?)
-        } else {
-            None
-        };
+        // This helper shares the process admission fence with create/hydrate.
+        // A shutdown receipt must not precede an already admitted helper.
+        let _process =
+            crate::desktop_owner::process_admission(true, &self.shutdown, &self.residency)?;
         let expression = r#"
 (require '[qi.presets :as presets]
          '[cheshire.core :as json]
@@ -1866,11 +1943,9 @@ impl Runtime {
             let Ok(descriptor) = read_descriptor(&path) else {
                 continue;
             };
-            let Ok(residency) = crate::desktop_owner::process_admission(
-                self.desktop_owned,
-                &self.shutdown,
-                &self.residency,
-            ) else {
+            let Ok(residency) =
+                crate::desktop_owner::process_admission(true, &self.shutdown, &self.residency)
+            else {
                 return;
             };
             if self
@@ -1959,11 +2034,8 @@ impl Runtime {
         {
             self.sweep_idle_workers_with_threshold(Duration::ZERO, true)?;
         }
-        let _residency = crate::desktop_owner::process_admission(
-            self.desktop_owned,
-            &self.shutdown,
-            &self.residency,
-        )?;
+        let _residency =
+            crate::desktop_owner::process_admission(true, &self.shutdown, &self.residency)?;
         let max_workers = configured_max_workers();
         if self.workers.lock().expect("workers mutex poisoned").len() >= max_workers {
             bail!("worker quota reached ({max_workers}); stop an agent before creating another")
@@ -2414,11 +2486,8 @@ impl Runtime {
         {
             self.sweep_idle_workers_with_threshold(Duration::ZERO, true)?;
         }
-        let _residency = crate::desktop_owner::process_admission(
-            self.desktop_owned,
-            &self.shutdown,
-            &self.residency,
-        )?;
+        let _residency =
+            crate::desktop_owner::process_admission(true, &self.shutdown, &self.residency)?;
         let agent = self
             .agents
             .lock()
@@ -3530,7 +3599,7 @@ impl Runtime {
                 agent.lifecycle = "archived".into();
                 agent.inactive_reason = Some(
                     if resume_lifecycle.is_some() {
-                        "desktop-shutdown-pending"
+                        "shutdown-preserve-pending"
                     } else {
                         "explicit-stop"
                     }
@@ -3637,13 +3706,13 @@ impl Runtime {
         {
             agent.controller_client_id = None;
             if let Some(lifecycle) = resume_lifecycle
-                && agent.inactive_reason.as_deref() == Some("desktop-shutdown-pending")
+                && agent.inactive_reason.as_deref() == Some("shutdown-preserve-pending")
                 && !self.desktop_startup_unknown.load(Ordering::SeqCst)
             {
-                // Closing the desktop stops processes, not the saved session.
+                // A preserving shutdown stops processes, not saved sessions.
                 // Publish resumability only after confirmed cleanup and durable
                 // reconciliation; a concurrent explicit stop takes precedence.
-                // This private database belongs to the entire closing desktop.
+                // The request closes the entire daemon and its task database.
                 // Children have distinct agent ids, so include their unfinished
                 // work too. This is reconciliation, not cleanup proof for the
                 // other roots; each still passes its own retirement gate.
@@ -3651,7 +3720,14 @@ impl Runtime {
                 let mut resumed = agent.clone();
                 resumed.status = "inactive".into();
                 resumed.lifecycle = lifecycle;
-                resumed.inactive_reason = Some("desktop-shutdown".into());
+                resumed.inactive_reason = Some(
+                    if self.desktop_owned {
+                        "desktop-shutdown"
+                    } else {
+                        "daemon-shutdown"
+                    }
+                    .into(),
+                );
                 self.database
                     .set_worker_status(&agent.worker_id, "inactive")?;
                 self.database.upsert_agent(&resumed)?;
@@ -3665,12 +3741,18 @@ impl Runtime {
     }
 
     fn stop_all_workers_checked(&self) -> Vec<String> {
+        let preserve_sessions = self.desktop_owned
+            || self
+                .shutdown_request
+                .lock()
+                .expect("shutdown request mutex poisoned")
+                .as_ref()
+                .is_some_and(|request| request.preserve_sessions);
         let agent_ids: Vec<_> = {
             // Do not hold residency across stop_agent (it takes that lock).
-            // Once shutdown=true, later desktop starters fail under this same
-            // gate; earlier worker/helper starts finish before this snapshot.
-            let _drained =
-                crate::desktop_owner::drain_processes(self.desktop_owned, &self.residency);
+            // Once shutdown=true, later starters fail under this same gate;
+            // earlier worker/helper starts finish before this snapshot.
+            let _drained = crate::desktop_owner::drain_processes(true, &self.residency);
             self.agents
                 .lock()
                 .expect("agents mutex poisoned")
@@ -3683,7 +3765,7 @@ impl Runtime {
             if self
                 .stop_agent_inner(
                     &agent_id,
-                    self.desktop_owned && !self.desktop_startup_unknown.load(Ordering::SeqCst),
+                    preserve_sessions && !self.desktop_startup_unknown.load(Ordering::SeqCst),
                 )
                 .is_err()
             {
@@ -3882,9 +3964,9 @@ fn handle_client(runtime: Arc<Runtime>, stream: UnixStream) -> Result<()> {
         };
         match journal {
             Some(JournalEntry::Completed(result)) => {
-                write_command_response(&writer, &command.request_id, result)?;
+                write_command_response(&writer, &command.request_id, result.clone())?;
                 if command.method == "daemon.shutdown" {
-                    schedule_shutdown(&runtime);
+                    schedule_shutdown(&runtime, &result);
                     break;
                 }
                 continue;
@@ -3925,9 +4007,12 @@ fn handle_client(runtime: Arc<Runtime>, stream: UnixStream) -> Result<()> {
                 event_tx.clone(),
                 &mut HashMap::new(),
             );
+            let shutdown_result = (command.method == "daemon.shutdown")
+                .then(|| result.as_ref().ok().cloned())
+                .flatten();
             finish_client_command(&runtime, &command, &writer, result)?;
-            if command.method == "daemon.shutdown" {
-                schedule_shutdown(&runtime);
+            if let Some(result) = shutdown_result {
+                schedule_shutdown(&runtime, &result);
                 break;
             }
         } else if let Err(error) = command_tx.try_send(command) {
@@ -3986,7 +4071,8 @@ fn dispatch(
                 "repl.backend-selection.v1", "schedule.v1", "goal.v1",
                 "durable.messaging.v1", "session.lifecycle.v1",
                 "worker.idle-eviction.v1", "database.backup.v1",
-                "agent.preset-selection.v1", "preset.discovery.v1", "command.status.v1"
+                "agent.preset-selection.v1", "preset.discovery.v1", "command.status.v1",
+                "daemon.shutdown-preserve.v1"
             ]
         })),
         "daemon.status" => Ok(json!({
@@ -4024,7 +4110,7 @@ fn dispatch(
                 "idle_sweep": idle_sweep,
             }))
         }
-        "daemon.shutdown" => Ok(json!({"shutting_down": true})),
+        "daemon.shutdown" => runtime.prepare_shutdown(&command.params),
         "preset.list" => runtime.list_presets(),
         "agent.list" => Ok(Value::Array(runtime.list_agents())),
         "agent.create" => runtime.create_agent(&command.params),
@@ -5149,7 +5235,26 @@ fn spawn_goal_continuation(
     });
 }
 
-fn schedule_shutdown(runtime: &Arc<Runtime>) {
+fn schedule_shutdown(runtime: &Arc<Runtime>, accepted: &Value) {
+    // Replaying a completed shutdown from an older daemon is a receipt read,
+    // never authority to stop the new process or reuse its cleanup proof.
+    if accepted.get("shutdown_id").and_then(Value::as_str) != Some(runtime.shutdown_id.as_str()) {
+        return;
+    }
+    let mut request = runtime
+        .shutdown_request
+        .lock()
+        .expect("shutdown request mutex poisoned");
+    let Some(request) = request.as_mut() else {
+        return;
+    };
+    if request.scheduled
+        || accepted.get("preserve_sessions").and_then(Value::as_bool)
+            != Some(request.preserve_sessions)
+    {
+        return;
+    }
+    request.scheduled = true;
     let runtime = Arc::clone(runtime);
     thread::spawn(move || {
         thread::sleep(Duration::from_millis(50));

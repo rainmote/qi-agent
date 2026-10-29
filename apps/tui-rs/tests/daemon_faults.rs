@@ -463,6 +463,141 @@ fn desktop_shutdown_preserves_sessions_but_not_explicit_stops_or_archives() {
 }
 
 #[test]
+fn web_shutdown_preserves_sessions_and_old_receipts_cannot_stop_a_new_daemon() {
+    let mut harness = Harness::start();
+    let mut client = TestClient::connect(&harness.socket, "web-shutdown").unwrap();
+    assert!(
+        client
+            .call(
+                None,
+                "daemon.shutdown",
+                json!({"preserve_sessions":"true"}),
+                Some("invalid-mode")
+            )
+            .is_err()
+    );
+    thread::sleep(Duration::from_millis(80));
+    assert!(harness.child.try_wait().unwrap().is_none());
+    let mut ids = Vec::new();
+    for index in 0..2 {
+        let created = client
+            .call(
+                None,
+                "agent.create",
+                json!({"workspace":harness.workspace()}),
+                Some(&format!("web-create-{index}")),
+            )
+            .unwrap();
+        ids.push(created["agent"]["agent_id"].as_str().unwrap().to_owned());
+    }
+    client
+        .call(Some(&ids[1]), "agent.attach", json!({}), None)
+        .unwrap();
+    client
+        .call(
+            Some(&ids[1]),
+            "agent.stop",
+            json!({}),
+            Some("explicit-stop"),
+        )
+        .unwrap();
+    let accepted = client
+        .call(
+            None,
+            "daemon.shutdown",
+            json!({"preserve_sessions":true}),
+            Some("web-close"),
+        )
+        .unwrap();
+    drop(client);
+    let wait_for_exit = |harness: &mut Harness| {
+        let deadline = Instant::now() + PROCESS_TIMEOUT;
+        loop {
+            if let Some(exit) = harness.child.try_wait().unwrap() {
+                assert!(exit.success());
+                break;
+            }
+            assert!(Instant::now() < deadline, "daemon did not finish shutdown");
+            thread::sleep(Duration::from_millis(20));
+        }
+    };
+    wait_for_exit(&mut harness);
+    let path = PathBuf::from(accepted["receipt_path"].as_str().unwrap());
+    let receipt: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(receipt["shutdown_id"], accepted["shutdown_id"]);
+    assert_eq!(receipt["preserve_sessions"], true);
+    assert_eq!(receipt["ok"], true);
+    assert_eq!(receipt["errors"], json!([]));
+    assert_eq!(
+        fs::metadata(path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    harness.restart_daemon();
+    let mut replay = TestClient::connect(&harness.socket, "web-shutdown").unwrap();
+    assert_eq!(
+        replay
+            .call(
+                None,
+                "daemon.shutdown",
+                json!({"preserve_sessions":true}),
+                Some("web-close")
+            )
+            .unwrap(),
+        accepted
+    );
+    drop(replay);
+    thread::sleep(Duration::from_millis(80));
+    assert!(
+        harness.child.try_wait().unwrap().is_none(),
+        "old receipt must not stop new daemon"
+    );
+    let mut restored = TestClient::connect(&harness.socket, "web-shutdown").unwrap();
+    assert!(
+        restored
+            .call(None, "daemon.shutdown", json!({}), Some("web-close"))
+            .is_err()
+    );
+    let agents = restored.call(None, "agent.list", json!({}), None).unwrap();
+    let agents = agents.as_array().unwrap();
+    assert_eq!(
+        agents.iter().find(|a| a["agent_id"] == ids[0]).unwrap()["status"],
+        "inactive"
+    );
+    assert_eq!(
+        agents.iter().find(|a| a["agent_id"] == ids[1]).unwrap()["status"],
+        "stopped"
+    );
+    restored
+        .call(Some(&ids[0]), "agent.attach", json!({}), None)
+        .unwrap();
+    assert!(
+        restored
+            .call(Some(&ids[1]), "agent.attach", json!({}), None)
+            .is_err()
+    );
+    restored
+        .call(
+            None,
+            "daemon.shutdown",
+            json!({}),
+            Some("explicit-shutdown"),
+        )
+        .unwrap();
+    drop(restored);
+    wait_for_exit(&mut harness);
+    harness.restart_daemon();
+    let mut after = TestClient::connect(&harness.socket, "web-after-explicit").unwrap();
+    let agents = after.call(None, "agent.list", json!({}), None).unwrap();
+    assert!(
+        agents
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|a| a["status"] == "stopped")
+    );
+}
+
+#[test]
 fn preset_list_exposes_safe_display_metadata_for_mode_selection() {
     let harness = Harness::start();
     let mut client = TestClient::connect(&harness.socket, "preset-list-client").unwrap();
