@@ -9,6 +9,13 @@ export function runOutcome(value: unknown): RunOutcome | null {
   return { ...raw, "run-id": id } as unknown as RunOutcome;
 }
 
+/** Host deadline arbitration can correct an earlier worker terminal, never the reverse. */
+export function effectiveOutcome(existing: RunOutcome | null, incoming: RunOutcome): RunOutcome {
+  const arbitrated = (outcome: RunOutcome) => outcome.status === "uncertain"
+    && (outcome["host-arbitrated"] === true || outcome.host_arbitrated === true);
+  return !existing || (arbitrated(incoming) && !arbitrated(existing)) ? incoming : existing;
+}
+
 export function outcomeText(outcome: RunOutcome): string {
   const execution = { completed: t("运行完成"), failed: t("运行失败"), cancelled: t("运行已取消"), uncertain: t("结果未确认 · 需要核对") }[outcome.status];
   const verification = typeof outcome.verification === "object" ? outcome.verification?.status : outcome.verification;

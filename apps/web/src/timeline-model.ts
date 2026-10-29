@@ -1,5 +1,5 @@
 import type { DurableEvent } from "./types";
-import { runOutcome } from "./run-outcome";
+import { effectiveOutcome, runOutcome } from "./run-outcome";
 
 export interface ToolBatch { id: string; calls: DurableEvent[] }
 export type TimelineRow =
@@ -35,7 +35,15 @@ export function appendTimeline(model: TimelineModel, event: DurableEvent, buildi
     const outcome = runOutcome(event.data);
     if (!outcome) return model;
     const id = `outcome:${outcome["run-id"]}`;
-    if (model.rows.some(row => row.id === id)) return model;
+    const index = model.rows.findIndex(row => row.id === id);
+    if (index !== -1) {
+      const previous = model.rows[index];
+      if (previous.kind !== "outcome"
+        || effectiveOutcome(runOutcome(previous.event.data), outcome) !== outcome) return model;
+      const rows = [...model.rows];
+      rows[index] = { id, kind: "outcome", event: { ...event, data: { ...outcome } } };
+      return { ...model, rows };
+    }
     const rows = model.rows.filter(row => !(row.kind === "error" &&
       (row.event.data["run-id"] ?? row.event.data.run_id) === outcome["run-id"]));
     rows.push({ id, kind: "outcome", event: { ...event, data: { ...outcome } } });

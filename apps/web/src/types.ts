@@ -142,6 +142,8 @@ export interface PolicyStatus {
 export interface RunOutcome {
   "run-id": string;
   status: "completed" | "failed" | "cancelled" | "uncertain";
+  "host-arbitrated"?: boolean;
+  host_arbitrated?: boolean;
   reason?: string;
   error?: string;
   verification?: string | { status?: string } | null;

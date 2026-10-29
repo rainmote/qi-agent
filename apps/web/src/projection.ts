@@ -1,6 +1,6 @@
 import { appendTimeline, buildTimeline, type TimelineModel } from "./timeline-model";
 import type { AgentState, DurableEvent, HostEvent, Interaction, SessionSnapshot } from "./types";
-import { runOutcome } from "./run-outcome";
+import { effectiveOutcome, runOutcome } from "./run-outcome";
 
 // Sharding keeps immutable updates from copying a full session-sized Set on each event.
 const INDEX_BUCKETS = 128;
@@ -50,6 +50,34 @@ export interface Projection {
   stateRevision: number | null;
   snapshotInteractionRevision: number | null;
   interactionRevisions: ReadonlyMap<string, number>;
+  clearedRunIds: ReadonlySet<string>;
+}
+
+function clearedRunIds(events: readonly DurableEvent[], previous: ReadonlySet<string> = new Set()): Set<string> {
+  const ids = new Set(previous);
+  let clear = -1;
+  events.forEach((event, index) => { if (event.type === "session/clear") clear = index; });
+  for (let index = 0; index < clear; index++) {
+    const id = events[index].data["run-id"] ?? events[index].data.run_id;
+    if (typeof id === "string") ids.add(id);
+  }
+  return ids;
+}
+
+function clearedOutcome(event: DurableEvent, ids: ReadonlySet<string>): boolean {
+  return (event.type === "agent/run/end" || event.type === "agent.run/end")
+    && ids.has(String(event.data["run-id"] ?? event.data.run_id));
+}
+
+function runsAfterClear(events: readonly DurableEvent[]): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (let index = events.length - 1; index >= 0; index--) {
+    const event = events[index];
+    if (event.type === "session/clear") break;
+    const id = event.data["run-id"] ?? event.data.run_id;
+    if (typeof id === "string") ids.add(id);
+  }
+  return ids;
 }
 
 function revision(value: unknown): number | null {
@@ -59,13 +87,24 @@ function revision(value: unknown): number | null {
 function withOutcome(projection: Projection, value: unknown): Projection {
   const incoming = runOutcome(value);
   if (!incoming) return projection;
+  if (projection.clearedRunIds.has(incoming["run-id"])) {
+    if (projection.state["last-outcome"]?.["run-id"] !== incoming["run-id"]) return projection;
+    const { "last-outcome": _cleared, ...state } = projection.state;
+    return { ...projection, state };
+  }
   const existing = projection.timeline.rows.find(row => row.id === `outcome:${incoming["run-id"]}`);
-  const outcome = existing?.kind === "outcome" ? runOutcome(existing.event.data)! : incoming;
+  const outcome = effectiveOutcome(existing?.kind === "outcome" ? runOutcome(existing.event.data) : null, incoming);
   const timeline = appendTimeline(projection.timeline, { id: `outcome:${outcome["run-id"]}`,
     seq: 0, at: "", type: "agent/run/end", data: { ...outcome } });
   const activeRun = projection.state["run-id"];
+  // A historical correction changes its row, not the latest run's summary.
+  let latest = outcome;
+  for (let index = timeline.rows.length - 1; index >= 0; index--) {
+    const row = timeline.rows[index];
+    if (row.kind === "outcome") { latest = runOutcome(row.event.data)!; break; }
+  }
   const state = activeRun && activeRun !== outcome["run-id"] ? projection.state
-    : { ...projection.state, "last-outcome": outcome };
+    : { ...projection.state, "last-outcome": latest };
   return { ...projection, timeline, state,
     lastRunError: projection.lastRunError === outcome.error ? null : projection.lastRunError };
 }
@@ -77,10 +116,15 @@ export function fromSnapshot(snapshot: SessionSnapshot): Projection {
     seen.add(event.id);
     return true;
   }).sort((a, b) => a.seq - b.seq);
+  const cleared = clearedRunIds(events);
+  let clearedAt = -1;
+  events.forEach((event, index) => { if (event.type === "session/clear") clearedAt = index; });
+  const stateOutcome = runOutcome(snapshot.state["last-outcome"]);
+  if (clearedAt >= 0 && stateOutcome && !runsAfterClear(events).has(stateOutcome["run-id"])) cleared.add(stateOutcome["run-id"]);
   const projection: Projection = {
     events,
     eventIds: EventIdIndex.from(events),
-    timeline: buildTimeline(events),
+    timeline: buildTimeline(events.filter(event => !clearedOutcome(event, cleared))),
     summary: events.reduce(addSummary, { turns: 0, steps: 0, calls: 0, durationMs: 0 }),
     state: snapshot.state,
     interactions: snapshot.interactions || [],
@@ -89,11 +133,11 @@ export function fromSnapshot(snapshot: SessionSnapshot): Projection {
     stateRevision: revision(snapshot.state.revision),
     snapshotInteractionRevision: revision(snapshot.interactions_revision),
     interactionRevisions: new Map(),
+    clearedRunIds: cleared,
   };
-  let clearedAt = -1;
-  events.forEach((event, index) => { if (event.type === "session/clear") clearedAt = index; });
   const last = events.slice(clearedAt + 1).reverse().find(event => event.type === "agent/run/end");
-  return withOutcome(projection, clearedAt >= 0 ? last?.data : snapshot.state["last-outcome"] ?? last?.data);
+  const restored = withOutcome(projection, snapshot.state["last-outcome"]);
+  return withOutcome(restored, clearedAt >= 0 ? last?.data : snapshot.state["last-outcome"] ?? last?.data);
 }
 
 export function applyHostEvent(projection: Projection, envelope: HostEvent): Projection {
@@ -120,13 +164,28 @@ export function applyHostEvent(projection: Projection, envelope: HostEvent): Pro
       }
       events.splice(low, 0, event);
     }
-    let timeline = appending ? appendTimeline(projection.timeline, event) : buildTimeline(events);
+    const cleared = !appending || event.type === "session/clear"
+      ? clearedRunIds(events, projection.clearedRunIds) : projection.clearedRunIds;
+    if (event.type === "session/clear") {
+      const ids = cleared as Set<string>;
+      const afterClear = runsAfterClear(events);
+      const retire = (id: string) => { if (!afterClear.has(id)) ids.add(id); };
+      for (const row of projection.timeline.rows) {
+        if (row.kind === "outcome") retire(String(row.event.data["run-id"] ?? row.event.data.run_id));
+      }
+      const previous = runOutcome(projection.state["last-outcome"]);
+      if (previous) retire(previous["run-id"]);
+      if (projection.state["run-id"]) retire(projection.state["run-id"]!);
+    }
+    let timeline = appending ? (clearedOutcome(event, cleared) ? projection.timeline : appendTimeline(projection.timeline, event))
+      : buildTimeline(events.filter(item => !clearedOutcome(item, cleared)));
     if (!appending) for (const row of projection.timeline.rows) {
-      if (row.kind === "outcome") timeline = appendTimeline(timeline, row.event);
+      if (row.kind === "outcome" && !clearedOutcome(row.event, cleared)) timeline = appendTimeline(timeline, row.event);
     }
     const next = { ...projection, events, eventIds: projection.eventIds.add(event.id), timeline,
-      summary: addSummary(projection.summary, event) };
-    return event.type === "agent/run/end" && appending ? withOutcome(next, event.data) : next;
+      clearedRunIds: cleared, summary: addSummary(projection.summary, event) };
+    return event.type === "agent/run/end" || event.type === "agent.run/end" ? withOutcome(next, event.data)
+      : event.type === "session/clear" ? withOutcome(next, next.state["last-outcome"]) : next;
   }
   if (envelope.event === "agent.run/end" || envelope.event === "agent/run/end") return withOutcome(projection, envelope.data);
   if (envelope.event === "agent/state") {
