@@ -9,7 +9,7 @@ Blueprints keep their existing capability restrictions.
 
 Each plugin ID has a monotonically increasing generation and a phase:
 `starting → active → stopping → stopped`. A retained plugin context never acquires
-a newer generation implicitly. Startup publishes registrations and their cleanup
+a newer generation implicitly. Each registration and its cleanup are published
 in the same atom transaction. Starting registrations are hidden from unrelated
 callers until activation. The startup lease covers `start`, the returned disposer,
 provision checks and activation, so stopping cannot finish before a late startup

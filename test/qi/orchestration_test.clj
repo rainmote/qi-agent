@@ -2,6 +2,7 @@
   (:require [clojure.test :refer [deftest is testing]]
             [qi.cancellation :as cancellation]
             [qi.kernel :as kernel]
+            [qi.plugin :as loader]
             [qi.plugins.planning :as planning]
             [qi.plugins.workflow :as workflow]
             [qi.plugins.team :as team]
@@ -20,11 +21,11 @@
      {:ctx ctx :saved saved})))
 
 (defn mount! [ctx plugin]
-  (let [owner (kernel/plugin-context ctx (:id plugin))
-        stop ((:start plugin) owner {})]
-    (when (fn? stop) (kernel/track-effect! owner stop))
-    (kernel/mark-loaded! ctx {:id (:id plugin)})
-    ctx))
+  ;; Exercise the production loader: dependencies must be registered for drain
+  ;; ordering and recovery, not just the tool definitions under an implicit owner.
+  (with-redefs [loader/resolve-plugin (constantly plugin)]
+    (loader/load-plugin! ctx {:ns 'qi.test.fixture :config {}}))
+  ctx)
 (defn call [ctx tool args]
   ((:execute (kernel/tool ctx tool)) args {}))
 (defn plan [ctx] (:plan (call ctx "planning" {:action "show"})))
