@@ -300,7 +300,17 @@ export class SessionManager {
       this.workspaces.get(existing.summary.workspaceId);
       existing.worker.authorize?.();
       const snapshot = await this.snapshot(existing.worker);
+      // A resident worker can append a title or label after it was opened.
+      // Reloading the Web client must not restore its creation-time metadata.
+      const refreshed = await this.catalog.describe(existing.summary.path, existing.summary.workspaceId);
       existing.worker.authorize?.();
+      if (refreshed) {
+        if (refreshed.id !== existing.summary.id) throw new Error("Session transcript identity changed");
+        existing.summary = {
+          ...refreshed,
+          ...(existing.summary.presetId ? { presetId: existing.summary.presetId } : {}),
+        };
+      }
       return { ...existing, ...snapshot };
     }
     const summary = await this.find(id);
