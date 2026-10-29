@@ -30,7 +30,8 @@
                                           :id id :created-at
                                           (str (java.time.Instant/now)))
                    state (swap! pending
-                                (fn [{:keys [revision entries]}]
+                                (fn [{:keys [revision entries closed?]}]
+                                  (when closed? (throw (ex-info "Approval interaction is stopping" {:cancelled true})))
                                   (let [revision (inc revision)]
                                     {:revision revision
                                      :entries (assoc entries id
@@ -111,6 +112,9 @@
              :result-schema {:type "object"}
              :handler (fn [{:keys [id decision]}]
                         (resolve! id decision))})]
+       (kernel/track-stop! ctx #(let [state (swap! pending assoc :closed? true)]
+                                 (doseq [{:keys [completion]} (vals (:entries state))]
+                                   (deliver completion ::cancelled))))
        (kernel/register-service! ctx :ui/prompt
                                  {:active? (constantly true)
                                   :select! select!})

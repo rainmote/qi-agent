@@ -145,6 +145,10 @@
          (next (cond-> (assoc request :tools tools)
                  (not (str/blank? extra-prompt))
                  (update :system-prompt str extra-prompt))))))
+    (kernel/register-tool-guard! boundary
+      (fn [_ request]
+        (when-not (contains? tool-filter (get-in request [:execution :name]))
+          {:reason "Tool is outside the subagent read-only boundary"})))
     (kernel/intercept!
      boundary :tool/pre-execute -100
      (fn [_ request next]
@@ -230,10 +234,20 @@
                                   :agent-id agent-id}}))]
     (assoc profile :plugins plugins)))
 
-(defn- child-run-result [result token on-finish]
+(defn- child-run-result [result task token on-finish]
   (let [completion (promise)]
     (future
-      (let [{:keys [ok value error]} @result]
+      (let [{:keys [ok value error]}
+            (loop []
+              (cond
+                (realized? result) @result
+                (cancellation/cancelled? token) {:error (ex-info "Queued child run cancelled" {:cancelled true})}
+                (and task (realized? task))
+                (try @task
+                     (if (realized? result) @result
+                         {:error (ex-info "Child submit ended without a result" {:uncertain true})})
+                     (catch Throwable error {:error error}))
+                :else (do (deref result 50 nil) (recur))))]
         (on-finish)
         (deliver completion
                  (if (and ok (not (cancellation/cancelled? token)))
@@ -337,7 +351,7 @@
                             ((:submit! session) message {:cancel-token token})]
                         (assoc submitted :result
                                (child-run-result
-                                result token
+                                result (:task submitted) token
                                 #(locking message-lock
                                    (compare-and-set! active-token token nil)))))
                       (catch Throwable error

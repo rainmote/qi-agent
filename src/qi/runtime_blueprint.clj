@@ -4,6 +4,7 @@
   Blueprints are data, not Clojure source. The compiler closes over a small
   capability-free operator table and never resolves symbols, Vars or classes."
   (:require [qi.kernel :as kernel]
+            [qi.tool-contract :as contract]
             [qi.schema :as schema]
             [clojure.edn :as edn]
             [clojure.string :as str]))
@@ -716,7 +717,7 @@
 (defn install!
   "Register a compiled Blueprint as one reversible Kernel plugin."
   [ctx owner blueprint state]
-  (let [plugin-ctx (kernel/plugin-context ctx owner)]
+  (let [plugin-ctx (kernel/begin-plugin! ctx owner {})]
     (try
       (doseq [{:keys [run output-schema] :as tool} (:tools blueprint)]
         (kernel/register-tool!
@@ -735,7 +736,7 @@
                                         :state draft
                                         :vars {}
                                         :limits (:limits blueprint)}
-                                   value (result! (run env) env)
+                                   value (contract/canonical-data! (result! (run env) env))
                                    _ (when output-schema
                                        (schema/validate!
                                         output-schema value
@@ -750,10 +751,10 @@
                                value))}
            (:output-schema tool) (assoc :output-schema (:output-schema tool)))))
       (kernel/mark-loaded!
-       ctx {:id owner
+       plugin-ctx {:id owner
             :namespace 'qi.runtime-blueprint
             :description (:description blueprint)})
       {:id owner}
       (catch Throwable error
-        (kernel/dispose-plugin! ctx owner)
+        (kernel/dispose-plugin! ctx owner {:generation (:plugin/generation plugin-ctx)})
         (throw error)))))

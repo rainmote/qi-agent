@@ -589,5 +589,6 @@
                                   :cells-path cells-path
                                   :recovery :durable-state-and-replay-safe-cells})
                 :close! close!}]
+           (kernel/track-stop! ctx close!)
            (kernel/register-service! ctx :execution/repl service)
            close!)))))})

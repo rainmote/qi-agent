@@ -5,6 +5,7 @@
             [clojure.string :as str]
             [qi.cancellation :as cancellation]
             [qi.kernel :as kernel]
+            [qi.tool-contract :as contract]
             [qi.schema :as schema]
             [qi.workspace-runtime :as runtime]))
 
@@ -74,16 +75,16 @@
                                                            :token (str (random-uuid)) :call-id id :cancel-token token}}]
                        (try
                          (cancellation/throw-if-cancelled! token)
-                         (let [gate (kernel/waterfall ctx :tool/pre-execute request #(assoc % :decision :allow))]
-                           (when-not (= :allow (:decision gate))
-                             (throw (ex-info (or (:reason gate) "Office conversion was not approved") {})))
+                         (let [gate (contract/prepare! ctx request)]
+                          (try
                            (cancellation/throw-if-cancelled! token)
-                           (let [result (kernel/waterfall ctx :tool/execute gate
-                                                         #(let [value ((:execute tool) arguments (assoc (:execution %) ::on-process-start (fn [] (reset! started? true))))]
+                           (let [result (contract/dispatch! ctx gate
+                                                         #(let [value (contract/canonical! tool ((:execute tool) (get-in % [:execution :arguments]) (assoc (:execution %) ::on-process-start (fn [] (reset! started? true)))))]
                                                             (reset! generated value) value))]
                              (when-not (and @generated (= result @generated) (true? (:converted result)))
                                (throw (ex-info "Office conversion was not executed or its result was replaced; no preview is claimed" {})))
-                             result))
+                             result)
+                           (finally (contract/release! gate))))
                          (catch Throwable error
                            (if @started?
                              (throw (ex-info "Office conversion result is unconfirmed; inspect the chosen output before retry"
@@ -116,7 +117,9 @@
                                               (get @pending request_id))]
                                   (when token (cancellation/cancel! token))
                                   {:cancelled true :pending (boolean token) :admission_closed @closed?}))}]
-           disposers (mapv #((:register! registry) %) methods)]
+           disposers (mapv #((:register! registry) (kernel/wrap-plugin-value ctx %)) methods)]
+       (kernel/track-stop! ctx #(do (locking lock (reset! closed? true))
+                                   (doseq [token (vals @pending)] (cancellation/cancel! token))))
        (when (available?) (kernel/register-tool! ctx tool))
        (fn []
          (locking lock (reset! closed? true))

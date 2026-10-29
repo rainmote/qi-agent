@@ -388,6 +388,6 @@
          (if-let [registry (kernel/service ctx :llm/registry)]
            (kernel/track-effect!
             ctx
-            ((:register! registry) entry))
+            ((:register! registry) (kernel/wrap-plugin-value ctx entry)))
            (kernel/register-service! ctx :llm/generate generator)))
        nil))})

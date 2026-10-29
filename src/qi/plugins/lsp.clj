@@ -398,6 +398,7 @@
         cooldown (:failure-cooldown-ms runtime)]
     (locking clients
       (loop []
+        (when @(:closed? runtime) (throw (ex-info "LSP provider is stopping" {})))
         (if-let [client (get @clients key)]
           (if (= :ready @(:state client))
             client
@@ -415,6 +416,9 @@
               (let [client (create-client! (:stdio runtime) server project-root
                                            runtime)]
                 (swap! clients assoc key client)
+                (when @(:closed? runtime)
+                  (stop-client! client)
+                  (throw (ex-info "LSP stopped during startup" {})))
                 (swap! failures dissoc key)
                 client)
               (catch Throwable error
@@ -700,13 +704,15 @@
                     :stdio (kernel/require-service ctx :execution/stdio-session)
                     :trust (kernel/require-service ctx :project/trust)
                     :servers servers
-                    :clients clients
+                    :clients clients :closed? (atom false)
                     :failures (atom {})
                     :request-timeout-ms request-timeout-ms
                     :startup-timeout-ms startup-timeout-ms
                     :failure-cooldown-ms failure-cooldown-ms
                     :diagnostic-wait-ms diagnostic-wait-ms
                     :max-document-chars max-document-chars}]
+       (kernel/track-stop! ctx #(do (reset! (:closed? runtime) true)
+                                   (doseq [client (vals @clients)] (stop-client! client))))
        (kernel/register-service!
         ctx :lsp/runtime
         {:query! (fn [arguments execution]

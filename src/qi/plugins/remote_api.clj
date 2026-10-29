@@ -158,7 +158,7 @@
            tasks (atom #{})
            register!
            (fn [definition]
-             (kernel/track-effect! ctx ((:register! registry) definition)))
+             (kernel/track-effect! ctx ((:register! registry) (kernel/wrap-plugin-value ctx definition))))
            method!
            (fn [method description params-schema result-schema handler]
              (register! {:method method

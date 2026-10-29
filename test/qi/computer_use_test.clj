@@ -467,7 +467,7 @@
         (is (= "invalid-desktop" (get-in (tool-results ctx) [1 :details :blocked-by]))))
       (finally (kernel/dispose-all! ctx)))))
 
-(deftest unloading-policy-prevents-surviving-desktop-tools-from-dispatching
+(deftest unloading-policy-suspends-dependent-desktop-tools
   (let [{:keys [ctx] :as f} (fixture)
         driver (fake-driver)]
     (try
@@ -478,7 +478,8 @@
         (is (empty? (filter #(= "tools/call" (first %)) @(:requests driver))))
         (let [result (last (tool-results ctx))]
           (is (false? (:ok result)))
-          (is (str/includes? (:content result) ":tool/policy"))))
+          (is (nil? (kernel/tool ctx "computer_snapshot")))
+            (is (str/includes? (:content result) "Unknown tool: computer_snapshot"))))
       (finally (kernel/dispose-all! ctx)))))
 
 (deftest effective-provider-route-and-alias-control-image-capability-without-changing-selection

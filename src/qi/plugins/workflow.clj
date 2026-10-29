@@ -280,6 +280,9 @@
            rpc-parameters (update parameters :properties merge
                                   {:node_id {:type "string"} :status {:type "string"}
                                    :result {:type "object"} :evidence {:type "string" :maxLength 4000}})]
+       (kernel/track-stop! ctx #(locking admission-lock
+                                 (reset! disposed? true)
+                                 (doseq [{:keys [token]} (vals @active)] (cancellation/cancel! token))))
        (kernel/register-service! ctx :workflow/runtime {:snapshot snapshot :execute! execute})
        (kernel/register-tool! ctx {:name "workflow" :description "Define and run bounded DAG, pipeline or parallel research workflows using the host's registered subagents. Returns an asynchronous run with durable node results. It does not grant coding or shell permissions."
                                   :parameters parameters :execution-mode :sequential :execute execute})

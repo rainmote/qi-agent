@@ -50,14 +50,16 @@
    :provides #{:automation/control}
    :start
    (fn [ctx {:keys [timeout-ms] :or {timeout-ms 10000}}]
-     (let [pending (atom {})
+     (let [pending (atom {}) closed? (atom false)
            available? (boolean (env/get "QI_AGENT_WORKER_ID" "DAO_WORKER_ID"))
            registry (kernel/require-service ctx :remote/registry)
            request! (fn [method params]
                       (when-not available?
                         (throw (ex-info "Durable automation requires a daemon-managed Web or TUI session" {:type :automation/unavailable})))
                       (let [id (str (random-uuid)) result (promise)]
-                        (swap! pending assoc id result)
+                        (locking pending
+                          (when @closed? (throw (ex-info "Automation bridge is stopping" {:type :automation/unavailable})))
+                          (swap! pending assoc id result))
                         (try
                           (kernel/emit! ctx :automation/request {:id id :method method :params params})
                           (let [response (deref result timeout-ms ::timeout)]
@@ -67,6 +69,10 @@
                             (if (:ok response) (:result response)
                                 (throw (ex-info (:error response) {:type :automation/rejected}))))
                           (finally (swap! pending dissoc id)))))]
+       (kernel/track-stop! ctx #(locking pending
+                                 (reset! closed? true)
+                                 (doseq [[_ result] @pending]
+                                   (deliver result {:ok false :error "Automation bridge stopped; inspect actual state before retrying"}))))
        (kernel/register-service! ctx :automation/control {:available? available? :request! request!})
        ;; Only the private daemon-worker channel may deliver these responses.
        ;; The public daemon dispatcher rejects automation.resolve unconditionally.

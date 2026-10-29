@@ -549,6 +549,6 @@
              initial (entry {})]
          (kernel/register-service! ctx :chatgpt/provider-entry entry)
          (if-let [registry (kernel/service ctx :llm/registry)]
-           (kernel/track-effect! ctx ((:register! registry) initial))
+           (kernel/track-effect! ctx ((:register! registry) (kernel/wrap-plugin-value ctx initial)))
            (kernel/register-service! ctx :llm/generate (:generate initial))))
        nil))})

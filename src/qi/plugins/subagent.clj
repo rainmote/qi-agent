@@ -481,6 +481,8 @@
             :delete! delete!
             :release! delete!
             :tombstones #(vec @tombstones)}]
+       (kernel/track-stop! ctx #(doseq [job (vals @jobs)]
+                                 (when-let [cancel! (get-in job [:handle :cancel!])] (cancel!))))
        (kernel/register-service! ctx :subagents/runtime runtime)
        (fn []
          (doseq [agent-id (keys @jobs)]

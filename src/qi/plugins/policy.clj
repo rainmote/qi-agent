@@ -1,5 +1,6 @@
 (ns qi.plugins.policy
-  (:require [qi.kernel :as kernel]))
+  (:require [qi.kernel :as kernel]
+            [qi.tool-contract :as contract]))
 
 (defn- record-decision! [ctx data]
   (when-let [store (kernel/service ctx :session/store)]
@@ -24,8 +25,30 @@
                   terminate-on-deny false}}]
      (let [denied (set deny-tools)
            trust-required (set trusted-tools)
-           approval-required (set approval-tools)]
-       (kernel/register-service! ctx :tool/policy {:metadata-gates true})
+           approval-required (set approval-tools)
+           receipts (atom {})
+           member? (fn [configured request]
+                     (let [tool-name (get-in request [:execution :name])]
+                       (or (contains? configured tool-name)
+                           (and (contains? #{"terminal" "office_preview"} tool-name)
+                                (contains? configured "bash")))))
+           needs-approval? #(or (member? approval-required %) (true? (get-in % [:tool :requires-approval])))]
+       (kernel/register-service! ctx :tool/policy {:metadata-gates true :release! #(swap! receipts dissoc %)})
+       (kernel/track-effect! ctx #(reset! receipts {}))
+       (kernel/register-tool-guard!
+        ctx (fn [_ request]
+              (let [trust (kernel/service ctx :project/trust)]
+                (cond
+                  (member? denied request) {:reason "Denied by configured tool policy." :terminate terminate-on-deny}
+                  (and (or (member? trust-required request) (true? (get-in request [:tool :requires-trust])))
+                       (not (and trust ((:trusted? trust)))))
+                  {:reason "Tool requires a trusted project; use /trust allow to enable it." :terminate terminate-on-deny}
+                  (and (needs-approval? request)
+                       (let [receipt (get @receipts (get-in request [:execution :token]))]
+                         (or (not= (:identity receipt) (contract/identity-of request))
+                             (not (identical? (:approver receipt) (kernel/service ctx :approval/request))))))
+                  {:reason "Tool approval is missing or no longer matches this invocation." :terminate terminate-on-deny}
+                  :else nil))))
        (kernel/intercept!
         ctx :tool/pre-execute -100
         (fn [_ request next]
@@ -68,7 +91,9 @@
                  ctx (assoc (dissoc approval-request :cancel-token)
                             :decision decision))
                 (if (= :allow decision)
-                  (next request)
+                  (do (when-let [token (get-in request [:execution :token])]
+                        (swap! receipts assoc token {:identity (contract/identity-of request) :approver approve}))
+                      (next request))
                   (deny request "Tool execution was not approved."
                         terminate-on-deny)))
 

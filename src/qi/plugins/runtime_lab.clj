@@ -197,6 +197,13 @@
              #(if (:state %) % (assoc % :state state)))
       (blueprint/install! ctx owner (:blueprint package) state))))
 
+(defn- dispose-completely! [ctx plugin-id]
+  (let [receipt (kernel/dispose-plugin! ctx plugin-id)]
+    (when-not (= :complete (:status receipt))
+      (throw (ex-info "Runtime plugin cleanup is incomplete"
+                      {:type :runtime-lab/cleanup-incomplete :receipt receipt})))
+    receipt))
+
 (defn- run-package! [ctx definitions action {:keys [pluginId packageId]}]
   (let [plugin-id (require-text! {:pluginId pluginId} :pluginId)
         package-id (require-text! {:packageId packageId} :packageId)
@@ -212,7 +219,7 @@
       (throw (ex-info "Runtime plugin update requires a different package"
                       {:type :runtime-lab/update-same-package
                        :plugin-id plugin-id :package-id package-id})))
-    (when active-id (kernel/dispose-plugin! ctx active-id))
+    (when active-id (dispose-completely! ctx active-id))
     (swap! definitions assoc-in [:plugins plugin-id :active-plugin-id] nil)
     (swap! definitions assoc-in [:plugins plugin-id :next-package-id] package-id)
     (try
@@ -238,7 +245,11 @@
               (let [restored (load-package! ctx definitions plugin-id previous)]
                 (swap! definitions assoc-in
                        [:plugins plugin-id :active-plugin-id] (:id restored)))
-              (catch Throwable _ nil))))
+              (catch Throwable rollback-error
+                (throw (ex-info "Plugin update failed and runtime restoration also failed"
+                                {:type :runtime-lab/rollback-failed
+                                 :original-error (ex-message error)
+                                 :rollback-error (ex-message rollback-error)}))))))
         (throw error)))))
 
 (defn- stop-package! [ctx definitions plugin-id]
@@ -249,7 +260,7 @@
                       {:type :runtime-lab/plugin-not-found
                        :plugin-id plugin-id})))
     (when-let [active-id (:active-plugin-id definition)]
-      (kernel/dispose-plugin! ctx active-id))
+      (dispose-completely! ctx active-id))
     (swap! definitions assoc-in [:plugins plugin-id :active-plugin-id] nil)
     {:plugin-id plugin-id :status "stopped"}))
 
@@ -288,7 +299,7 @@
                          :namespace namespace})))
       (if-let [plugin-id (get @managed namespace)]
         (do
-          (kernel/dispose-plugin! ctx plugin-id)
+          (dispose-completely! ctx plugin-id)
           (swap! managed dissoc namespace)
           (receipt namespace plugin-id "inactive"))
         (receipt namespace (:id (plugin/resolve-plugin (get allowed namespace))) "inactive")))
@@ -379,9 +390,9 @@
         (fn []
           (doseq [plugin-id (keep :active-plugin-id
                                   (vals (:plugins @definitions)))]
-            (kernel/dispose-plugin! ctx plugin-id))
+            (dispose-completely! ctx plugin-id))
           (doseq [plugin-id (reverse (vals @managed))]
-            (kernel/dispose-plugin! ctx plugin-id))
+            (dispose-completely! ctx plugin-id))
           (reset! managed {})
           (reset! definitions {:plugins {}})))
        nil))})

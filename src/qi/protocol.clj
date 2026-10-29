@@ -43,7 +43,7 @@
      (write-json! (cond-> envelope agent-id (assoc :agent_id agent-id))))))
 
 (defn subscribe-json! [ctx]
-  (let [plugin-ctx (kernel/plugin-context ctx :protocol/json)
+  (let [plugin-ctx (kernel/begin-plugin! ctx :protocol/json {:phase :active})
         session (kernel/require-service ctx :agent/session)
         store (kernel/require-service ctx :session/store)
         session-id (:session-id store)
@@ -70,7 +70,7 @@
                       (write-event! session-id event data)))))
     (fn []
       (dispose-session)
-      (kernel/dispose-plugin! ctx :protocol/json))))
+      (kernel/dispose-plugin! ctx :protocol/json {:generation (:plugin/generation plugin-ctx)}))))
 
 (defn json-once! [ctx prompt]
   (let [dispose (subscribe-json! ctx)]
@@ -98,7 +98,7 @@
            (blocking-rpc? (:method params) (:params params)))))
 
 (defn- process-admission! [ctx]
-    (let [owner (kernel/plugin-context ctx :protocol/process-admission)
+    (let [owner (kernel/begin-plugin! ctx :protocol/process-admission {:phase :active})
           pending (atom {})
           closed? (atom false)]
       (kernel/register-service!
@@ -125,7 +125,7 @@
       (fn [] (reset! closed? true)
         (doseq [result (vals @pending)] (deliver result false))
         (reset! pending {})
-        (kernel/dispose-plugin! ctx :protocol/process-admission))))
+        (kernel/dispose-plugin! ctx :protocol/process-admission {:generation (:plugin/generation owner)}))))
 
 (defn rpc! [ctx]
   (let [session (kernel/require-service ctx :agent/session)

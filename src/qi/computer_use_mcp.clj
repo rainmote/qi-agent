@@ -274,7 +274,8 @@
          (kernel/track-effect! ctx ((:register! registry) provider-name)))
        ;; This effect is installed before connecting so partial startup also
        ;; closes processes before the reservation is unwound.
-       (kernel/track-effect! ctx #(do (reset! active? false) (stop-client!)))
+       (kernel/track-stop! ctx #(do (reset! active? false) (stop-client!)))
+       (kernel/track-effect! ctx stop-client!)
        (kernel/register-service! ctx :computer-use/runtime {:status status})
        ;; Run after the built-in role router. An explicit per-run/role provider
        ;; can differ from the globally selected model; gate actions using the

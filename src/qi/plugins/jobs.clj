@@ -60,7 +60,10 @@
                                   config)
                            :notify! notify!))]
        ;; Register cleanup before exposing operations, including partial start failures.
-       (kernel/track-effect! ctx (:close! manager))
-       (kernel/register-service! ctx :execution/jobs manager)
+       (kernel/track-stop! ctx (:close! manager))
+       (kernel/track-effect! ctx #(let [receipt ((:close! manager))]
+                                   (when (pos? (:remaining receipt))
+                                     (throw (ex-info "Background jobs have not stopped" receipt)))))
+       (kernel/register-service! ctx :execution/jobs (update manager :list kernel/inspection))
        (doseq [tool (job-tools manager)] (kernel/register-tool! ctx tool))
        nil))})

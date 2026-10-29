@@ -2,6 +2,7 @@
   "Session-owned PTY commands with the normal tool/trust/plan/approval gates."
   (:require [qi.cancellation :as cancellation]
             [qi.kernel :as kernel]
+            [qi.tool-contract :as contract]
             [qi.schema :as schema]))
 
 (def parameters
@@ -27,7 +28,7 @@
      (let [world (kernel/require-service ctx :execution/world)
            registry (kernel/require-service ctx :remote/registry)
            method-disposers (atom [])
-           register-method! #(swap! method-disposers conj ((:register! registry) %))
+           register-method! #(swap! method-disposers conj ((:register! registry) (kernel/wrap-plugin-value ctx %)))
            terminals (atom {}) disposed? (atom false) lock (Object.)
            pending (atom {}) cancelled (atom #{}) admission-closed? (atom false)
            trusted? #(when-let [trust (kernel/service ctx :project/trust)] ((:trusted? trust)))
@@ -123,11 +124,11 @@
                                                            :call-id id :cancel-token token}}]
                        (try
                          (cancellation/throw-if-cancelled! token)
-                         (let [gate (kernel/waterfall ctx :tool/pre-execute request #(assoc % :decision :allow))]
-                           (when-not (= :allow (:decision gate))
-                             (throw (ex-info (or (:reason gate) "Terminal was not approved") {})))
-                           (cancellation/throw-if-cancelled! token)
-                           (kernel/waterfall ctx :tool/execute gate #(execute arguments (:execution %))))
+                         (let [gate (contract/prepare! ctx request)]
+                           (try
+                             (cancellation/throw-if-cancelled! token)
+                             (contract/canonical! tool (contract/dispatch! ctx gate #(execute (get-in % [:execution :arguments]) (:execution %))))
+                                (finally (contract/release! gate))))
                          (finally (swap! pending dissoc id))))))
            monitor (future
                      (loop []
@@ -171,9 +172,17 @@
                                                   (get @pending request_id))]
                                       (when token (cancellation/cancel! token))
                                       {:cancelled true :pending (boolean token) :admission_closed @admission-closed?}))})
+       (kernel/track-stop! ctx #(do
+                                 (locking lock (reset! disposed? true))
+                                 (doseq [token (vals @pending)] (cancellation/cancel! token))
+                                 (future-cancel monitor)
+                                 (close-all!)))
        (fn []
          (locking lock (reset! disposed? true))
          (doseq [token (vals @pending)] (cancellation/cancel! token))
          (future-cancel monitor)
          (doseq [dispose (reverse @method-disposers)] (dispose))
-         (close-all!))))})
+         (let [receipts (close-all!)]
+           (when (some #(or (= ::unknown %) (= "unknown" (:status %))
+                            (true? (:uncertain %)) (false? (:cleanup_confirmed %))) receipts)
+             (throw (ex-info "Terminal cleanup is unconfirmed; inspect retained identities before retrying" {:receipts receipts})))))))})

@@ -80,7 +80,9 @@
 (defn- owner [id] (keyword "package" id))
 (defn- stop! [ctx active id]
   (when (contains? @active id)
-    (kernel/dispose-plugin! ctx (owner id))
+    (let [receipt (kernel/dispose-plugin! ctx (owner id))]
+      (when-not (= :complete (:status receipt))
+        (throw (ex-info "Plugin cleanup is incomplete" {:type :plugin-package/cleanup-incomplete :receipt receipt}))))
     (swap! active dissoc id)))
 (defn- start! [ctx active id bundle prior-state]
   (let [compiled (:compiled bundle)

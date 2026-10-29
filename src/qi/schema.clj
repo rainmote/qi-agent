@@ -6,6 +6,9 @@
 (defn- field [m k]
   (if (contains? m k) (get m k) (get m (name k))))
 
+(defn- json-key [key]
+  (if (keyword? key) (subs (str key) 1) key))
+
 (defn- value-at [m property]
   (let [keyword-key (keyword property)]
     (if (contains? m keyword-key) (get m keyword-key) (get m property))))
@@ -35,9 +38,9 @@
   (if-not (map? value)
     []
     (let [properties (or (field schema :properties) {})
-          required (set (map name (or (field schema :required) [])))
-          property-names (set (map (comp name key) properties))
-          value-names (set (map (comp name key) value))
+          required (set (map json-key (or (field schema :required) [])))
+          property-names (set (map (comp json-key key) properties))
+          value-names (set (map (comp json-key key) value))
           missing (set/difference required value-names)
           unknown (when (false? (field schema :additionalProperties))
                     (set/difference value-names property-names))
@@ -53,7 +56,7 @@
           (when (> size maximum)
             [(str path " must have at most " maximum " properties")]))
         (mapcat (fn [[property property-schema]]
-                  (let [property-name (name property)]
+                  (let [property-name (json-key property)]
                     (when (present? value property-name)
                       (errors property-schema
                               (value-at value property-name)

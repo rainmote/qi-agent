@@ -173,6 +173,6 @@
            (fn [] {:api-key (api-key config)})
            {:provider :anthropic :source (if (:api-key config) :config :environment)})))
        (if-let [registry (kernel/service ctx :llm/registry)]
-         (kernel/track-effect! ctx ((:register! registry) entry))
+         (kernel/track-effect! ctx ((:register! registry) (kernel/wrap-plugin-value ctx entry)))
          (kernel/register-service! ctx :llm/generate (:generate entry))))
      nil)})

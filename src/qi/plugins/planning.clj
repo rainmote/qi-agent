@@ -183,6 +183,11 @@
                    (and (contains? #{"workflow" "team"} name)
                         (contains? #{"show" "list" "status" "mailbox" "cancel"} action)))))
            service {:snapshot snapshot :execute! execute :hard-gate true :permitted? permitted?}]
+       (kernel/track-stop! ctx #(cancellation/cancel! @active-token))
+       (kernel/register-tool-guard! ctx
+         (fn [_ request]
+           (when-not (permitted? (get-in request [:execution :name]) (get-in request [:execution :arguments :action]))
+             {:reason "Plan execution gate is closed; approve and start the current revision."})))
        (kernel/register-service! ctx :planning/runtime service)
        (kernel/register-tool! ctx {:name "planning" :description "Create and track a durable plan. Submitting requests approval; execution stays read-only until the approved revision is started. Paused plans require approval again."
                                   :parameters parameters :execution-mode :sequential :execute execute})

@@ -258,6 +258,9 @@
                                          :on-notification #(when (= "notifications/tools/list_changed" (:method %)) (reset! stale true))})
                          client ((if (= :stdio (:transport config)) stdio/connect! http/connect!) options)]
                      (swap! states assoc id {:client client :stale stale :disposers [] :catalog []})
+                     (when-not @active?
+                       ((:close! client))
+                       (throw (ex-info "MCP stopped during connection" {})))
                      (refresh! id {})
                      (status))
                    (catch Throwable e
@@ -307,6 +310,9 @@
                         "refresh" (do (authorize! action id (connection-target (or (get @configs id) (throw (ex-info "Unknown MCP server" {}))))) (refresh! id {}) (status))
                         "disconnect" (do (require-trust!) (locking lifecycle (disconnect! id)) (status))
                         (throw (ex-info "Unknown MCP control action" {}))))]
+       (kernel/track-stop! ctx #(do (reset! active? false)
+                                    (doseq [state (vals @states)]
+                                      (when-let [client (:client state)] ((:close! client))))))
        (kernel/track-effect! ctx #(do (reset! active? false) (doseq [id (keys @states)] (disconnect! id))))
        (kernel/register-service! ctx :mcp/runtime {:status status :connect! connect! :reconnect! connect!
                                                   :disconnect! #(control! % "disconnect") :refresh! refresh!
@@ -335,6 +341,6 @@
                        {:method "mcp.configure" :blocking true :description "Replace this worker's configured MCP servers after trust and approval; never connects automatically."
                         :params-schema {:type "object" :properties {:servers {:type "array" :items {:type "object"}}} :required ["servers"] :additionalProperties false}
                         :result-schema {:type "object"} :handler (fn [p] (configure! (mapv remote-entry (:servers p))))}]]
-           (kernel/track-effect! ctx ((:register! remote) entry))))
+           (kernel/track-effect! ctx ((:register! remote) (kernel/wrap-plugin-value ctx entry)))))
        (doseq [{:keys [id enabled]} servers] (when enabled (connect! id)))
        nil))})

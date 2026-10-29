@@ -27,6 +27,6 @@
               :model (or (:model config) "mock")
               :context-window (:context-window config)
               :input-modalities #{:text}
-              :generate generator}))
+              :generate (kernel/wrap-plugin-value ctx generator)}))
            (kernel/register-service! ctx :llm/generate generator)))
        nil))})

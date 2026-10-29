@@ -41,6 +41,7 @@
             [qi.planning-protocol-test]
             [qi.automation-test]
             [qi.plugin-manager-test]
+            [qi.plugin-contract-test]
             [qi.session-title-test]
             [qi.protocol :as protocol]
             [qi.sandbox :as sandbox]
@@ -4358,6 +4359,6 @@
                    'qi.mcp-http-test 'qi.mcp-client-test 'qi.web-tools-test
                    'qi.orchestration-test 'qi.orchestration-recovery-test
                    'qi.planning-protocol-test 'qi.automation-test
-                   'qi.plugin-manager-test)]
+                   'qi.plugin-manager-test 'qi.plugin-contract-test)]
     (when (pos? (+ fail error))
       (throw (ex-info "Tests failed" {:fail fail :error error})))))

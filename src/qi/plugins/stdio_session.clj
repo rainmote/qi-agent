@@ -151,11 +151,15 @@
                        {:stderr-tail-chars stderr-tail-chars
                         :close-timeout-ms close-timeout-ms})))
      (let [world (kernel/require-service ctx :execution/world)
-           sessions (atom {})
+           sessions (atom {}) closed? (atom false)
            service {:available? (contains? (:capabilities world) :process)
                     :open! (fn [options]
-                             (start-session! world sessions stderr-tail-chars
-                                             close-timeout-ms options))
+                             (when @closed? (throw (ex-info "stdio provider is stopping" {})))
+                             (let [session (start-session! world sessions stderr-tail-chars close-timeout-ms options)]
+                               (when @closed?
+                                 ((:close! session))
+                                 (throw (ex-info "stdio provider stopped during open" {})))
+                               session))
                     :sessions (fn []
                                 (->> @sessions vals
                                      (mapv (fn [session]
@@ -164,5 +168,6 @@
                     :close-all! (fn []
                                   (doseq [session (vals @sessions)]
                                     ((:close! session))))}]
+       (kernel/track-stop! ctx #(do (reset! closed? true) ((:close-all! service))))
        (kernel/register-service! ctx :execution/stdio-session service)
        #((:close-all! service))))})

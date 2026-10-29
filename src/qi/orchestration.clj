@@ -74,5 +74,5 @@
                             (update :properties dissoc :action "action")
                             (assoc :required []))
          :result-schema {:type "object"}
-         :handler #(execute (assoc % :action action) {:orchestration/user-rpc true})}))))
+         :handler (kernel/wrap-plugin-value ctx #(execute (assoc % :action action) {:orchestration/user-rpc true}))}))))
   nil)

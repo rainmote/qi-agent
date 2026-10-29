@@ -9,6 +9,7 @@
             [qi.run-progress :as run-progress]
             [qi.session-preferences :as preferences]
             [qi.schema :as schema]
+            [qi.tool-contract :as contract]
             [qi.system-prompt :as system]
             [qi.tool-recovery :as recovery]
             [cheshire.core :as json]
@@ -108,16 +109,13 @@
 (defn- run-tool-body [{:keys [tool execution]}]
   (try
     (cancellation/throw-if-cancelled! (:cancel-token execution))
-    (let [value ((:execute tool) (:arguments execution) execution)
+    (let [value (contract/canonical! tool ((:execute tool) (:arguments execution) execution))
           details (when-let [details-fn (:result-details tool)]
                     (details-fn (:arguments execution) value))
           images (when-let [images-fn (:result-images tool)]
                    (images-fn (:arguments execution) value))
           is-error (boolean (when-let [error-fn (:result-error? tool)]
                               (error-fn (:arguments execution) value)))]
-      (when-let [output-schema (:output-schema tool)]
-        (schema/validate! output-schema value
-                          "Tool returned invalid canonical output"))
       (cond-> {:ok (not is-error)
        :is-error is-error
        :execution execution
@@ -179,35 +177,15 @@
                               {:errors validation-errors})}
 
             :else
-            (let [gate (kernel/waterfall
-                        ctx :tool/pre-execute
-                        {:decision :pending
-                         :execution execution
-                         :tool tool}
-                        #(assoc % :decision :allow))]
-              (cond
-                (cancellation/cancelled? cancel-token)
-                {:call tool-call
-                 :result (cancelled-result (:execution gate))}
-
-                (= :deny (:decision gate))
-                {:call tool-call
-                 :result (assoc (failure execution
-                                         (or (:reason gate)
-                                             "Denied by policy"))
-                                :terminate (boolean (:terminate gate)))}
-
-                :else
-                {:call tool-call
-                 :prepared {:execution (:execution gate)
-                            :tool (:tool gate)}}))))
+            {:call tool-call
+             :prepared (contract/prepare! ctx {:tool tool :execution execution})}))
         (catch Throwable error
           {:call tool-call
            :result (if (or (cancelled-error? error)
                            (cancellation/cancelled? cancel-token))
                      (cancelled-result base-execution)
-                     (failure base-execution (ex-message error)
-                              (ex-data error)))})))))
+                     (assoc (failure base-execution (ex-message error) (ex-data error))
+                            :terminate (boolean (:terminate (ex-data error)))))})))))
 
 (defn- execute-prepared! [ctx {:keys [prepared result] :as entry} begin!]
   (if result
@@ -225,11 +203,9 @@
           (try
             (if-not (begin! execution)
               (assoc entry :result (cancelled-result execution))
-              (let [outcome (kernel/waterfall
-                             ctx :tool/post-execute
-                             (kernel/waterfall ctx :tool/execute prepared
-                                               run-tool-body)
-                             identity)
+              (let [raw (contract/dispatch! ctx prepared run-tool-body)
+                    outcome (contract/final-result!
+                             prepared raw (kernel/waterfall ctx :tool/post-execute raw identity))
                     outcome (cond
                               (cancelled-result? outcome)
                               (cancelled-result
@@ -248,8 +224,8 @@
                                (cancellation/cancelled?
                                 (:cancel-token execution)))
                          (cancelled-result execution)
-                         (failure execution (ex-message error)
-                                  (ex-data error)))))))))))
+                         (assoc (failure execution (ex-message error) (ex-data error))
+                                :terminate (boolean (:terminate (ex-data error)))))))))))))
 
 (defn- result-status [{:keys [ok is-error details] :as result}]
   (let [exit-code (or (:exit-code details) (:exit_code details)
@@ -440,6 +416,7 @@
           ;; barriers before dispatch.
           (mapv #(record-tool-result! ctx %) executed))
         (finally
+          (doseq [entry prepared] (when-let [request (:prepared entry)] (contract/release! request)))
           (dispose-cancel))))))
 
 (defn- tool-result-message [tool-call result]
@@ -908,11 +885,13 @@
                                          (if (contains? #{:started :progress} (:status event)) :compacting :model)
                                          {:compaction event}))))
            run (fn
-                 ([prompt] (run-agent! ctx config active admission-lock prompt
-                                       {} queue state listeners))
+                 ([prompt] (kernel/with-plugin-call
+                             ctx #(run-agent! ctx config active admission-lock prompt
+                                              {} queue state listeners)))
                  ([prompt options]
-                  (run-agent! ctx config active admission-lock prompt options
-                              queue state listeners)))
+                  (kernel/with-plugin-call
+                    ctx #(run-agent! ctx config active admission-lock prompt options
+                                     queue state listeners))))
            abort! (fn []
                     (when-let [{:keys [token]} @active]
                       (cancellation/cancel! token)))
@@ -948,6 +927,7 @@
               (let [id (str (random-uuid))]
                 (swap! listeners assoc id listener)
                 (fn [] (swap! listeners dissoc id))))}]
+       (kernel/track-stop! ctx abort!)
        (kernel/on! ctx :llm/stream
                    (fn [_ event]
                      (track-partial! ctx state listeners event)))
