@@ -1,3 +1,4 @@
+import { toolFailed } from "./tool-status";
 import { uiText as t } from "./i18n";
 import type { TimelineModel, TimelineRow, ToolBatch } from "./timeline-model";
 import { outcomeText, runOutcome } from "./run-outcome";
@@ -135,7 +136,7 @@ export function displayTranscript(model: TimelineModel, mode: TranscriptView,
     let failed = 0, missing = 0;
     for (const row of segment) if (row.kind === "tools") for (const call of row.batch.calls) {
       const result = model.results.get(String(call.data["call-id"] || call.data.call_id || ""));
-      if (!result) missing++; else if (result.data.ok === false) failed++;
+      if (!result) missing++; else if (toolFailed(result)) failed++;
     }
     const summary = [failed ? t("{0} 失败", failed) : "", missing ? t("{0} 项结果未确认", missing) : ""].filter(Boolean);
     const startedAt = segment.find(row => "event" in row)?.event.at;

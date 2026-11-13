@@ -14,6 +14,7 @@ import { messageText } from "./message-content";
 import { continuableRun } from "./run-continuation";
 import { displayTranscript, type CollapseTiming, type TranscriptView, type TranscriptRow, type StepControl, type FoldedReplies } from "./transcript-display";
 
+import { toolFailed } from "./tool-status";
 import { processCategory, processDetail, processSummary } from "./process-summary";
 
 function text(value: unknown): string {
@@ -92,7 +93,7 @@ export function pluginResultData(result: DurableEvent): unknown {
 
 export function toolBatchStatus(batch: ToolBatch, results: ReadonlyMap<string, DurableEvent>, active: boolean) {
   const completed = batch.calls.filter(call => results.has(callId(call))).length;
-  const failed = batch.calls.filter(call => results.get(callId(call))?.data.ok === false).length;
+  const failed = batch.calls.filter(call => toolFailed(results.get(callId(call)))).length;
   const missing = batch.calls.length - completed;
   return { completed, failed, missing, running: active && missing > 0 };
 }
@@ -154,7 +155,7 @@ function ProcessGroup({ row, results, activeCalls, mode, reasoning, onToggle, ch
   }, [row.open, updateFades]);
   const warnings = [failed ? t("{0} 失败", failed) : "",
     missing > runningCalls.length ? t("{0} 项结果未确认", missing - runningCalls.length) : ""].filter(Boolean).join(" · ");
-  const failure = row.batch.calls.map(call => results.get(callId(call))).find(result => result?.data.ok === false);
+  const failure = row.batch.calls.map(call => results.get(callId(call))).find(result => toolFailed(result));
   return <section className={`compact-step-group process-group ${failed ? "is-error" : !row.closed ? "is-running" : ""}`}>
     <button type="button" className="compact-step-toggle" aria-expanded={row.open} aria-controls={`${row.id}:body`} onClick={onToggle}>
       <span className="process-leading"><Icon name={row.closed ? summary.icon : category.icon} /><Icon name="chevronDown" /></span>
@@ -176,7 +177,7 @@ function ToolDetails({ call, result, pluginSlots }: {
     {result && <div><span>{t("结果")}</span>
       <pre>{text(result.data.content || result.data.error)}</pre>
       <ToolResultImages images={result.data.images} />
-      {result.data.ok !== false && <PluginSlots slots={pluginSlots} slot="tool-result"
+      {!toolFailed(result) && <PluginSlots slots={pluginSlots} slot="tool-result"
         toolName={String(call.data.name || "tool")} data={pluginResultData(result)} />}</div>}
   </div>;
 }
@@ -197,15 +198,15 @@ function ToolRows({ batch, results, active, expanded, onToolToggle, pluginSlots 
             onClick={() => onToolToggle(detailId, !detailOpen)}>
           <span className="tool-batch-name"><Icon name={processCategory(String(call.data.name || "")).icon} />{t(processCategory(String(call.data.name || "")).label)}</span>
           <span className="tool-target" title={operationTarget(call, 10_000)}>{call.data.name === "bash" && call.data.arguments && typeof call.data.arguments === "object" && "description" in call.data.arguments ? String(call.data.arguments.description) : operationTarget(call)}</span>
-          <span className={`tool-item-status ${result?.data.ok === false ? "failed" : result ? "completed" : ""}`}>
-            {result ? (result.data.ok === false ? t("失败") : t("完成")) : active ? t("等待") : t("未确认")}
+          <span className={`tool-item-status ${toolFailed(result) ? "failed" : result ? "completed" : ""}`}>
+            {result ? (toolFailed(result) ? t("失败") : t("完成")) : active ? t("等待") : t("未确认")}
           </span>
           {result?.data["duration-ms"] != null
             ? <span className="tool-duration">{String(result.data["duration-ms"])} ms</span>
             : <span className="tool-duration" />}
           <Icon name="chevron" className={detailOpen ? "rotate" : ""} />
           </button>
-          {result?.data.ok === false && !detailOpen && <p className="tool-failure">{truncated(oneLine(result.data.error || result.data.content), 140)}</p>}
+          {result && toolFailed(result) && !detailOpen && <p className="tool-failure">{truncated(oneLine(result.data.error || result.data.content), 140)}</p>}
           {detailOpen && <ToolDetails call={call} result={result} pluginSlots={pluginSlots} />}
         </section>;
       })}

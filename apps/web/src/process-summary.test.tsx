@@ -36,3 +36,13 @@ test("reply preferences preserve all narration by default and offer explicit fin
   assert(!final.rows.some(row=>row.id==="2"));assert(final.rows.some(row=>row.id==="4"));
   assert.equal(transcriptView(null),"detailed");assert.equal(foldedReplies(null),"all");
 });
+
+
+test("command exit status is distinct from transport success and stderr text", async () => {
+  const {toolFailed} = await import("./tool-status");
+  const result=(data: Record<string, unknown>): DurableEvent=>({id:"r",seq:1,at:"",type:"tool/result",data});
+  assert(toolFailed(result({ok:true,status:"error",name:"bash",details:{"exit-code":127}})));
+  assert(toolFailed(result({ok:true,name:"bash",details:{"exit-code":2}})));
+  assert(!toolFailed(result({ok:true,name:"bash",details:{"exit-code":0},content:"stderr: error is a sample word"})));
+  assert(!toolFailed(undefined));
+});
