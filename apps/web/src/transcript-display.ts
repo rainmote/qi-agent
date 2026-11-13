@@ -95,6 +95,7 @@ export function displayTranscript(model: TimelineModel, mode: TranscriptView,
           process.add(row.id);
         }
       } else if (row.kind === "tools") { started = true; finalId = undefined; process.add(row.id); }
+      else if (row.kind === "context") process.add(row.id);
       else if (mode === "compact" && row.kind === "decision" && row.event.data.decision === "allow") process.add(row.id);
     }
     if (finalId) process.delete(finalId);
@@ -104,6 +105,7 @@ export function displayTranscript(model: TimelineModel, mode: TranscriptView,
     const count = mode === "compact" ? segment.reduce((sum, row) => {
       if (!process.has(row.id)) return sum;
       if (row.kind === "tools") return sum + row.batch.calls.length;
+      if (row.kind === "context") return sum + 1;
       if (row.kind !== "message") return sum;
       const message = row.event.data.message as Record<string, unknown>;
       return sum + Number(Boolean(messageText(message.content) || message.reasoning_content || message.reasoning));

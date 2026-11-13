@@ -789,4 +789,10 @@ export const english: Record<string, string> = {
   "核对后重新连接": "Reconnect after inspection",
   "连接电脑操作": "Connect computer use",
   "刷新状态": "Refresh status",
+  "本轮指令": "Turn instructions",
+  "此轮开始时提供给模型的指令；后续变化以新的记录为准。": "Instructions provided at the start of this turn. Later changes are recorded separately.",
+  "指令较长，此处显示前 100000 个字符。": "Showing the first 100000 characters of these instructions.",
+  "继续生成": "Continue generating",
+  "已请求继续生成": "Requested to continue generation",
+  "继续原请求，保留当前草稿。": "Continue the original request and keep the current draft.",
 };

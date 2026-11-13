@@ -23,7 +23,8 @@ test('every collapsed summary distinguishes execution from verification', () => 
 });
 
 test('empty structured content is not an answer or an empty timeline row', () => {
-  const p = project([message([]),message([{type:'text',text:''}])]);
+  const p = project([message([]),message([{type:'text',text:''}]),
+    message([{type:'text',text:''},{type:'text',text:''}])]);
   assert.equal(p.timeline.rows.length,0);
 });
 

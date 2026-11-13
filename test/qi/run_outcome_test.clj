@@ -395,3 +395,86 @@
             (is (= 1 (count (filter #(= "subagent/run/start" (:type %)) ((:events store))))))))
         (finally (deliver initial {:status :cancelled}) (deliver next-result {:status :cancelled})
                  (kernel/dispose-all! ctx))))))
+
+(deftest continuation-keeps-history-and-fences-old-or-unknown-outcomes
+  (let [requests (atom []) fail? (atom true)
+        generate (fn [request]
+                   (swap! requests conj (:messages request))
+                   (if @fail? (throw (ex-info "offline transport failure" {:reason :provider-error :retryable false}))
+                     {:message {:role "assistant" :content "continued"} :finish-reason "stop"}))
+        ctx (plugin/boot! {:plugins [{:ns 'qi.plugins.session :config {:path nil}}
+                                    {:ns 'qi.plugins.mock :config {:generate generate}}
+                                    {:ns 'qi.plugins.runtime :config {:max-retries 0 :max-steps 4}}]})]
+    (try
+      (let [run (kernel/require-service ctx :agent/run)
+            session (kernel/require-service ctx :agent/session)
+            store (kernel/require-service ctx :session/store)]
+        (try (run "original instruction") (catch Throwable _))
+        (let [old (get-in ((:state session)) [:last-outcome :run-id])]
+          (reset! fail? false)
+          (run "Continue" {:continuation-of old})
+          (is (= 1 (count (filter #(= "user" (:role %)) ((:messages store))))))
+          (is (= ["original instruction"] (mapv :content (last @requests))))
+          (is (= 1 (count (filter #(= "agent/continuation" (:type %)) ((:events store))))))
+          (let [before (count @requests)
+                error (try (run "Continue" {:continuation-of old}) nil (catch Throwable e e))]
+            (is (= :continuation-unavailable (:code (ex-data error))))
+            (is (= before (count @requests))))))
+      (finally (kernel/dispose-all! ctx)))))
+
+(deftest continuation-rejects-nonmodel-outcomes-and-cleared-history-before-dispatch
+  (doseq [[status reason clear?]
+          [[:uncertain :provider-error false] [:cancelled :provider-error false]
+           [:completed :completed false] [:failed :tool-terminated false]
+           [:failed :request-budget false] [:failed :no-progress false]
+           [:failed :provider-error true]]]
+    (let [requests (atom 0)
+          ctx (plugin/boot! {:plugins [{:ns 'qi.plugins.session}
+                                      {:ns 'qi.plugins.mock :config {:generate (fn [_] (swap! requests inc) (answer "unexpected"))}}
+                                      {:ns 'qi.plugins.runtime}]})]
+      (try
+        (let [store (kernel/require-service ctx :session/store)]
+          ((:append! store) "agent/run/end" {:run-id "old" :status status :reason reason})
+          (when clear? ((:clear! store)))
+          (let [before ((:events store))
+                error (try ((kernel/require-service ctx :agent/run) "Continue" {:continuation-of "old"})
+                           nil (catch Throwable error error))]
+            (is (= :continuation-unavailable (:code (ex-data error))))
+            (is (zero? @requests))
+            (is (= before ((:events store))))))
+        (finally (kernel/dispose-all! ctx))))))
+
+(deftest continuation-reopens-durable-failure-and-refuses-concurrent-submission
+  (let [directory (fs/create-temp-dir {:prefix "qi-continue-"})
+        path (str (fs/path directory "session.jsonl"))
+        started (promise) release (promise) requests (atom [])
+        config (fn [generate]
+                 {:plugins [{:ns 'qi.plugins.session :config {:path path}}
+                            {:ns 'qi.plugins.mock :config {:generate generate}}
+                            {:ns 'qi.plugins.runtime :config {:max-retries 0}}]})
+        first-ctx (plugin/boot! (config (fn [_] (throw (ex-info "offline failure" {:retryable false})))))
+        old (try
+              (try ((kernel/require-service first-ctx :agent/run) "original") (catch Throwable _))
+              (get-in ((:state (kernel/require-service first-ctx :agent/session))) [:last-outcome :run-id])
+              (finally (kernel/dispose-all! first-ctx)))]
+    (try
+      (let [ctx (plugin/boot! (config (fn [request]
+                                      (swap! requests conj (:messages request))
+                                      (deliver started true)
+                                      (deref release 3000 nil)
+                                      (answer "reopened"))))]
+        (try
+          (let [session (kernel/require-service ctx :agent/session)
+                store (kernel/require-service ctx :session/store)
+                first-run ((:submit! session) "Continue" {:continuation-of old})]
+            (is (= true (deref started 3000 ::timeout)))
+            (let [duplicate ((:submit! session) "Continue" {:continuation-of old})
+                  result (deref (:result duplicate) 3000 ::timeout)]
+              (is (false? (:ok result)))
+              (is (= 1 (count @requests))))
+            (deliver release true)
+            (is (true? (:ok (deref (:result first-run) 3000 ::timeout))))
+            (is (= ["original"] (mapv :content (first @requests))))
+            (is (= 1 (count (filter #(= "agent/continuation" (:type %)) ((:events store)))))))
+          (finally (deliver release true) (kernel/dispose-all! ctx))))
+      (finally (fs/delete-tree directory)))))

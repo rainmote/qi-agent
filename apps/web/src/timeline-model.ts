@@ -5,7 +5,7 @@ import { hasMessageContent } from "./message-content";
 export interface ToolBatch { id: string; calls: DurableEvent[] }
 export type QueuedState = "pending" | "discarded" | "uncertain";
 export type TimelineRow =
-  | { id: string; kind: "message" | "decision" | "error" | "outcome"; event: DurableEvent }
+  | { id: string; kind: "message" | "decision" | "error" | "outcome" | "context" | "continuation"; event: DurableEvent }
   | { id: string; kind: "queued"; event: DurableEvent; state: QueuedState; runId: string | null }
   | { id: string; kind: "tools"; batch: ToolBatch };
 export interface TimelineModel {
@@ -117,6 +117,11 @@ export function appendTimeline(model: TimelineModel, event: DurableEvent, buildi
     if (!message || message.role === "tool" || (!hasMessageContent(message.content) && !message.reasoning_content && !message.reasoning &&
       !(Array.isArray(message.tool_calls) && message.tool_calls.length))) return model;
     row = { id: event.id, kind: "message", event };
+  } else if (event.type === "context/snapshot") {
+    if (typeof event.data.content !== "string" || !event.data.content.trim()) return model;
+    row = { id: event.id, kind: "context", event };
+  } else if (event.type === "agent/continuation") {
+    row = { id: event.id, kind: "continuation", event };
   } else if (event.type === "approval/decision") {
     row = { id: event.id, kind: "decision", event };
   } else if (event.type === "agent/error") {

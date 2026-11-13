@@ -4,7 +4,7 @@ export function messageText(content: unknown): string {
   if (content == null) return "";
   if (!Array.isArray(content)) return JSON.stringify(content, null, 2) || "";
   return content.filter(item => item && typeof item === "object" && item.type === "text" && typeof item.text === "string")
-    .map(item => item.text as string).join("\n");
+    .map(item => item.text as string).filter(value => value.length > 0).join("\n");
 }
 
 export function hasMessageContent(content: unknown): boolean {

@@ -637,10 +637,13 @@
 (defn- run-agent-body!
   [ctx config active admission-lock prompt options cancel-token queue state
    listeners progress]
-  (when (blank-content? prompt)
-    (throw (ex-info "Prompt must not be blank" {})))
-  (record-message! ctx {:role "user" :content prompt})
-  (publish! ctx listeners :agent.message/start {:role "user" :content prompt})
+  (if-let [previous-run (:continuation-of options)]
+    (record! ctx "agent/continuation" {:previous-run-id previous-run :run-id (:run-id @state)})
+    (do
+      (when (blank-content? prompt)
+        (throw (ex-info "Prompt must not be blank" {})))
+      (record-message! ctx {:role "user" :content prompt})
+      (publish! ctx listeners :agent.message/start {:role "user" :content prompt})))
   (let [max-steps (or (:max-steps options) (:max-steps config) 256)
         tool-progress (atom nil)]
     (loop [step 1 usage {}]
@@ -774,6 +777,19 @@
                  result))]
     (cancellation/throw-if-cancelled! token)
     (locking admission-lock
+      (when (contains? options :continuation-of)
+        (let [events ((:events (kernel/require-service ctx :session/store)))
+              latest (->> (reverse events)
+                          (take-while #(not= "session/clear" (:type %)))
+                          (filter #(= "agent/run/end" (:type %))) first :data)]
+          ;; This check and admission share a lock. A completed or corrected
+          ;; run cannot be replayed by an old button, including after reopen.
+          (when-not (and (string? (:continuation-of options))
+                         (= (:continuation-of options) (:run-id latest))
+                         (= "failed" (some-> (:status latest) name))
+                         (contains? #{"provider-error" "output-limit"} (some-> (:reason latest) name)))
+            (throw (ex-info "This run cannot be continued; refresh its outcome"
+                            {:code :continuation-unavailable :retryable false})))))
       (when-not (compare-and-set! active nil {:token token :run-id run-id
                                               :accepting-queue? true})
         (throw (ex-info "An agent run is already active" {}))))

@@ -424,6 +424,48 @@ test("production Web trust, cancellation, recovery and composer E2E", { timeout:
       assert.equal(submitCount(), before, "file navigation cannot submit a turn or approval");
       await files.getByRole("button", { name: "关闭文件面板", exact: true }).click();
     });
+    await scenario("model continuation preserves history and completed tool effects across refresh", async () => {
+      const continuationProject = join(root, "continuation");
+      await mkdir(continuationProject);
+      const profile = (await readFile(join(repository, "test/fixtures/web-interaction-mock.edn"), "utf8"))
+        .replace('"Offline continuation complete."}\n              :finish-reason "stop"',
+          '"Partial model output."}\n              :finish-reason "length"')
+        .replace("Offline follow-up complete.", "Recovered model answer.");
+      assert.ok(profile.includes(':finish-reason "length"'));
+      await writeFile(join(preset, "agent.edn"), profile);
+      await p.locator(".new-session").click();
+      await add(continuationProject);
+      await trustDialog.waitFor();
+      await trustDialog.getByRole("button", { name: "信任并继续", exact: true }).click();
+      await trustDialog.waitFor({ state: "hidden" });
+      await input.fill("Write the file once, then report the result.");
+      await input.press("Enter");
+      const approval = p.getByRole("region", { name: "待确认操作", exact: true });
+      await approval.waitFor();
+      await approval.getByRole("button", { name: "Allow once", exact: true }).click();
+      await p.getByRole("button", { name: "继续生成", exact: true }).waitFor();
+      const session = await latestSession(continuationProject);
+      const before = await rpc<SessionSnapshot>(session.id, "session.snapshot");
+      const failed = before.events.filter(event => event.type === "agent/run/end").at(-1)!;
+      assert.equal(failed.data.reason, "output-limit");
+      assert.equal(await readFile(join(continuationProject, "approval.txt"), "utf8"), "approved by browser");
+      await reopen(continuationProject);
+      await input.fill("Unsent draft stays here");
+      await p.getByRole("button", { name: "继续生成", exact: true }).click();
+      await p.getByText("Recovered model answer.", { exact: true }).waitFor();
+      await until(async () => (await rpc<SessionSnapshot>(session.id, "session.snapshot")).state.phase === "idle", "Continuation did not settle");
+      const after = await rpc<SessionSnapshot>(session.id, "session.snapshot");
+      assert.equal(after.events.filter(event => event.type === "message"
+        && (event.data.message as { role?: string } | undefined)?.role === "user").length, 1);
+      assert.equal(after.events.filter(event => event.type === "tool/call").length, 1, "Completed tool must not replay");
+      const receipt = after.events.filter(event => event.type === "agent/continuation");
+      assert.equal(receipt.length, 1);
+      assert.equal(receipt[0].data["previous-run-id"], failed.data["run-id"]);
+      assert.equal(after.events.filter(event => event.type === "agent/run/end").at(-1)!.data.status, "completed");
+      assert.equal(await input.inputValue(), "Unsent draft stays here");
+      assert.equal(await p.getByRole("button", { name: "继续生成", exact: true }).count(), 0);
+      if (artifacts) await p.screenshot({ path: join(artifacts, "harness-real-continuation.png") });
+    });
     assert.deepEqual(errors, []);
     console.log(JSON.stringify({ realWebE2E: "passed", externalModelCalls: 0, assertions: "browser + runtime snapshot + persisted trust + actual filesystem" }));
   } catch (error) {

@@ -135,6 +135,16 @@ suggestion; it is not dispatched a second time. Cancellation still wins and
 keeps its own terminal. No retry, replay, rollback or directory reset is added.
 The bounded window does not identify arbitrary semantic loops or completion.
 
+An explicit `turn.submit` with `options.continuation-of` may start a new native
+run from the latest durable `failed/provider-error` or `failed/output-limit`.
+The runtime checks the exact previous run ID and terminal under its admission
+lock, including after reopening a session; clear, stale, cancelled, uncertain,
+policy and budget outcomes are refused before dispatch. It writes an
+`agent/continuation` receipt instead of appending the UI label as user content.
+Existing messages and completed tool results remain in history; historical
+tools are not automatically replayed. The new run uses normal budgets, trust
+and approval rules. Unknown delivery still requires operation reconciliation.
+
 Read-only batches use at most four worker futures by default, configurable with
 `max-parallel-tools`. Approval stays serial, mixed sequential batches stay serial,
 and durable tool results retain model order. Cancellation closes waiting slots

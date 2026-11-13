@@ -11,6 +11,7 @@ import { captureAnchor, restoreAnchor, timelineLayout, visibleRange, type RowMea
 import type { DurableEvent } from "./types";
 import { outcomeText, runOutcome } from "./run-outcome";
 import { messageText } from "./message-content";
+import { continuableRun } from "./run-continuation";
 import { displayTranscript, type CollapseTiming, type TranscriptView, type TranscriptRow, type StepControl } from "./transcript-display";
 
 function text(value: unknown): string {
@@ -301,6 +302,7 @@ function Message({ event, reasoningOpen, onReasoningToggle, hideReasoning = fals
 type DisplayRow = TranscriptRow | { id: string; kind: "stream" | "run-error" };
 
 function estimateRow(row: DisplayRow, width: number): number {
+  if (row.kind === "context" || row.kind === "continuation") return 64;
   if (row.kind === "tools") return 52;
   if (row.kind === "decision" || row.kind === "error" || row.kind === "run-error" || row.kind === "outcome") return 64;
   if (!("event" in row)) return 100;
@@ -311,9 +313,10 @@ function estimateRow(row: DisplayRow, width: number): number {
   return Math.min(2_000, (row.kind === "queued" ? 90 : 62) + lines * 23);
 }
 
-export function Timeline({ projection, scrollRef, pluginSlots = [], view = "standard", collapseTiming = "completion" }: {
+export function Timeline({ projection, scrollRef, pluginSlots = [], view = "standard", collapseTiming = "completion", onContinue, continueDisabled = false }: {
   projection: Projection; scrollRef: RefObject<HTMLDivElement | null>; pluginSlots?: PluginSlot[];
   view?: TranscriptView; collapseTiming?: CollapseTiming;
+  onContinue?: (runId: string) => void; continueDisabled?: boolean;
 }) {
   const inner = useRef<HTMLDivElement>(null);
   const rowContainer = useRef<HTMLDivElement>(null);
@@ -328,6 +331,7 @@ export function Timeline({ projection, scrollRef, pluginSlots = [], view = "stan
   const [focusedRow, setFocusedRow] = useState<string | null>(null);
   const [focusedUngroupedRow, setFocusedUngroupedRow] = useState<string | null>(null);
   const { locale } = useWebPreferences();
+  const continueRunId = onContinue ? continuableRun(projection) : null;
   const expanded = useMemo(() => new Set([...choices].filter(([,open]) => open).map(([id]) => id)), [choices]);
   const setExpandedRow = useCallback((id: string, open: boolean) => setExpanded((current) => {
     if (current.get(id) === open) return current;
@@ -520,6 +524,14 @@ export function Timeline({ projection, scrollRef, pluginSlots = [], view = "stan
           hideReasoning={transcript.hiddenReasoning.has(row.id)} compact={view === "compact"} showActions={finalAssistantIds.has(row.id)}
           onReasoningToggle={(open) => setExpandedRow(row.id, open)} />}
         {row.kind === "queued" && <QueuedMessage event={row.event} state={row.state} />}
+        {row.kind === "context" && <details className="context-snapshot" open={choices.get(row.id) ?? false}
+          onToggle={event => setExpandedRow(row.id, event.currentTarget.open)}>
+          <summary>{t("本轮指令")}</summary>
+          <p>{t("此轮开始时提供给模型的指令；后续变化以新的记录为准。")}</p>
+          {(choices.get(row.id) ?? false) && <pre>{String(row.event.data.content).slice(0, 100_000)}</pre>}
+          {String(row.event.data.content).length > 100_000 && <p>{t("指令较长，此处显示前 100000 个字符。")}</p>}
+        </details>}
+        {row.kind === "continuation" && <div className="continuation-receipt" role="status">{t("已请求继续生成")}</div>}
         {row.kind === "tools" && <ToolBatchCard batch={row.batch} results={projection.timeline.results}
           active={projection.timeline.activeToolRow !== null && projection.timeline.rows[projection.timeline.activeToolRow]?.id === row.id
             && (projection.state.phase !== "idle" || projection.interactions.length > 0)}
@@ -534,6 +546,9 @@ export function Timeline({ projection, scrollRef, pluginSlots = [], view = "stan
         {row.kind === "error" && <div className="inline-error">{String(row.event.data.message || t("运行失败"))}</div>}
         {row.kind === "outcome" && <div className={`run-outcome ${row.event.data.status}`}>
           {outcomeText(runOutcome(row.event.data)!)}
+          {continueRunId === runOutcome(row.event.data)?.["run-id"] && <button type="button" className="button ghost"
+            aria-label={t("继续生成")} disabled={continueDisabled} title={t("继续原请求，保留当前草稿。")}
+            onClick={() => onContinue?.(continueRunId!)}>{t("继续生成")}</button>}
         </div>}
         {row.kind === "run-error" && <div className="inline-error">{projection.lastRunError}</div>}
         {row.kind === "stream" && <article className="message message-assistant is-streaming">

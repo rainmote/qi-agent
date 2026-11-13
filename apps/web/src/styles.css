@@ -467,6 +467,12 @@ svg { flex: 0 0 auto; }
 .decision-row svg { width: 14px; height: 14px; }
 .run-outcome { margin: 0 0 22px; padding: 9px 12px; border-left: 2px solid var(--text-3); color: var(--text-3); font-size: 12px; overflow-wrap: anywhere; }
 .run-outcome.failed { border-color: var(--danger); color: var(--danger); }
+.run-outcome .button { display: block; margin-top: 8px; }
+.context-snapshot { margin: 0 0 18px; color: var(--text-3); font-size: 12px; }
+.context-snapshot summary { cursor: pointer; }
+.context-snapshot p { margin: 8px 0; }
+.context-snapshot pre { max-height: 320px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-1); }
+.continuation-receipt { margin: 0 0 18px; color: var(--text-3); font-size: 12px; }
 
 .timeline.trajectory-mode { overflow: hidden; background: var(--trajectory-bg); }
 .trajectory-view { display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 0; background: var(--trajectory-bg); color: var(--text-2); }

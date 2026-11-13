@@ -16,6 +16,7 @@ import { ShortcutReference } from "./ShortcutReference";
 import { WorkspaceLinkProvider } from "./WorkspaceLinks";
 import { applyHostEvent, fromSnapshot, type Projection } from "./projection";
 import { Timeline } from "./Timeline";
+import { continuableRun, isContinuationRequest } from "./run-continuation";
 import { RunOverview } from "./RunOverview";
 import { SubagentMenu, SubagentPanel } from "./SubagentPanel";
 import { collapseTiming, transcriptView, type CollapseTiming, type TranscriptView } from "./transcript-display";
@@ -232,6 +233,8 @@ export function App() {
     return () => view() && navigation();
   };
   const [busy, setBusy] = useState(false);
+  const continuationInFlight = useRef(false);
+  const continuedRuns = useRef(new Set<string>());
   const [pendingOperation, setPendingOperation] = useState<PendingOperation | null>(null);
   const [officeCancellationBusy, setOfficeCancellationBusy] = useState(false);
   useEffect(() => { setOfficeCancellationBusy(false); }, [pendingOperation?.commandId]);
@@ -737,6 +740,32 @@ export function App() {
     finally { if (current()) { setBusy(false); if (session) setPendingOperation(api.pendingOperation(session.id)); } }
   };
 
+  const continueGeneration = async (runId: string) => {
+    if (!activeSession || !projection || continuableRun(projection) !== runId || busy || uploading
+      || stopping || pendingOperation || continuationInFlight.current) return;
+    const sessionId = activeSession.id, key = `${sessionId}:${runId}`;
+    if (continuedRuns.current.has(key)) return;
+    const current = captureOperation();
+    continuationInFlight.current = true;
+    setBusy(true);
+    try {
+      if (!await trust.check(sessionId, current) || !current()) return;
+      // Existing mutation journal and daemon admission retain request identity.
+      // The worker fences this exact failure and does not append this UI label as user input.
+      await api.rpc(sessionId, "turn.submit", { message: t("继续生成"), options: { "continuation-of": runId } });
+      continuedRuns.current.add(key);
+      if (current()) flashNotice(t("已请求继续生成"));
+    } catch (error) {
+      if (current()) {
+        if (uncertainOperation(error)) setOperationMissing(false);
+        showError(error);
+      }
+    } finally {
+      continuationInFlight.current = false;
+      if (current()) { setBusy(false); setPendingOperation(api.pendingOperation(sessionId)); }
+    }
+  };
+
   const reconcileOperation = async (retry = false) => {
     if (!pendingOperation || busy) return;
     const operation = pendingOperation;
@@ -754,7 +783,8 @@ export function App() {
         setOperationMissing(result.status === "not_found");
         if (result.status === "completed" || result.status === "failed") {
           setPendingOperation(null);
-          if (result.status === "failed" && ["turn.submit", "turn.steer", "turn.follow-up"].includes(operation.method)) {
+          if (result.status === "failed" && !isContinuationRequest(operation.params)
+            && ["turn.submit", "turn.steer", "turn.follow-up"].includes(operation.method)) {
             const content = operation.params.message;
             const text = typeof content === "string" ? content : Array.isArray(content)
               ? content.filter(block => block?.type === "text" && typeof block.text === "string").map(block => block.text).join("\n") : "";
@@ -1329,7 +1359,9 @@ export function App() {
           calls={projection?.summary.calls ?? 0} waitingCount={projection?.interactions.length ?? 0}
           context={contextStatus} compact={stepsView === "compact" && conversationView === "chat"} />}
         <div className={`timeline ${conversationView === "trajectory" ? "trajectory-mode" : ""}`} ref={timeline} tabIndex={0} aria-label={t("会话内容")}>
-          {conversationView === "chat" && projection && <Timeline key={activeSession.id} projection={projection} scrollRef={timeline} pluginSlots={pluginSlots} view={stepsView} collapseTiming={stepsCollapseTiming} />}
+          {conversationView === "chat" && projection && <Timeline key={activeSession.id} projection={projection} scrollRef={timeline} pluginSlots={pluginSlots} view={stepsView} collapseTiming={stepsCollapseTiming}
+            onContinue={continuedRuns.current.has(`${activeSession.id}:${continuableRun(projection)}`) ? undefined : id => void continueGeneration(id)}
+            continueDisabled={busy || uploading || stopping || !!pendingOperation} />}
           {conversationView === "trajectory" && <Trajectory key={activeSession.id} events={projection?.events || []} />}
         </div>
         <div className="composer-wrap">{composerNode}<div className="session-run-summary">{runSummary}</div></div>
