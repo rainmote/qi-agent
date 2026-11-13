@@ -1,6 +1,7 @@
 // Read-only GitHub gates. Missing data, pagination races and API errors fail closed.
 export const REQUIRED_JOBS = Object.freeze([
   'Test (ubuntu-24.04)', 'Test (macos-14)',
+  'Headless UI (ubuntu-24.04, chromium)', 'Headless UI (macos-15, webkit)', 'UI Gate',
   'MSRV 1.88 (ubuntu-24.04)', 'MSRV 1.88 (macos-14)', 'Dependency audit',
 ]);
 export const commitSHA = (sha) => {

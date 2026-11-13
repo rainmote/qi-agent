@@ -48,6 +48,8 @@ node maintenance/profile.mjs EXPLICIT_MODEL SUPPORTED_EFFORT /absolute/private/a
 
 复制 `maintenance/task.example.json`，填写真实复现、精确 base SHA、镜像 digest、允许文件和独立验收目录。行为修复的验收用 Node TAP 包装目标行为，导入 `/work` 中的候选源码。旧实现必须在完整测试名下因断言失败；零测试、语法错误、skip、超时无效。`maintenance/checks.json` 是 qi-agent 代码任务强制执行的最低集合，Web / daemon / 协议变更还必须包含浏览器检查；macOS 专项仍须独立记录。
 
+页面修改另须遵守 [独立 UI 回归](ui-tests.md)，通过 `npm run test:ui` 并保存证据。历史基线容器仍使用原有命令；发布检查要求当前源码的双浏览器 UI 检查及 `UI Gate` 通过。
+
 ```sh
 node maintenance/run.mjs prepare --state /absolute/private/maintenance-state \
   --repo /absolute/qi-agent --task /absolute/task.json

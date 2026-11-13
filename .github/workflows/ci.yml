@@ -114,8 +114,8 @@ jobs:
         run: npm ci --registry=https://registry.npmjs.org
       - name: Install pinned headless browser
         run: npx playwright install --with-deps ${{ matrix.browser }}
-      - name: Test production Core Preview composer
-        run: npm run test:web-headless -- --browser ${{ matrix.browser }} --artifacts "$RUNNER_TEMP/web-headless"
+      - name: Check UI units, receipts, composer and multi-tool transcript
+        run: npm run test:ui -- --browser ${{ matrix.browser }} --artifacts "$RUNNER_TEMP/web-headless"
       - name: Upload UI assertions, screenshots and failure traces
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -124,6 +124,22 @@ jobs:
           path: ${{ runner.temp }}/web-headless/
           if-no-files-found: error
           retention-days: 7
+
+  ui-gate:
+    name: UI Gate
+    runs-on: ubuntu-24.04
+    # Keep a stable check name for branch rules. No path filters: shared code,
+    # dependencies and build configuration can also change rendered pages.
+    needs: [test, web-headless]
+    if: always()
+    steps:
+      - name: Require all UI and integration checks to succeed
+        env:
+          INTEGRATION_RESULT: ${{ needs.test.result }}
+          UI_RESULT: ${{ needs.web-headless.result }}
+        run: |
+          test "$INTEGRATION_RESULT" = success
+          test "$UI_RESULT" = success
 
   msrv:
     name: MSRV 1.88 (${{ matrix.os }})

@@ -6,6 +6,7 @@
 | --- | --- |
 | runtime / profile | `agent.edn`、`docs/runtime-integrity.md`、`src/qi/plugins/runtime.clj` |
 | daemon / Web / 会话 | `docs/daemon-agent-architecture.md`、`docs/webui.md`、`docs/workspace-files.md` |
+| 页面 / 样式 / 交互 / UI 测试 | `docs/ui-tests.md`；改动须补充相关场景并通过 `npm run test:ui`，不得以构建成功代替 UI 验证 |
 | 计划 / workflow / 团队 | `docs/orchestration.md` |
 | 调度 / goal | `docs/automation.md` |
 | TUI / ACP | `docs/tui-ratatui.md`、`docs/acp.md` |

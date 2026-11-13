@@ -46,6 +46,19 @@ test('missing, skipped, cancelled, timed out and stale jobs cannot qualify a rel
   }
 });
 
+test('a green workflow cannot release without both UI browsers and the aggregate gate', async () => {
+  // Spell these independently of REQUIRED_JOBS: dropping one from the catalog
+  // must fail this regression instead of silently weakening the fixture too.
+  for (const name of ['Headless UI (ubuntu-24.04, chromium)', 'Headless UI (macos-15, webkit)', 'UI Gate']) {
+    assert(jobs.some(job => job.name === name), `Required UI check missing: ${name}`);
+    assert.equal((await checkCommit({ repository, sha, api: fixture([green], jobs.filter(job => job.name !== name)) })).status, 'FAIL');
+    for (const conclusion of ['skipped', 'cancelled', 'timed_out', 'failure']) {
+      const checks = jobs.map(job => job.name === name ? { ...job, conclusion } : job);
+      assert.equal((await checkCommit({ repository, sha, api: fixture([green], checks) })).status, 'FAIL');
+    }
+  }
+});
+
 test('workflow origin, API errors and concurrent reruns fail closed', async () => {
   for (const run of [{ ...green, workflow_id: 11 }, { ...green, head_repository: { full_name: 'other/fork' } },
     { ...green, path: '.github/workflows/fake.yml' }]) {
