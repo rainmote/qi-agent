@@ -55,6 +55,16 @@
       (try (= "api.deepseek.com" (.getHost (java.net.URI. (:base-url config))))
            (catch Throwable _ false))))
 
+(defn- default-input-modalities [config]
+  ;; Only the official Flash endpoint establishes this capability. Custom
+  ;; gateways and other models still require an explicit capability declaration.
+  (if (and (contains? #{"deepseek-flash" "deepseek-v4-flash" "deepseek-v4-flash-vision-exp"}
+                      (:model config))
+           (try (= "api.deepseek.com" (.getHost (java.net.URI. (:base-url config))))
+                (catch Throwable _ false)))
+    #{:text :image}
+    #{:text}))
+
 (defn- valid-tool-call? [call]
   (and (string? (:id call)) (not (str/blank? (:id call)))
        (= "function" (:type call))
@@ -117,17 +127,17 @@
                   ;; Providers such as DeepSeek may stream spaces and newlines as
                   ;; standalone deltas. They are significant output, especially
                   ;; for Markdown headings, lists, and tables.
-                  (when (and (string? content) (not (empty? content)))
-                    (kernel/emit! ctx :llm/stream
-                                  {:type :text/delta
-                                   :provider :openai-compatible
-                                   :delta content}))
                   (when (and (string? (:reasoning_content delta))
                              (not (empty? (:reasoning_content delta))))
                     (kernel/emit! ctx :llm/stream
                                   {:type :reasoning/delta
                                    :provider :openai-compatible
                                    :delta (:reasoning_content delta)}))
+                  (when (and (string? content) (not (empty? content)))
+                    (kernel/emit! ctx :llm/stream
+                                  {:type :text/delta
+                                   :provider :openai-compatible
+                                   :delta content}))
                   (cond-> current
                     (:model event) (assoc :model (:model event))
                     (:usage event) (assoc :usage (:usage event))
@@ -182,6 +192,12 @@
                               (not (deepseek? config)) (dissoc :reasoning_content))
                    :finish-reason (:finish_reason choice)
                    :usage (:usage parsed) :model (:model parsed)})]
+    (when-let [reasoning (get-in response [:message :reasoning_content])]
+      (when (and (string? reasoning) (not (empty? reasoning)))
+        (kernel/emit! ctx :llm/stream
+                      {:type :reasoning/delta
+                       :provider :openai-compatible
+                       :delta reasoning})))
     (when-let [content (get-in choice [:message :content])]
       (when-not (str/blank? content)
         (kernel/emit! ctx :llm/stream
@@ -238,7 +254,7 @@
     (partition-by #(= "tool" (:role %)) messages))))
 
 (defn generate [ctx config request]
-  (images/require-tool-images! config #{:text} :openai-compatible request)
+  (images/require-tool-images! config (default-input-modalities config) :openai-compatible request)
   (let [auth-id (or (:auth-id config) (:provider-id config)
                     :openai-compatible)
         key (if-let [store (kernel/service ctx :auth/store)]
@@ -305,7 +321,7 @@
        (when (= "disabled" (get-in config [:extra-body :thinking :type]))
          :off)
        (some-> (get-in config [:extra-body :reasoning_effort]) keyword))
-   :input-modalities (images/input-modalities config #{:text})
+   :input-modalities (images/input-modalities config (default-input-modalities config))
    :generate (partial generate ctx config)})
 
 (def plugin

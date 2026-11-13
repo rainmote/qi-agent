@@ -20,6 +20,45 @@
              :model "fixture" :api-key "synthetic-fixture-key"
              :extra-body {:thinking {:type "disabled"}}})
 
+(deftest official-flash-capability-matches-screenshot-dispatch
+  (let [ctx (kernel/create-context)
+        flash {:base-url "https://api.deepseek.com" :model "deepseek-flash" :api-key "fixture"}
+        captured (atom nil)]
+    (doseq [model ["deepseek-flash" "deepseek-v4-flash" "deepseek-v4-flash-vision-exp"]]
+      (is (= #{:text :image} (:input-modalities (openai/provider-entry ctx (assoc flash :model model))))))
+    (doseq [c [(assoc flash :model "deepseek-v4-pro") (assoc flash :model "unknown")
+              (assoc flash :base-url "https://other.invalid") (assoc flash :supports-images? false)
+              (assoc flash :input-modalities #{:text})]]
+      (is (= #{:text} (:input-modalities (openai/provider-entry ctx c)))))
+    (with-redefs [http/post (fn [_ options]
+                             (reset! captured (json/parse-string (:body options) true))
+                             {:status 200 :body (json/generate-string {:choices [{:message {:role "assistant" :content "seen"} :finish_reason "stop"}]})})]
+      (let [response (openai/generate ctx flash
+                       {:messages [{:role "assistant" :content nil :reasoning_content "inspect"
+                                    :tool_calls [(dissoc call :index) (-> call (dissoc :index) (assoc :id "call-2"))]}
+                                   {:role "tool" :tool_call_id "call-1" :content "captured"
+                                    :images [{:url "data:image/png;base64,AQID"}]}
+                                   {:role "tool" :tool_call_id "call-2" :content "read"}]})]
+        (is (= "seen" (get-in response [:message :content])))
+        (is (= ["assistant" "tool" "tool" "user"] (mapv :role (:messages @captured))))
+        (is (= "data:image/png;base64,AQID" (get-in @captured [:messages 3 :content 1 :image_url :url])))
+        (is (= "inspect" (get-in @captured [:messages 0 :reasoning_content])))))))
+
+(deftest json-and-sse-display-the-same-ordered-reasoning-and-answer
+  (let [ctx (kernel/create-context) events (atom [])]
+    (kernel/on! (kernel/plugin-context ctx :fixture/stream) :llm/stream (fn [_ e] (swap! events conj e)))
+    (doseq [stream? [false true]]
+      (reset! events [])
+      (with-redefs [http/post (fn [_ _]
+                               {:status 200 :body
+                                (if stream?
+                                  (str (delta {:reasoning_content "reason" :content "answer"}) (terminal "stop"))
+                                  (json/generate-string {:choices [{:message {:role "assistant" :reasoning_content "reason" :content "answer"} :finish_reason "stop"}]}))})]
+        (let [response (openai/generate ctx (assoc config :stream stream?) {:messages [{:role "user" :content "question"}]})]
+          (is (= "reason" (get-in response [:message :reasoning_content])))
+          (is (= [:reasoning/delta :text/delta :response/completed] (mapv :type @events)))
+          (is (= ["reason" "answer"] (mapv :delta (butlast @events)))))))))
+
 (defn- context [path]
   (plugin/boot! {:plugins [{:ns 'qi.plugins.session :config {:path path}}
                           {:ns 'qi.plugins.openai :config config}

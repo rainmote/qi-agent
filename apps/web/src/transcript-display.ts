@@ -1,6 +1,7 @@
 import { uiText as t } from "./i18n";
 import type { TimelineModel, TimelineRow, ToolBatch } from "./timeline-model";
 import { outcomeText, runOutcome } from "./run-outcome";
+import { messageText } from "./message-content";
 
 // Presentation preferences never change model requests or permission policy.
 export type TranscriptView = "compact" | "standard" | "detailed" | "verbose";
@@ -52,7 +53,7 @@ function compactSteps(rows: Array<TimelineRow | TurnControl>, choices: ReadonlyM
   };
   for (const row of rows) {
     const message = row.kind === "message" ? row.event.data.message as Record<string, unknown> : undefined;
-    if (row.kind === "message" && message?.role === "assistant" && message.content &&
+    if (row.kind === "message" && message?.role === "assistant" && messageText(message.content) &&
       (message.reasoning_content || message.reasoning) && !hiddenReasoning.has(row.id)) {
       const { reasoning_content, reasoning, ...response } = message;
       members.push({ ...row, id: `${row.id}:reasoning`, event: { ...row.event,
@@ -62,7 +63,7 @@ function compactSteps(rows: Array<TimelineRow | TurnControl>, choices: ReadonlyM
       continue;
     }
     if (row.kind === "tools" || (row.kind === "decision" && row.event.data.decision === "allow") ||
-      (message?.role === "assistant" && !message.content)) members.push(row as TimelineRow);
+      (message?.role === "assistant" && !messageText(message.content))) members.push(row as TimelineRow);
     else { flush(); result.push(row); }
   }
   flush();
@@ -89,8 +90,8 @@ export function displayTranscript(model: TimelineModel, mode: TranscriptView,
         if (message.role === "user") { if (started) interrupted = true; }
         else if (message.role === "assistant") {
           started = true;
-          if (message.content && !(Array.isArray(message.tool_calls) && message.tool_calls.length)) finalId = row.id;
-          else finalId = undefined;
+          if (Array.isArray(message.tool_calls) && message.tool_calls.length) finalId = undefined;
+          else if (messageText(message.content)) finalId = row.id;
           process.add(row.id);
         }
       } else if (row.kind === "tools") { started = true; finalId = undefined; process.add(row.id); }
@@ -105,7 +106,7 @@ export function displayTranscript(model: TimelineModel, mode: TranscriptView,
       if (row.kind === "tools") return sum + row.batch.calls.length;
       if (row.kind !== "message") return sum;
       const message = row.event.data.message as Record<string, unknown>;
-      return sum + Number(Boolean(message.content || message.reasoning_content || message.reasoning));
+      return sum + Number(Boolean(messageText(message.content) || message.reasoning_content || message.reasoning));
     }, finalReasoning ? 1 : 0) : process.size + (finalReasoning ? 1 : 0);
     if (!settled || interrupted || !count || mode === "verbose") { rows.push(...segment); segment = []; return; }
     const outcome = segment.at(-1)!;
@@ -131,7 +132,7 @@ export function displayTranscript(model: TimelineModel, mode: TranscriptView,
     for (const row of segment) {
       if (!inserted && (process.has(row.id) || row.id === finalId)) {
         rows.push({ id, kind: "turn-control", open,
-          caption: mode === "compact" && terminal ? `${outcomeText(terminal)}${duration}${summary.length ? ` · ${summary.join(" · ")}` : ""}`
+          caption: terminal ? `${outcomeText(terminal)}${duration}${summary.length ? ` · ${summary.join(" · ")}` : ""}`
             : t("已完成{0}{1}", duration, summary.length ? ` · ${summary.join(" · ")}` : ""),
           members: memberIds(segment),
           label: t("工作步骤 · {0} 项{1}", count, summary.length ? ` · ${summary.join(" · ")}` : "") });

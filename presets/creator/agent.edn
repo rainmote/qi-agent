@@ -23,7 +23,7 @@
    :config {:base-url "https://api.deepseek.com"
             :provider-id :deepseek
             :api-key-env "DEEPSEEK_API_KEY"
-            :model "deepseek-v4-flash"
+            :model "deepseek-flash"
             :context-window 1000000
             :thinking-levels [:off :low :high :max]
             :timeout-ms 180000
@@ -137,7 +137,7 @@
        :config {:base-url "https://api.deepseek.com"
                 :provider-id :deepseek
                 :api-key-env "DEEPSEEK_API_KEY"
-                :model "deepseek-v4-flash"
+                :model "deepseek-flash"
                 :context-window 1000000
                 :thinking-levels [:off :low :high :max]
                 :timeout-ms 180000

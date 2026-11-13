@@ -10,6 +10,7 @@ import { type ToolBatch, type QueuedState } from "./timeline-model";
 import { captureAnchor, restoreAnchor, timelineLayout, visibleRange, type RowMeasurement, type ScrollAnchor } from "./virtual-timeline";
 import type { DurableEvent } from "./types";
 import { outcomeText, runOutcome } from "./run-outcome";
+import { messageText } from "./message-content";
 import { displayTranscript, type CollapseTiming, type TranscriptView, type TranscriptRow, type StepControl } from "./transcript-display";
 
 function text(value: unknown): string {
@@ -215,11 +216,6 @@ function validAttachment(value: unknown): value is MessageAttachment {
     && typeof item.mime === "string" && item.mime.length <= 120
     && typeof item.size === "number" && Number.isSafeInteger(item.size) && item.size >= 1 && item.size <= 8 * 1024 * 1024;
 }
-function messageText(content: unknown): string {
-  if (!Array.isArray(content)) return text(content);
-  return content.filter((item) => item && typeof item === "object" && item.type === "text" && typeof item.text === "string")
-    .map((item) => item.text as string).join("\n");
-}
 export function UserMessageAttachments({ content }: { content: unknown }) {
   if (!Array.isArray(content)) return null;
   const candidates = content.filter((item) => item && typeof item === "object" && item.type === "attachment");
@@ -341,7 +337,7 @@ export function Timeline({ projection, scrollRef, pluginSlots = [], view = "stan
   }), []);
   const partialAssistant = String(projection.state["partial-assistant"] || projection.state.partialAssistant || "");
   const partialReasoning = String(projection.state["partial-reasoning"] || projection.state.partialReasoning || "");
-  const streaming = projection.state.phase !== "idle" && Boolean(partialAssistant || partialReasoning);
+  const streaming = projection.state.phase === "model" && Boolean(partialAssistant || partialReasoning);
   const transcript = useMemo(() => displayTranscript(projection.timeline, view, choices, focusedRow, collapseTiming), [projection.timeline, view, choices, focusedRow, collapseTiming, locale]);
   const activeToolRow = projection.timeline.activeToolRow === null ? undefined : projection.timeline.rows[projection.timeline.activeToolRow];
   const activeCalls = new Set(activeToolRow?.kind === "tools" && (projection.state.phase !== "idle" || projection.interactions.length > 0)
@@ -458,7 +454,14 @@ export function Timeline({ projection, scrollRef, pluginSlots = [], view = "stan
   const finalAssistantIds = new Set<string>();
   let finalAssistantId: string | null = null;
   for (const row of projection.timeline.rows) {
-    if (row.kind === "message" && (row.event.data.message as Record<string, unknown> | undefined)?.role === "assistant") finalAssistantId = row.id;
+    if (row.kind === "tools") finalAssistantId = null;
+    if (row.kind === "message") {
+      const message = row.event.data.message as Record<string, unknown>;
+      if (message.role === "assistant") {
+        if (Array.isArray(message.tool_calls) && message.tool_calls.length) finalAssistantId = null;
+        else if (messageText(message.content)) finalAssistantId = row.id;
+      }
+    }
     if (row.kind === "outcome") { if (finalAssistantId) finalAssistantIds.add(finalAssistantId); finalAssistantId = null; }
   }
   if (finalAssistantId) finalAssistantIds.add(finalAssistantId);
@@ -536,7 +539,7 @@ export function Timeline({ projection, scrollRef, pluginSlots = [], view = "stan
         {row.kind === "stream" && <article className="message message-assistant is-streaming">
           <div className="message-body">
             {partialReasoning && <details className="reasoning-row" open={choices.get("__reasoning__") ?? false}
-              onToggle={event => setExpandedRow("__reasoning__", event.currentTarget.open)}><summary>{t("正在思考")}<Icon name="chevron" /></summary>
+              onToggle={event => setExpandedRow("__reasoning__", event.currentTarget.open)}><summary>{partialAssistant ? t("已完成分析") : t("正在思考")}<Icon name="chevron" /></summary>
               <div><MarkdownContent content={partialReasoning} /></div></details>}
             <MarkdownContent content={partialAssistant} />
           </div>

@@ -1,5 +1,6 @@
 import type { DurableEvent } from "./types";
 import { effectiveOutcome, runOutcome } from "./run-outcome";
+import { hasMessageContent } from "./message-content";
 
 export interface ToolBatch { id: string; calls: DurableEvent[] }
 export type QueuedState = "pending" | "discarded" | "uncertain";
@@ -113,7 +114,7 @@ export function appendTimeline(model: TimelineModel, event: DurableEvent, buildi
     row = { id: event.id, kind: "tools", batch: { id: event.id, calls: [event] } };
   } else if (event.type === "message") {
     const message = event.data.message as Record<string, unknown> | undefined;
-    if (!message || message.role === "tool" || (!message.content && !message.reasoning_content && !message.reasoning &&
+    if (!message || message.role === "tool" || (!hasMessageContent(message.content) && !message.reasoning_content && !message.reasoning &&
       !(Array.isArray(message.tool_calls) && message.tool_calls.length))) return model;
     row = { id: event.id, kind: "message", event };
   } else if (event.type === "approval/decision") {

@@ -96,8 +96,12 @@ const defaultProviders: ProviderSettings[] = [
     baseUrl: "https://api.deepseek.com",
     apiKeyEnv: "DEEPSEEK_API_KEY",
     builtin: true,
-    models: [{ id: "deepseek-v4-flash", name: "deepseek-v4-flash", contextWindow: 1_000_000,
-      thinkingLevels: ["off", "low", "high", "max"], defaultThinkingLevel: "off" }],
+    models: [
+      { id: "deepseek-flash", name: "deepseek-flash", contextWindow: 1_000_000,
+        thinkingLevels: ["off", "low", "high", "max"], defaultThinkingLevel: "off" },
+      { id: "deepseek-v4-pro", name: "deepseek-v4-pro", contextWindow: 1_000_000,
+        thinkingLevels: ["off", "low", "high", "max"], defaultThinkingLevel: "off" },
+    ],
   },
 ];
 
