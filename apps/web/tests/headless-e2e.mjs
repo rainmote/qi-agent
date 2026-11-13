@@ -1,4 +1,4 @@
-// One command builds Core Preview and runs the same composer oracle in two
+// One command builds Core Preview and runs the composer and transcript oracles in two
 // headless engines. Existing full Host E2E remains a separate, real backend test.
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
@@ -10,13 +10,18 @@ import { resolve, extname, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { platform, release, arch } from 'node:os';
+import { suites } from './ui-cases.mjs';
+import { validateUIResult } from './ui-results.mjs';
 
 const { values } = parseArgs({ options: {
+  suite: { type: 'string', default: 'all' },
   browser: { type: 'string', default: 'all' }, 'source-root': { type: 'string' },
   'ui-root': { type: 'string' }, artifacts: { type: 'string' },
   'timeout-ms': { type: 'string', default: '180000' },
 } });
 assert(['all', 'chromium', 'webkit'].includes(values.browser), 'browser must be all, chromium or webkit');
+assert(['all', ...Object.keys(suites)].includes(values.suite), 'suite must be all, composer or transcript');
+const selectedSuites = values.suite === 'all' ? Object.keys(suites) : [values.suite];
 const timeout = Number(values['timeout-ms']);
 assert(Number.isInteger(timeout) && timeout >= 1000 && timeout <= 180000, 'timeout-ms must be 1000..180000');
 const source = await realpath(resolve(values['source-root'] || resolve(import.meta.dirname, '../../..')));
@@ -27,7 +32,7 @@ const engines = values.browser === 'all' ? ['chromium', 'webkit'] : [values.brow
 const report = { status: 'RUNNING', startedAt: new Date().toISOString(), source,
   platform: { os: platform(), release: release(), arch: arch(), node: process.version },
   profile: 'offline-api-fixture; no real model/LCU calls', output,
-  groups: engines.map(engine => ({ engine, status: 'NOT_RUN' })), staticErrors: [], cleanup: {} };
+  groups: engines.flatMap(engine => selectedSuites.map(suite => ({ engine, suite, status: 'NOT_RUN' }))), staticErrors: [], cleanup: {} };
 const save = () => writeFile(resolve(output, 'result.json'), JSON.stringify(report, null, 2) + '\n');
 await save();
 console.log(`Headless UI evidence: ${output}`);
@@ -68,10 +73,11 @@ async function runGroup(group, url) {
   group.status = 'RUNNING';
   group.startedAt = new Date().toISOString();
   group.timeoutMs = timeout;
-  const folder = resolve(output, group.engine);
+  const folder = resolve(output, group.engine, group.suite);
   const log = [];
   group.cleanup = {};
-  group.log = `${group.engine}.log`;
+  group.log = `${group.engine}-${group.suite}.log`;
+  await mkdir(resolve(output, group.engine), { recursive: true });
   let owner, child, watchdog, forced;
   try {
     const playwrightPath = process.env.QI_AGENT_PLAYWRIGHT_MODULE || resolve(source, 'node_modules/playwright/index.mjs');
@@ -83,7 +89,7 @@ async function runGroup(group, url) {
     currentBrowser = owner;
     group.browserPid = owner.process().pid;
     assert(!interrupted, 'Run interrupted during browser startup');
-    child = spawn(process.execPath, [resolve(import.meta.dirname, 'composer-browser.mjs')], {
+    child = spawn(process.execPath, [resolve(import.meta.dirname, suites[group.suite].script)], {
       cwd: source, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, QI_AGENT_WEB_TEST_URL: url, QI_AGENT_BROWSER_ENGINE: group.engine,
         QI_AGENT_BROWSER_ARTIFACTS: folder,
@@ -91,7 +97,7 @@ async function runGroup(group, url) {
     });
     currentChild = child;
     group.pid = child.pid;
-    group.command = [process.execPath, resolve(import.meta.dirname, 'composer-browser.mjs')];
+    group.command = [process.execPath, resolve(import.meta.dirname, suites[group.suite].script)];
     child.stdout.on('data', bytes => { log.push(bytes); process.stdout.write(bytes); });
     child.stderr.on('data', bytes => { log.push(bytes); process.stderr.write(bytes); });
     watchdog = setTimeout(() => {
@@ -106,18 +112,13 @@ async function runGroup(group, url) {
     }), timeout + 5000, 'Suite did not close after bounded shutdown');
     group.exit = exit;
     const result = JSON.parse(await readFile(resolve(folder, 'result.json'), 'utf8'));
-    group.result = `${group.engine}/result.json`;
+    group.result = `${group.engine}/${group.suite}/result.json`;
     group.browserVersion = result.browserVersion;
     group.counts = { total: result.cases.length, passed: result.cases.filter(row => row.status === 'PASS').length,
       failed: result.cases.filter(row => row.status === 'FAIL').length, notRun: result.cases.filter(row => row.status === 'NOT_RUN').length };
     assert(!group.timedOut && !interrupted, 'Suite timed out or was interrupted');
     assert(exit.code === 0 && !exit.signal, 'Suite process did not succeed');
-    assert(result.status === 'PASS' && result.headless === true && result.engine === group.engine, 'Suite result is not PASS');
-    assert(group.counts.total === 11 && group.counts.passed === 11, 'Missing required scenarios');
-    for (const row of result.cases) {
-      assert(row.screenshot && (await lstat(resolve(folder, row.screenshot))).size > 0, 'Missing screenshot');
-      assert(Object.keys(row.assertions).length === 12 && Object.values(row.assertions).every(Boolean), 'Missing or failing geometry oracle');
-    }
+    group.counts = await validateUIResult(result, { suite: group.suite, engine: group.engine, folder });
     group.status = 'PASS';
   } catch (error) { group.status = 'FAIL'; group.error = String(error.stack || error); }
   finally {
@@ -149,7 +150,7 @@ try {
   report.sourceSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: source, encoding: 'utf8' }).trim();
   report.dirty = Boolean(execFileSync('git', ['status', '--porcelain'], { cwd: source, encoding: 'utf8' }).trim());
   report.controllers = {};
-  for (const name of ['headless-e2e.mjs', 'composer-browser.mjs', 'browser-fixture.mjs']) {
+  for (const name of ['headless-e2e.mjs', 'composer-browser.mjs', 'transcript-browser.mjs', 'browser-fixture.mjs', 'ui-cases.mjs', 'ui-results.mjs', 'fixtures/transcript.mjs']) {
     report.controllers[name] = sha(await readFile(resolve(import.meta.dirname, name)));
   }
   report.inputHashes = {};
@@ -190,7 +191,7 @@ try {
   await new Promise((done, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', done); });
   const url = `http://127.0.0.1:${server.address().port}`;
   for (const group of report.groups) { if (interrupted) break; await runGroup(group, url); }
-  assert(!interrupted && report.groups.every(group => group.status === 'PASS'), 'All requested engines must pass');
+  assert(!interrupted && report.groups.every(group => group.status === 'PASS'), 'All requested engines and suites must pass');
   assert(!report.cleanup.errors?.length, 'Process cleanup failed');
   assert.deepEqual(report.staticErrors, []);
   assert.deepEqual(await inventory(root), report.uiAssets, 'UI assets changed during acceptance');
@@ -206,6 +207,6 @@ finally {
   report.finishedAt = new Date().toISOString();
   await save();
   process.off('SIGINT', interrupt); process.off('SIGTERM', interrupt);
-  console.log(JSON.stringify({ status: report.status, evidence: output, groups: report.groups.map(({ engine, status, counts }) => ({ engine, status, counts })) }));
+  console.log(JSON.stringify({ status: report.status, evidence: output, groups: report.groups.map(({ engine, suite, status, counts }) => ({ engine, suite, status, counts })) }));
   if (report.status !== 'PASS') process.exitCode = 1;
 }

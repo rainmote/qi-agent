@@ -5,19 +5,8 @@ import { resolve } from 'node:path';
 
 const output = resolve(process.env.QI_AGENT_BROWSER_ARTIFACTS);
 await mkdir(output, { recursive: false });
-const specs = [
-  { id: 'trusted-empty-1250x760', width: 1250, height: 760, trust: 'allow' },
-  { id: 'trusted-empty-1280x840', width: 1280, height: 840, trust: 'allow' },
-  { id: 'restricted-empty-1024x600', width: 1024, height: 600, trust: 'deny' },
-  { id: 'trusted-empty-minimum', width: 360, height: 480, trust: 'allow' },
-  { id: 'trusted-running-900x600', width: 900, height: 600, trust: 'allow', phase: 'model' },
-  { id: 'trusted-long-minimum', width: 900, height: 480, trust: 'allow', long: true },
-  { id: 'trusted-long-phone', width: 390, height: 844, trust: 'allow', long: true },
-  { id: 'trusted-pending-900x600', width: 900, height: 600, trust: 'allow', phase: 'tool', approval: true },
-  { id: 'trusted-resize-1280to480', width: 1280, height: 840, trust: 'allow', long: true, resize: true },
-  { id: 'trusted-height-only', width: 900, height: 840, trust: 'allow', long: true, resize: true },
-  { id: 'trusted-running-expand', width: 900, height: 480, trust: 'allow', long: true, phase: 'model', expand: true },
-];
+import { composerSpecs as specs } from './ui-cases.mjs';
+
 const report = { status: 'RUNNING', engine: process.env.QI_AGENT_BROWSER_ENGINE || 'chromium',
   headless: true, scope: 'Core Preview production UI with offline API fixture',
   startedAt: new Date().toISOString(), cases: specs.map(spec => ({ ...spec, status: 'NOT_RUN' })), errors: [], cleanup: {} };
