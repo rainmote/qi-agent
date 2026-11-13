@@ -308,7 +308,7 @@ try{
    events.forEach(([event,data],i)=>source.dispatchEvent(new MessageEvent('worker',{data:JSON.stringify({
     type:'event',event,event_id:`screen-${i}`,seq:3+i,durable:true,data})})));
   });
-  await page.locator('.tool-summary').click();
+  await page.locator('.compact-step-toggle').click();await page.locator('.tool-batch-row').click();
   const image=page.getByRole('img',{name:'工具返回的屏幕截图 1'});await image.waitFor();
   await image.evaluate(image=>image.decode());
   assert.equal(await page.locator('.tool-result-images img').count(),1);
@@ -509,13 +509,13 @@ try{
    events.forEach(([event,data],i)=>source.dispatchEvent(new MessageEvent('worker',{data:JSON.stringify({type:'event',event,data,event_id:`compact-${i}`,seq:3+i,durable:true})})));
   });
   await page.getByText('Search permission denied',{exact:false}).waitFor();
-  const groups=page.locator('.tool-batch');assert.equal(await groups.count(),2);
+  const groups=page.locator('.process-group');assert.equal(await groups.count(),1);
   assert.equal(await page.locator('.tool-batch-row').count(),0);
   assert.match(await groups.last().innerText(),/结果未确认/);assert.doesNotMatch(await groups.last().getAttribute('class'),/is-running|is-success/);
-  await groups.first().locator('.tool-summary').click();assert.equal(await page.locator('.tool-batch-row').count(),2);
-  await page.getByRole('button',{name:/read sample-a.ts/}).click();await page.getByText('FIRST-DETAIL',{exact:true}).waitFor();
+  await groups.first().locator('.compact-step-toggle').click();assert.equal(await page.locator('.tool-batch-row').count(),3);
+  await page.locator('.tool-batch-row').filter({hasText:'sample-a.ts'}).click();await page.getByText('FIRST-DETAIL',{exact:true}).waitFor();
   assert.equal(await page.locator('.tool-details').count(),1);
-  await groups.first().locator('.tool-summary').click();await groups.first().locator('.tool-summary').click();
+  await groups.first().locator('.compact-step-toggle').click();await groups.first().locator('.compact-step-toggle').click();
   assert.equal(await page.getByText('FIRST-DETAIL',{exact:true}).count(),1,'Expansion survives hiding the group');
   await page.setViewportSize({width:320,height:840});await settle(page);
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
@@ -531,8 +531,8 @@ try{
   controls.jobs=[{id:'child-1',label:'离线子任务',provider:'fixture',status:'completed',result:'HARNESS-CHILD-RESULT'}];
   await page.goto(base);await page.getByText('HARNESS-FINAL-ANSWER',{exact:true}).waitFor();
   assert.equal(await page.locator('.tool-summary').count(),0,'settled process starts folded');
-  await page.getByRole('button',{name:/工作步骤 ·/}).click();await page.locator('.tool-summary').waitFor();
-  await page.locator('.reasoning-row > summary').click();await page.locator('.reasoning-content > summary').click();await page.locator('.reasoning-row[open] .markdown-content').getByText('HARNESS-REASONING',{exact:true}).waitFor();
+  await page.getByRole('button',{name:/工作步骤 ·/}).click();await page.locator('.compact-step-toggle').waitFor();await page.locator('.compact-step-toggle').click();
+  await page.locator('.reasoning-row > summary').click();await page.locator('.reasoning-row[open] .markdown-content').getByText('HARNESS-REASONING',{exact:true}).waitFor();
   await page.getByRole('button',{name:'设置',exact:true}).click();await page.getByRole('menuitem',{name:'设置',exact:true}).click();
   assert.equal(await page.locator('#root').evaluate(e=>e.inert),true);
   await page.getByRole('button',{name:'工作步骤收起时机',exact:true}).click();
@@ -586,10 +586,10 @@ try{
   assert.equal(await tool.isVisible(),true,'settlement must not unmount the focused detailed tool');
   assert.equal(await tool.evaluate(e=>e===document.activeElement),true,'settlement preserves the exact focused control');
   const fold=page.getByRole('button',{name:/工作步骤 ·/});await fold.click();await fold.click();
-  await page.locator('.tool-summary').waitFor();assert.equal(await page.locator('.tool-details').count(),0,'whole-turn collapse resets child expansion');
-  const summary=page.locator('.tool-summary'),header=await summary.elementHandle();await summary.focus();await settle(page);
+  await page.locator('.compact-step-toggle').waitFor();assert.equal(await page.locator('.tool-details').count(),0,'whole-turn collapse resets child expansion');
+  const summary=page.locator('.compact-step-toggle'),header=await summary.elementHandle();await summary.focus();await settle(page);
   assert.equal(await header.evaluate(e=>e.isConnected&&e===document.activeElement),true,'focusing a settled group must preserve the grouped header');
-  await summary.click();assert.equal(await summary.getAttribute('aria-expanded'),'true');await page.getByText('FOCUS-RESULT',{exact:true}).waitFor();
+  await summary.click();assert.equal(await summary.getAttribute('aria-expanded'),'true');await page.locator('.tool-batch-row').click();await page.getByText('FOCUS-RESULT',{exact:true}).waitFor();
   await summary.click();assert.equal(await summary.getAttribute('aria-expanded'),'false');
   await page.close();console.log(JSON.stringify({detailedSettlementFocus:'passed'}));
  }

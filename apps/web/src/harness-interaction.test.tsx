@@ -35,7 +35,7 @@ test("initial instructions and continuation receipts survive replay and clear wi
   assert.deepEqual(live.timeline,project(events).timeline);
   for(const view of ["compact","standard","detailed","verbose"] as const) {
     const html=renderToStaticMarkup(<Timeline projection={live} scrollRef={createRef()} view={view} />);
-    assert.match(html,/本轮指令/);
+    assert.match(html,view === "verbose" ? /本轮指令/ : /注入上下文/);
     assert.match(html,/已请求继续生成/);
     assert.doesNotMatch(html,/Workspace rules|message-user/,'large context stays lazy until expanded');
   }

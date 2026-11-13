@@ -1,6 +1,11 @@
 // Shared Harness copy adapted from reference 687f282 (MIT); see THIRD_PARTY_NOTICES.md.
 // qi-specific capabilities and safeguards retain their own semantics.
 export const english: Record<string, string> = {
+  "读取文件": "Read files", "读取图片": "Read images", "写入文件": "Write files", "编辑文件": "Edit files",
+  "运行代码": "Run code", "更新计划": "Update plan", "询问用户": "Ask user", "调用工具": "Use tools", "注入上下文": "Injected context",
+  "收起后保留的回复": "Replies after collapse", "选择工作步骤收起后仍然显示的助手回复": "Choose which assistant replies stay visible when work details collapse",
+  "全部回复": "All replies", "仅最终回答": "Final answer only",
+
   "运行详情": "Run details",
   "操作记录": "Operation history",
   "操作结果尚未确认，请先核对结果，避免重复执行。": "The operation's result is unconfirmed. Reconcile it first to avoid duplicate execution.",

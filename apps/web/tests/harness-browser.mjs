@@ -10,7 +10,7 @@ try {
  const {page,controls}=await fixture(0);controls.snapshotOverride=failed();
  await page.goto(base);await page.locator('.session-header-title button').waitFor();
  assert.equal(await page.getByRole('button',{name:'继续生成',exact:true}).count(),1,'provider failure needs a continuation action');
- await page.getByText('本轮指令',{exact:true}).click();
+ await page.locator('.compact-step-toggle').click();await page.getByText('本轮指令',{exact:true}).click();
  await page.locator('.context-snapshot pre').waitFor();
  assert.match(await page.locator('.context-snapshot').innerText(),/Workspace instructions/);
  await page.locator('textarea').fill('Keep my draft');

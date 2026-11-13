@@ -39,7 +39,7 @@ try {
   assert.equal(await page.getByRole('tab',{name:'轨迹',exact:true}).count(),0);
   assert.match(await page.locator('body').evaluate(el=>getComputedStyle(el).fontFamily),/Arial/);
   const codeBlock=page.locator('.markdown-content pre code');assert.match(await codeBlock.evaluate(el=>getComputedStyle(el).fontFamily),/Courier New/);assert.equal(await codeBlock.evaluate(el=>getComputedStyle(el).fontSize),'16px');
-  await page.locator('.tool-summary').click();await page.locator('.tool-batch-row').click();const output=page.locator('.tool-details > div:nth-child(2) > pre');await output.waitFor();assert.equal(await output.innerText(),'原始命令输出');assert.match(await output.evaluate(el=>getComputedStyle(el).fontFamily),/Menlo/);assert.equal(await output.evaluate(el=>getComputedStyle(el).fontSize),'19px');await shot(page,'fonts-applied-1440');
+  await page.locator('.compact-step-toggle').click();await page.locator('.tool-batch-row').click();const output=page.locator('.tool-details > div:nth-child(2) > pre');await output.waitFor();assert.equal(await output.innerText(),'原始命令输出');assert.match(await output.evaluate(el=>getComputedStyle(el).fontFamily),/Menlo/);assert.equal(await output.evaluate(el=>getComputedStyle(el).fontSize),'19px');await shot(page,'fonts-applied-1440');
   await page.keyboard.press('Alt+Shift+KeyF');await page.getByRole('complementary',{name:'工作区文件',exact:true}).waitFor();
   assert.equal(await page.getByRole('button',{name:'本轮变更',exact:true}).count(),0);
   await page.getByRole('button',{name:'关闭文件面板',exact:true}).click();

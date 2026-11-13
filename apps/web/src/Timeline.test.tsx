@@ -111,8 +111,8 @@ test("completed tool groups are summarized while failures and unconfirmed result
   const snapshot = fixtureSnapshot(1);
   const render = () => renderToStaticMarkup(<Timeline projection={fromSnapshot(snapshot)} scrollRef={createRef<HTMLDivElement>()} />);
   const completed = render();
-  assert.match(completed, /读取 ×1 · 搜索 ×1/);
-  assert.match(completed, /2 项完成/);
+  assert.match(completed, /读取文件 · 搜索/);
+  assert.match(completed, /aria-expanded="false"/);
   assert.doesNotMatch(completed, /tool-batch-row|tool-details|多行工具结果/);
   const result = snapshot.events.find(event => event.type === "tool/result")!;
   result.data = { ...result.data, ok: false, error: "Permission denied" };
@@ -138,5 +138,7 @@ test("reasoning-only assistant messages remain readable instead of disappearing"
   const projection = fromSnapshot(snapshot);
   assert.equal(projection.timeline.rows.length, 1, "persisted reasoning must reach the conversation");
   const html = renderToStaticMarkup(<Timeline projection={projection} scrollRef={createRef<HTMLDivElement>()} />);
-  assert.match(html, /先核对文件，再决定下一步/);
+  assert.match(html, /process-group/);
+  const detailed = renderToStaticMarkup(<Timeline projection={projection} scrollRef={createRef<HTMLDivElement>()} view="verbose" />);
+  assert.match(detailed, /先核对文件，再决定下一步/);
 });

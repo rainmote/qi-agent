@@ -1,6 +1,6 @@
 import { uiText as t } from "./i18n";
 import { useWebPreferences } from "./web-preferences";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject, type ReactNode } from "react";
 import { Icon } from "./icons";
 import { MarkdownContent } from "./MarkdownContent";
 import { ToolResultImages } from "./ToolResultImages";
@@ -12,7 +12,9 @@ import type { DurableEvent } from "./types";
 import { outcomeText, runOutcome } from "./run-outcome";
 import { messageText } from "./message-content";
 import { continuableRun } from "./run-continuation";
-import { displayTranscript, type CollapseTiming, type TranscriptView, type TranscriptRow, type StepControl } from "./transcript-display";
+import { displayTranscript, type CollapseTiming, type TranscriptView, type TranscriptRow, type StepControl, type FoldedReplies } from "./transcript-display";
+
+import { processCategory, processDetail, processSummary } from "./process-summary";
 
 function text(value: unknown): string {
   if (typeof value === "string") return value;
@@ -113,30 +115,57 @@ export function toolBatchLabel(batch: ToolBatch): string {
   return `${categories.join(" · ")}${counts.size > 3 ? t(" · 等 {0} 项", batch.calls.length) : ""}`;
 }
 
-function CompactStepHeader({ row, results, activeCalls, onToggle }: {
-  row: StepControl; results: ReadonlyMap<string, DurableEvent>; activeCalls: ReadonlySet<string>; onToggle: () => void;
+function ProcessGroup({ row, results, activeCalls, mode, reasoning, onToggle, children }: {
+  row: StepControl; results: ReadonlyMap<string, DurableEvent>; activeCalls: ReadonlySet<string>;
+  mode: TranscriptView; reasoning: string; onToggle: () => void; children: ReactNode;
 }) {
   const { failed, missing } = toolBatchStatus(row.batch, results, false);
-  const waiting = row.batch.calls.filter(call => activeCalls.has(call.id) && !results.has(callId(call))).length;
-  const running = waiting > 0, unconfirmed = missing - waiting;
-  const counts = new Map<string, number>();
-  if (row.reasoningCount) counts.set(t("思考"), row.reasoningCount);
-  for (const call of row.batch.calls) {
-    const name = String(call.data.name || "tool"), label = t(toolCategories[name] || name);
-    counts.set(label, (counts.get(label) || 0) + 1);
-  }
-  const label = [...counts].map(([name, count]) => `${name} ×${count}`).join(" · ") || t("操作记录");
+  const runningCalls = row.batch.calls.filter(call => activeCalls.has(call.id) && !results.has(callId(call)));
+  const current = runningCalls.reduce<DurableEvent | undefined>((latest, call) =>
+    !latest || Date.parse(call.at) >= Date.parse(latest.at) ? call : latest, undefined);
+  const category = current ? processCategory(String(current.data.name || "")) : {label:"正在思考", icon:"think" as const};
+  const summary = processSummary(row.batch.calls, row.content.some(item => item.kind === "context"));
+  const detail = current ? processDetail(current.data.arguments) : reasoning.trim().split(/\n\s*\n/).at(-1)?.replace(/\s+/g, " ") || "";
+  const nextTitle = row.closed ? summary.label : `${t(category.label)}${mode === "standard" && detail ? ` · ${detail}` : ""}`;
+  const [title, setTitle] = useState(nextTitle);
+  const shownAt = useRef(0);
+  useEffect(() => {
+    const apply = () => { setTitle(nextTitle); shownAt.current = performance.now(); };
+    if (row.closed) { apply(); return; }
+    const timer = setTimeout(apply, Math.max(0, 150 - (performance.now() - shownAt.current)));
+    return () => clearTimeout(timer);
+  }, [nextTitle, row.closed]);
+  const body = useRef<HTMLDivElement>(null);
+  const [fades, setFades] = useState("");
+  const updateFades = useCallback(() => {
+    const el = body.current;
+    setFades(el ? `${el.scrollTop > 1 ? "fade-top" : ""} ${el.scrollHeight - el.clientHeight - el.scrollTop > 1 ? "fade-bottom" : ""}` : "");
+  }, []);
+  useLayoutEffect(() => {
+    if (row.open && body.current) body.current.scrollTop = row.closed ? 0 : body.current.scrollHeight;
+    updateFades();
+  }, [row.open]);
+  useEffect(() => {
+    const el = body.current;
+    if (!el) return;
+    const observer = new ResizeObserver(updateFades); observer.observe(el);
+    if (el.firstElementChild) observer.observe(el.firstElementChild);
+    updateFades(); return () => observer.disconnect();
+  }, [row.open, updateFades]);
   const warnings = [failed ? t("{0} 失败", failed) : "",
-    unconfirmed ? t("{0} 项结果未确认", unconfirmed) : ""].filter(Boolean).join(" · ");
+    missing > runningCalls.length ? t("{0} 项结果未确认", missing - runningCalls.length) : ""].filter(Boolean).join(" · ");
   const failure = row.batch.calls.map(call => results.get(callId(call))).find(result => result?.data.ok === false);
-  return <div className={`compact-step-group ${failed ? "is-error" : running ? "is-running" : ""}`}>
-    <button type="button" className="compact-step-toggle" aria-expanded={row.open} onClick={onToggle}>
-      <Icon name={row.batch.calls.length ? "terminal" : "think"} />
-      <span>{label}{running ? ` · ${t("执行中")}` : ""}{warnings ? ` · ${warnings}` : ""}</span>
-      <Icon name="chevron" />
+  return <section className={`compact-step-group process-group ${failed ? "is-error" : !row.closed ? "is-running" : ""}`}>
+    <button type="button" className="compact-step-toggle" aria-expanded={row.open} aria-controls={`${row.id}:body`} onClick={onToggle}>
+      <span className="process-leading"><Icon name={row.closed ? summary.icon : category.icon} /><Icon name="chevronDown" /></span>
+      <span className="process-label" title={nextTitle}>{row.closed ? nextTitle : title}</span>
+      {warnings && <span className="process-warning">{warnings}</span>}
     </button>
     {!row.open && failure && <p className="tool-failure">{truncated(oneLine(failure.data.error || failure.data.content) || t("调用失败，展开查看参数"), 140)}</p>}
-  </div>;
+    {row.open && <div id={`${row.id}:body`} className={`process-body ${fades}`} ref={body} onScroll={updateFades}>
+      <div className="process-content">{children}</div>
+    </div>}
+  </section>;
 }
 
 function ToolDetails({ call, result, pluginSlots }: {
@@ -152,45 +181,21 @@ function ToolDetails({ call, result, pluginSlots }: {
   </div>;
 }
 
-function ToolBatchCard({ batch, results, active, open, onToggle, expanded, onToolToggle, pluginSlots, ungrouped = false }: {
-  batch: ToolBatch;
-  results: ReadonlyMap<string, DurableEvent>;
-  active: boolean;
-  open: boolean;
-  onToggle: () => void;
-  expanded: ReadonlySet<string>;
-  onToolToggle: (id: string, open: boolean) => void;
-  pluginSlots: PluginSlot[];
-  ungrouped?: boolean;
+function ToolRows({ batch, results, active, expanded, onToolToggle, pluginSlots }: {
+  batch: ToolBatch; results: ReadonlyMap<string, DurableEvent>; active: boolean;
+  expanded: ReadonlySet<string>; onToolToggle: (id: string, open: boolean) => void; pluginSlots: PluginSlot[];
 }) {
-  const { completed, failed, missing, running } = toolBatchStatus(batch, results, active);
-  const current = running ? batch.calls.find(call => !results.has(callId(call))) : undefined;
-  const failedCall = batch.calls.find(call => results.get(callId(call))?.data.ok === false);
-  const failure = failedCall && results.get(callId(failedCall));
-  const label = toolBatchLabel(batch);
-  const single = batch.calls.length === 1;
-  return <article data-ungrouped={ungrouped} data-tool={single ? String(batch.calls[0].data.name) : undefined} className={`tool-card tool-batch ${failed ? "is-error" : running ? "is-running" : missing ? "is-unconfirmed" : "is-success"}`}>
-    {!ungrouped && <button className="tool-summary" type="button" onClick={onToggle}
-      aria-expanded={open}>
-      <span className="tool-icon"><Icon name="terminal" /></span>
-      <span className="tool-summary-copy"><span className="tool-name">{single && batch.calls[0].data.name === "bash" ? failed ? t("命令执行失败") : running ? t("正在执行命令") : missing ? t("命令结果未确认") : t("执行了命令") : label}</span>
-        {single && <span className="tool-summary-target" title={operationTarget(batch.calls[0], 10_000)}>{operationTarget(batch.calls[0])}</span>}</span>
-      <span className="tool-status">{failed ? t("{0} 失败{1}", failed, missing ? ` · ${missing} ${running ? t("等待") : t("未确认")}` : "")
-        : running ? t("{0}/{1} 完成", completed, batch.calls.length)
-        : missing ? t("{0} 项结果未确认", missing) : t("{0} 项完成", completed)}</span>
-      <Icon name="chevron" className={open ? "rotate" : ""} />
-    </button>}
-    {!open && current && !single && <p className="tool-activity">{t("正在调用") + " "}{String(current.data.name || "tool")} · {operationTarget(current)}</p>}
-    {!open && failure && <p className="tool-failure">{String(failedCall!.data.name || "tool")} · {truncated(oneLine(failure.data.error || failure.data.content) || t("调用失败，展开查看参数"), 140)}</p>}
-    {open && single && batch.calls[0].data.name !== "bash" && !ungrouped && <ToolDetails call={batch.calls[0]} result={results.get(callId(batch.calls[0]))} pluginSlots={pluginSlots} />}
-    {(ungrouped || (open && (!single || batch.calls[0].data.name === "bash"))) && <div className="tool-batch-items">
+  const { failed, missing, running } = toolBatchStatus(batch, results, active);
+  return <article data-ungrouped="true" data-tool={batch.calls.length === 1 ? String(batch.calls[0].data.name) : undefined}
+    className={`tool-card tool-batch ${failed ? "is-error" : running ? "is-running" : missing ? "is-unconfirmed" : "is-success"}`}>
+    <div className="tool-batch-items">
       {batch.calls.map((call) => {
         const result = results.get(callId(call));
         const detailId = `call:${call.id}`, detailOpen = expanded.has(detailId);
         return <section key={call.id} data-tool-call={String(call.data.name || "tool")}>
           <button type="button" className="tool-batch-row" aria-expanded={detailOpen}
             onClick={() => onToolToggle(detailId, !detailOpen)}>
-          <span className="tool-batch-name">{call.data.name === "bash" ? <><Icon name="terminal" />{t("运行命令")}</> : String(call.data.name || "tool")}</span>
+          <span className="tool-batch-name"><Icon name={processCategory(String(call.data.name || "")).icon} />{t(processCategory(String(call.data.name || "")).label)}</span>
           <span className="tool-target" title={operationTarget(call, 10_000)}>{call.data.name === "bash" && call.data.arguments && typeof call.data.arguments === "object" && "description" in call.data.arguments ? String(call.data.arguments.description) : operationTarget(call)}</span>
           <span className={`tool-item-status ${result?.data.ok === false ? "failed" : result ? "completed" : ""}`}>
             {result ? (result.data.ok === false ? t("失败") : t("完成")) : active ? t("等待") : t("未确认")}
@@ -200,10 +205,11 @@ function ToolBatchCard({ batch, results, active, open, onToggle, expanded, onToo
             : <span className="tool-duration" />}
           <Icon name="chevron" className={detailOpen ? "rotate" : ""} />
           </button>
+          {result?.data.ok === false && !detailOpen && <p className="tool-failure">{truncated(oneLine(result.data.error || result.data.content), 140)}</p>}
           {detailOpen && <ToolDetails call={call} result={result} pluginSlots={pluginSlots} />}
         </section>;
       })}
-    </div>}
+    </div>
   </article>;
 }
 
@@ -261,7 +267,6 @@ function Message({ event, reasoningOpen, onReasoningToggle, hideReasoning = fals
   event: DurableEvent; reasoningOpen: boolean; onReasoningToggle: (open: boolean) => void;
   hideReasoning?: boolean; compact?: boolean; showActions?: boolean;
 }) {
-  const [reasoningBodyOpen, setReasoningBodyOpen] = useState(false);
   const message = event.data.message as Record<string, unknown> | undefined;
   if (!message || message.role === "tool") return null;
   const role = String(message.role || "assistant");
@@ -270,23 +275,14 @@ function Message({ event, reasoningOpen, onReasoningToggle, hideReasoning = fals
   const reasoning = text(message.reasoning_content || message.reasoning);
   const calls = Array.isArray(message.tool_calls) ? message.tool_calls.length : 0;
   if (!content && !calls && !hasAttachments && !reasoning) return null;
-  return <article className={`message message-${role}`}>
+  return <article className={`message message-${role}${!content && reasoning ? " message-process" : ""}`}>
     <div className="message-body">
       {role === "assistant" && reasoning && !hideReasoning && <details className="reasoning-row" open={reasoningOpen}
-        onToggle={(event) => {
-          if (event.target !== event.currentTarget) return;
-          onReasoningToggle(event.currentTarget.open);
-          if (!event.currentTarget.open) setReasoningBodyOpen(false);
-        }}><summary onClick={event => {
-          if (compact) { event.preventDefault(); onReasoningToggle(!reasoningOpen); }
-        }}><Icon name="think" /><span>{t("已完成分析")}</span><Icon name="chevron" /></summary>
-        <div className="reasoning-group-body"><details className="reasoning-content" open={reasoningBodyOpen}
-          onToggle={event => setReasoningBodyOpen(event.currentTarget.open)}>
-          <summary onClick={event => {
-            if (compact) { event.preventDefault(); setReasoningBodyOpen(open => !open); }
-          }}><Icon name={reasoningBodyOpen ? "chevron" : "think"} /><span>{t("思考")}</span>{!compact && !reasoningBodyOpen && <span className="reasoning-first-line">{reasoning.split(/\r?\n/, 1)[0].replaceAll("**", "")}</span>}</summary>
-          <div><MarkdownContent content={reasoning} /></div>
-        </details></div></details>}
+        onToggle={event => { if (event.target === event.currentTarget) onReasoningToggle(event.currentTarget.open); }}>
+        <summary><Icon name="think" /><span>{t("思考")}</span>
+          {!compact && !reasoningOpen && <span className="reasoning-first-line">{reasoning.split(/\r?\n/, 1)[0].replaceAll("**", "")}</span>}
+          <Icon name="chevron" /></summary>
+        <div><MarkdownContent content={reasoning} /></div></details>}
       {content && (role === "assistant"
         ? <MarkdownContent content={content} />
         : <div className="message-content">{content}</div>)}
@@ -313,9 +309,9 @@ function estimateRow(row: DisplayRow, width: number): number {
   return Math.min(2_000, (row.kind === "queued" ? 90 : 62) + lines * 23);
 }
 
-export function Timeline({ projection, scrollRef, pluginSlots = [], view = "standard", collapseTiming = "completion", onContinue, continueDisabled = false }: {
+export function Timeline({ projection, scrollRef, pluginSlots = [], view = "standard", collapseTiming = "completion", foldedReplies = "all", onContinue, continueDisabled = false }: {
   projection: Projection; scrollRef: RefObject<HTMLDivElement | null>; pluginSlots?: PluginSlot[];
-  view?: TranscriptView; collapseTiming?: CollapseTiming;
+  view?: TranscriptView; collapseTiming?: CollapseTiming; foldedReplies?: FoldedReplies;
   onContinue?: (runId: string) => void; continueDisabled?: boolean;
 }) {
   const inner = useRef<HTMLDivElement>(null);
@@ -342,10 +338,14 @@ export function Timeline({ projection, scrollRef, pluginSlots = [], view = "stan
   const partialAssistant = String(projection.state["partial-assistant"] || projection.state.partialAssistant || "");
   const partialReasoning = String(projection.state["partial-reasoning"] || projection.state.partialReasoning || "");
   const streaming = projection.state.phase === "model" && Boolean(partialAssistant || partialReasoning);
-  const transcript = useMemo(() => displayTranscript(projection.timeline, view, choices, focusedRow, collapseTiming), [projection.timeline, view, choices, focusedRow, collapseTiming, locale]);
-  const activeToolRow = projection.timeline.activeToolRow === null ? undefined : projection.timeline.rows[projection.timeline.activeToolRow];
-  const activeCalls = new Set(activeToolRow?.kind === "tools" && (projection.state.phase !== "idle" || projection.interactions.length > 0)
-    ? activeToolRow.batch.calls.map(call => call.id) : []);
+  const presentationModel = useMemo(() => streaming ? { ...projection.timeline, rows: [...projection.timeline.rows, {
+    id: "__live-stream__", kind: "message" as const, event: { id: "__live-stream__", seq: 0, type: "message", at: "",
+      data: { message: { role: "assistant", content: partialAssistant, reasoning_content: partialReasoning } } },
+  }] } : projection.timeline, [projection.timeline, streaming, partialAssistant, partialReasoning]);
+  const transcript = useMemo(() => displayTranscript(presentationModel, view, choices, focusedRow, collapseTiming, foldedReplies, focusedUngroupedRow),
+    [presentationModel, view, choices, focusedRow, collapseTiming, foldedReplies, focusedUngroupedRow, locale]);
+  const activeCalls = new Set(projection.state.phase !== "idle" || projection.interactions.length > 0
+    ? projection.timeline.rows.flatMap(row => row.kind === "tools" && transcript.activeRows.has(row.id) ? row.batch.calls.map(call => call.id) : []) : []);
   const rememberFocusedProcess = () => {
     const retained = transcript.rows.filter(row => (row.kind === "turn-control" || row.kind === "step-control") && row.open
       && focusedRow !== null && row.members.includes(focusedRow));
@@ -357,11 +357,11 @@ export function Timeline({ projection, scrollRef, pluginSlots = [], view = "stan
       return next;
     });
   };
-  const rows = useMemo<DisplayRow[]>(() => [
-    ...transcript.rows,
-    ...(streaming ? [{ id: "__live-stream__", kind: "stream" as const }] : []),
-    ...(projection.lastRunError ? [{ id: "__run-error__", kind: "run-error" as const }] : []),
-  ], [transcript.rows, streaming, Boolean(projection.lastRunError)]);
+  const rows = useMemo<DisplayRow[]>(() => {
+    const nested = new Set(transcript.rows.flatMap(row => row.kind === "step-control" && row.open ? row.content.map(item => item.id) : []));
+    return [...transcript.rows.filter(row => !nested.has(row.id)),
+      ...(projection.lastRunError ? [{ id: "__run-error__", kind: "run-error" as const }] : [])];
+  }, [transcript.rows, Boolean(projection.lastRunError)]);
   const layout = useMemo(() => timelineLayout(rows.map((row) => ({
     id: row.id, estimate: estimateRow(row, viewport.width),
   })), measurements, viewport.width), [rows, measurements, viewport.width]);
@@ -471,7 +471,7 @@ export function Timeline({ projection, scrollRef, pluginSlots = [], view = "stan
   if (finalAssistantId) finalAssistantIds.add(finalAssistantId);
   const holdCompactPosition = () => {
     const element = scrollRef.current;
-    if (view !== "compact" || !element) return;
+    if (!element) return;
     // A disclosure can grow the timeline between pointer-down and click.
     // Keep the user's anchor instead of moving the target to follow the tail.
     follow.current = false;
@@ -479,34 +479,7 @@ export function Timeline({ projection, scrollRef, pluginSlots = [], view = "stan
     ignoredScrollTop.current = null;
     anchor.current = captureAnchor(layoutRef.current, element.scrollTop - origin.current);
   };
-  return <div className="timeline-inner virtualized-timeline" ref={inner} data-total-rows={rows.length}
-    onPointerDownCapture={event => {
-      if ((event.target as HTMLElement).closest("button, summary")) holdCompactPosition();
-    }}
-    onFocusCapture={event => {
-      holdCompactPosition();
-      rememberFocusedProcess();
-      const target = event.target as HTMLElement;
-      const row = target.closest<HTMLElement>("[data-row-id]")?.dataset.rowId || null;
-      setFocusedRow(row);
-      // Preserve the layout already holding focus; focusing a historical group
-      // header must never replace that header with individual tool controls.
-      setFocusedUngroupedRow(target.closest('.tool-batch[data-ungrouped="true"]') ? row : null);
-    }}
-    onBlurCapture={event => {
-      if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) {
-        rememberFocusedProcess(); setFocusedRow(null); setFocusedUngroupedRow(null);
-      }
-    }}
-    data-window-start={range.start} data-window-end={range.end} data-scroll-top={Math.round(viewport.top)}>
-    {!rows.length && projection.state.phase === "idle" &&
-      <div className="empty-conversation">{t("描述任务，开始这段会话。")}</div>}
-    <div ref={rowContainer} className="timeline-rows">
-      <div className="timeline-spacer" aria-hidden="true" style={{ height: layout.offsets[range.start] || 0 }} />
-      {rows.slice(range.start, range.end).map((row) => <div className="timeline-row" key={row.id}
-        data-row-id={row.id} ref={(element) => {
-          if (element) nodes.current.set(row.id, element); else nodes.current.delete(row.id);
-        }}>
+  const renderRow = (row: DisplayRow): ReactNode => <>
         {row.kind === "turn-control" && <button type="button" aria-label={view === "compact" ? `${row.label} · ${row.caption}` : row.label} className="turn-process-toggle" aria-expanded={row.open}
           onClick={() => {
             if (!row.open) setExpandedRow(row.id, true);
@@ -517,9 +490,11 @@ export function Timeline({ projection, scrollRef, pluginSlots = [], view = "stan
               return next;
             });
           }}><span>{row.caption}</span><Icon name="chevron" /></button>}
-        {row.kind === "step-control" && <CompactStepHeader row={row} results={projection.timeline.results}
-          activeCalls={activeCalls}
-          onToggle={() => setExpandedRow(row.id, !row.open)} />}
+        {row.kind === "step-control" && <ProcessGroup row={projection.state.phase === "idle" ? {...row, closed: true} : row} results={projection.timeline.results}
+          activeCalls={activeCalls} mode={view} reasoning={row.closed ? "" : partialReasoning}
+          onToggle={() => setExpandedRow(row.id, !row.open)}>
+          {row.content.map(child => <div className="process-row" key={child.id} data-row-id={child.id}>{renderRow(child)}</div>)}
+        </ProcessGroup>}
         {row.kind === "message" && <Message event={row.event} reasoningOpen={expanded.has(row.id)}
           hideReasoning={transcript.hiddenReasoning.has(row.id)} compact={view === "compact"} showActions={finalAssistantIds.has(row.id)}
           onReasoningToggle={(open) => setExpandedRow(row.id, open)} />}
@@ -532,14 +507,11 @@ export function Timeline({ projection, scrollRef, pluginSlots = [], view = "stan
           {String(row.event.data.content).length > 100_000 && <p>{t("指令较长，此处显示前 100000 个字符。")}</p>}
         </details>}
         {row.kind === "continuation" && <div className="continuation-receipt" role="status">{t("已请求继续生成")}</div>}
-        {row.kind === "tools" && <ToolBatchCard batch={row.batch} results={projection.timeline.results}
+        {row.kind === "tools" && <ToolRows batch={row.batch} results={projection.timeline.results}
           active={projection.timeline.activeToolRow !== null && projection.timeline.rows[projection.timeline.activeToolRow]?.id === row.id
             && (projection.state.phase !== "idle" || projection.interactions.length > 0)}
           expanded={expanded} onToolToggle={setExpandedRow} pluginSlots={pluginSlots}
-          ungrouped={view === "compact" || view === "verbose" || (view === "detailed" && (focusedUngroupedRow === row.id || (transcript.activeRows.has(row.id)
-            && (projection.state.phase !== "idle" || projection.interactions.length > 0))))}
-          open={choices.get(row.id) ?? false}
-          onToggle={() => setExpandedRow(row.id, !(choices.get(row.id) ?? false))} />}
+          />}
         {row.kind === "decision" && <div className={`decision-row ${row.event.data.decision === "allow" ? "allowed" : "denied"}`}>
           <Icon name="shield" /><span>{String(row.event.data.tool || t("工具"))} {row.event.data.decision === "allow" ? t("已获批准") : t("被拒绝")}</span>
         </div>}
@@ -559,6 +531,36 @@ export function Timeline({ projection, scrollRef, pluginSlots = [], view = "stan
             <MarkdownContent content={partialAssistant} />
           </div>
         </article>}
+  </>;
+  return <div className="timeline-inner virtualized-timeline" ref={inner} data-total-rows={rows.length} data-transcript-view={view}
+    onPointerDownCapture={event => {
+      if ((event.target as HTMLElement).closest("button, summary")) holdCompactPosition();
+    }}
+    onFocusCapture={event => {
+      holdCompactPosition();
+      rememberFocusedProcess();
+      const target = event.target as HTMLElement;
+      const row = target.closest<HTMLElement>("[data-row-id]")?.dataset.rowId || null;
+      setFocusedRow(row);
+      // Preserve the layout already holding focus; focusing a historical group
+      // header must never replace that header with individual tool controls.
+      setFocusedUngroupedRow(target.closest('.tool-batch[data-ungrouped="true"]') && !target.closest('.process-group') ? row : null);
+    }}
+    onBlurCapture={event => {
+      if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) {
+        rememberFocusedProcess(); setFocusedRow(null); setFocusedUngroupedRow(null);
+      }
+    }}
+    data-window-start={range.start} data-window-end={range.end} data-scroll-top={Math.round(viewport.top)}>
+    {!rows.length && projection.state.phase === "idle" &&
+      <div className="empty-conversation">{t("描述任务，开始这段会话。")}</div>}
+    <div ref={rowContainer} className="timeline-rows">
+      <div className="timeline-spacer" aria-hidden="true" style={{ height: layout.offsets[range.start] || 0 }} />
+      {rows.slice(range.start, range.end).map((row) => <div className="timeline-row" key={row.id}
+        data-row-id={row.id} ref={(element) => {
+          if (element) nodes.current.set(row.id, element); else nodes.current.delete(row.id);
+        }}>
+        {renderRow(row)}
       </div>)}
       <div className="timeline-spacer" aria-hidden="true" style={{ height: layout.total - (layout.offsets[range.end] || 0) }} />
     </div>

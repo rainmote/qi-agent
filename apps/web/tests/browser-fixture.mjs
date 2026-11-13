@@ -20,7 +20,7 @@ function deferred(){let resolve;const promise=new Promise(r=>resolve=r);return {
 async function fixture(initialCount=2, pageOptions={}){
  const page=await browser.newPage({viewport:{width:1440,height:1000},...pageOptions});
  page.on('pageerror',e=>errors.push(e.message));
- await page.addInitScript(()=>{window.sources=[];window.EventSource=class extends EventTarget{constructor(url){super();this.url=url;window.sources.push(this);queueMicrotask(()=>this.dispatchEvent(new Event('ready')));}close(){this.closed=true;}}});
+ await page.addInitScript(()=>{if(window===window.top&&!localStorage.getItem('qi-agent.transcript-view'))localStorage.setItem('qi-agent.transcript-view','standard');window.sources=[];window.EventSource=class extends EventTarget{constructor(url){super();this.url=url;window.sources.push(this);queueMicrotask(()=>this.dispatchEvent(new Event('ready')));}close(){this.closed=true;}}});
  const controls={policySelections:[],rejectPolicy:false,holdSnapshot:null,holdOpen:null,holdPolicy:null,holdModels:null,holdCatalog:null,catalogGates:[],additionalSessions:[],forks:0,snapshotOverride:null,dropFollowUp:false,dropSteer:false,steers:[],followUps:[],rpcRequests:[],modelCatalog:models,providerSaves:0,providerRetries:0,dropSubmit:false,rejectSubmit:false,uploads:[],submissions:[],operationStatus:"completed",preferenceEvents:{A:[],B:[]},rejectPreference:false,verification:undefined};
  const sessionSnapshot=(id,n=2)=>{const value=snapshot(id,n);value.events.push(...controls.preferenceEvents[id]);if(controls.trustStates)value.trust=controls.trustStates[id];return value;};
  const sessionList=()=>controls.sessions||[...sessions,...controls.additionalSessions];

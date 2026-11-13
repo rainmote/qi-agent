@@ -28,7 +28,7 @@ test("settled turns fold process while retaining final answer, decisions and unv
   assert.equal(view.hiddenReasoning.size,1);
   const header=view.rows.find(row => row.kind === "turn-control")!;
   const open=displayTranscript(model(),"standard",new Map([[header.id,true]]));
-  assert.equal(open.rows.filter(row => row.kind === "tools").length,1);
+  assert.equal(open.rows.filter(row => row.kind === "step-control").length,2);
   assert.equal(open.hiddenReasoning.size,0);
   const focused = displayTranscript(model(),"standard",new Map(), "e1");
   assert.equal(focused.rows.filter(row => row.kind === "tools").length,1,"completion cannot hide a focused tool control");
@@ -36,10 +36,14 @@ test("settled turns fold process while retaining final answer, decisions and unv
 
 test("standard interleaved user input and active turns keep every step in original order", () => {
   const interrupted=model(true);
-  assert.deepEqual(displayTranscript(interrupted,"standard",new Map()).rows,interrupted.rows);
+  const grouped = displayTranscript(interrupted,"standard",new Map()).rows;
+  assert.equal(grouped.filter(row => row.kind === "turn-control").length,0);
+  assert.deepEqual(grouped.filter(row => row.kind === "message").map(row=>row.id),interrupted.rows.filter(row=>row.kind==="message").map(row=>row.id));
+  assert.equal(grouped.filter(row=>row.kind==="step-control").length,2);
   const active=buildTimeline(events([["message",user],["tool/call",tool]]));
-  assert.deepEqual(displayTranscript(active,"standard",new Map()).rows,active.rows);
-  assert.deepEqual(displayTranscript(model(),"verbose",new Map()).rows,model().rows);
+  assert.deepEqual(displayTranscript(active,"standard",new Map()).rows.map(row=>row.kind),["message","step-control"]);
+  assert.equal(displayTranscript(model(),"verbose",new Map()).rows.filter(row=>row.kind==="tools").length,1);
+  assert.equal(displayTranscript(model(),"verbose",new Map()).rows.filter(row=>row.kind==="turn-control"||row.kind==="step-control").length,0);
 });
 
 test("next-input folding retains the latest process, respects manual choices and folds on a later user message", () => {
@@ -47,7 +51,7 @@ test("next-input folding retains the latest process, respects manual choices and
   const latest = displayTranscript(current,"standard",new Map(),null,"next-input");
   const control = latest.rows.find(row => row.kind === "turn-control")!;
   assert.equal(control.open,true);
-  assert.equal(latest.rows.filter(row => row.kind === "tools").length,1);
+  assert.equal(latest.rows.filter(row => row.kind === "step-control").length,2);
   assert.equal(displayTranscript(current,"standard",new Map([[control.id,false]]),null,"next-input")
     .rows.find(row => row.kind === "turn-control")!.open,false);
   const later = buildTimeline([...events([
@@ -66,14 +70,17 @@ test("failed, cancelled and uncertain turns retain their process without a whole
     const stopped=buildTimeline(events([["message",user],["message",answer], ["tool/call",tool],
       ["agent/run/end",{...outcome,status}]]));
     const result=displayTranscript(stopped,"standard",new Map());
-    assert.deepEqual(result.rows,stopped.rows);
+    assert(!result.rows.some(row=>row.kind==="turn-control"));
+    assert.equal(result.rows.filter(row=>row.kind==="step-control").length,2);
+    const end = result.rows.find(row=>row.kind==="outcome")!;
+    assert(end.kind === "outcome"); assert.equal(end.event.data.status,status);
     assert.equal(result.hiddenReasoning.size,0);
   }
 });
 
-test("display preferences fail back to standard and subtask results remain disclosure content", () => {
+test("display preferences fall back to detailed and subtask results remain disclosure content", () => {
   assert.equal(transcriptView("verbose"),"verbose");
-  assert.equal(transcriptView("unknown"),"standard");
+  assert.equal(transcriptView("unknown"),"detailed");
   const html=renderToStaticMarkup(<SubagentPanel jobs={[{id:"a",label:"只读复核",provider:"offline",status:"completed",result:"没有发现阻断问题"}]} />);
   assert.match(html,/<details/);
   assert.doesNotMatch(html,/<details[^>]+open=/);

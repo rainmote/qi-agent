@@ -19,7 +19,7 @@ import { Timeline } from "./Timeline";
 import { continuableRun, isContinuationRequest } from "./run-continuation";
 import { RunOverview } from "./RunOverview";
 import { SubagentMenu, SubagentPanel } from "./SubagentPanel";
-import { collapseTiming, transcriptView, type CollapseTiming, type TranscriptView } from "./transcript-display";
+import { collapseTiming, foldedReplies, transcriptView, type CollapseTiming, type FoldedReplies, type TranscriptView } from "./transcript-display";
 import { Trajectory } from "./Trajectory";
 import { WorkspacePanel } from "./WorkspacePanel";
 import { DesktopBrowser } from "./DesktopBrowser";
@@ -329,6 +329,7 @@ export function App() {
   useEffect(() => { if (workbench !== "files") setFileRequest(null); }, [workbench]);
   const [returnToSettings, setReturnToSettings] = useState(false);
   const [stepsView, setStepsView] = useState<TranscriptView>(() => transcriptView(localStorage.getItem("qi-agent.transcript-view")));
+  const [repliesAfterCollapse, setRepliesAfterCollapse] = useState<FoldedReplies>(() => foldedReplies(localStorage.getItem("qi-agent.folded-replies")));
   const [stepsCollapseTiming, setStepsCollapseTiming] = useState<CollapseTiming>(() => collapseTiming(localStorage.getItem("qi-agent.collapse-timing")));
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
   const [desktopWorkspacePath, setDesktopWorkspacePath] = useState<string | null>(null);
@@ -1359,7 +1360,7 @@ export function App() {
           calls={projection?.summary.calls ?? 0} waitingCount={projection?.interactions.length ?? 0}
           context={contextStatus} compact={stepsView === "compact" && conversationView === "chat"} />}
         <div className={`timeline ${conversationView === "trajectory" ? "trajectory-mode" : ""}`} ref={timeline} tabIndex={0} aria-label={t("会话内容")}>
-          {conversationView === "chat" && projection && <Timeline key={activeSession.id} projection={projection} scrollRef={timeline} pluginSlots={pluginSlots} view={stepsView} collapseTiming={stepsCollapseTiming}
+          {conversationView === "chat" && projection && <Timeline key={activeSession.id} projection={projection} scrollRef={timeline} pluginSlots={pluginSlots} view={stepsView} collapseTiming={stepsCollapseTiming} foldedReplies={repliesAfterCollapse}
             onContinue={continuedRuns.current.has(`${activeSession.id}:${continuableRun(projection)}`) ? undefined : id => void continueGeneration(id)}
             continueDisabled={busy || uploading || stopping || !!pendingOperation} />}
           {conversationView === "trajectory" && <Trajectory key={activeSession.id} events={projection?.events || []} />}
@@ -1464,6 +1465,7 @@ export function App() {
       trust={trust.status} onManageTrust={(activeSession || draftSession) && !busy ? () => void manageTrust(true) : undefined}
       onOpenShortcuts={() => openShortcuts(true)} onManagePlugins={activeSession ? () => { setSettingsOpen(false); setWorkbench("plugins"); } : undefined}
       view={stepsView} onViewChange={value => { setStepsView(value); localStorage.setItem("qi-agent.transcript-view", value); }}
+      foldedReplies={repliesAfterCollapse} onFoldedRepliesChange={value => { setRepliesAfterCollapse(value); localStorage.setItem("qi-agent.folded-replies", value); }}
       collapseTiming={stepsCollapseTiming} onCollapseTimingChange={value => { setStepsCollapseTiming(value); localStorage.setItem("qi-agent.collapse-timing", value); }}
       theme={theme} onThemeChange={setTheme} onClose={() => setSettingsOpen(false)}
       policy={policy} onPolicyChange={mode => {

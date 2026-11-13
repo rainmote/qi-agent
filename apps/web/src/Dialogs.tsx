@@ -11,7 +11,7 @@ import type { PolicyStatus } from "./types";
 import { ProviderSettingsPanel } from "./ProviderSettingsPanel";
 import { ComputerUsePanel, type ComputerCommand } from "./ComputerUsePanel";
 import type { Interaction, ProjectTrust, RuntimeStatus, Workspace } from "./types";
-import { collapseTimings, transcriptViews, type CollapseTiming, type TranscriptView } from "./transcript-display";
+import { collapseTimings, transcriptViews, type CollapseTiming, type FoldedReplies, type TranscriptView } from "./transcript-display";
 import type { TrustIntent } from "./ProjectTrust";
 
 export function DialogFrame({ title, children, onClose, className = "", dangerous = false, initialFocus }: {
@@ -248,12 +248,13 @@ function ContentFontControl({ expanded, onToggle, controls }: { expanded: boolea
   </div>;
 }
 
-export function SettingsDialog({ workspaces, runtime, theme, onThemeChange, onClose, view, onViewChange, collapseTiming, onCollapseTimingChange,
+export function SettingsDialog({ workspaces, runtime, theme, onThemeChange, onClose, view, onViewChange, collapseTiming, onCollapseTimingChange, foldedReplies = "all", onFoldedRepliesChange,
   onAddWorkspace, onRemoveWorkspace, onProvidersChanged, policy, onPolicyChange, onOpenShortcuts, onManagePlugins, trust, onManageTrust, initialFocus, onComputerCommand, onRefreshRuntime }: {
   workspaces: Workspace[]; runtime: RuntimeStatus | null;
   policy?: PolicyStatus | null; onPolicyChange?: (mode: PolicyStatus["mode"]) => void;
   theme: "dark" | "light" | "system"; onThemeChange: (theme: "dark" | "light" | "system") => void;
   view: TranscriptView; onViewChange: (view: TranscriptView) => void;
+  foldedReplies?: FoldedReplies; onFoldedRepliesChange?: (value: FoldedReplies) => void;
   collapseTiming: CollapseTiming; onCollapseTimingChange: (timing: CollapseTiming) => void;
   onClose: () => void; onAddWorkspace: () => void;
   onRemoveWorkspace?: (workspace: Workspace) => Promise<void>;
@@ -332,6 +333,9 @@ export function SettingsDialog({ workspaces, runtime, theme, onThemeChange, onCl
           <section className="settings-option-row settings-preference-row"><div><h3>{t("工作步骤收起时机")}</h3><p>{t("选择何时自动收起工作步骤")}</p></div>
             <SettingsPreferenceControl label={t("工作步骤收起时机")} value={collapseTiming} options={collapseTimings} onChange={onCollapseTimingChange} />
           </section>
+          {view !== "verbose" && <section className="settings-option-row settings-preference-row"><div><h3>{t("收起后保留的回复")}</h3><p>{t("选择工作步骤收起后仍然显示的助手回复")}</p></div>
+            <SettingsPreferenceControl label={t("收起后保留的回复")} value={foldedReplies} options={[{id:"all",label:"全部回复"},{id:"final",label:"仅最终回答"}]} onChange={value => onFoldedRepliesChange?.(value)} />
+          </section>}
           <WebPreferenceRows onOpenShortcuts={onOpenShortcuts} />
           <section className="settings-option-row"><div><h3>{t("版本")}</h3><p>qi-agent Web</p></div><span>{webVersion}</span></section>
         </>}
