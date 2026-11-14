@@ -104,7 +104,7 @@ truth, so closing a client detaches from work instead of terminating it.
 | --- | ---: | --- |
 | [Git](https://git-scm.com/) | 2.30 | Managed installation and updates |
 | [Babashka](https://babashka.org/) | 1.13 | Runtime, profiles, and installer |
-| [Rust](https://www.rust-lang.org/tools/install) | 1.88 | Native daemon and terminal UI |
+| [Rust](https://www.rust-lang.org/tools/install) | 1.89 | Native daemon and terminal UI |
 | [Node.js](https://nodejs.org/) | 22.12 | Web UI and Web test suite only |
 
 Linux and macOS are exercised in CI. Process sandboxing is currently strongest
@@ -397,7 +397,7 @@ overrides; CI uses the locked project dependency and its managed browser.
 CI runs on Linux and macOS, checks Rust formatting and Clippy, exercises the
 Clojure, Rust, Web host, and React suites, and performs npm and RustSec
 dependency audits. A separate build checks all Rust targets with the locked
-dependencies on Rust 1.88, the minimum version declared in `Cargo.toml`.
+dependencies on Rust 1.89, the minimum version declared in `Cargo.toml`.
 Tagged releases are built for Linux and macOS on x86_64 and
 arm64 with checksums and GitHub artifact attestations.
 

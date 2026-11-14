@@ -142,7 +142,7 @@ jobs:
           test "$UI_RESULT" = success
 
   msrv:
-    name: MSRV 1.88 (${{ matrix.os }})
+    name: MSRV 1.89 (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
@@ -150,11 +150,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: dtolnay/rust-toolchain@1.89.0
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: apps/tui-rs
-          key: msrv-1.88
+          key: msrv-1.89
       - name: Build all Rust targets at the minimum supported version
         run: cargo build --locked --all-targets --manifest-path apps/tui-rs/Cargo.toml
 

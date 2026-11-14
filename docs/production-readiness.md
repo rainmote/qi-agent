@@ -43,10 +43,10 @@ CLI 直启不能借用 daemon 的配额保证。输出区分 profile 默认值�
 独立验证、人工接受、合入和发布分别处理。Linux 的 `:sandbox :auto` 继续 fail closed；
 缺少安全 provider 时没有进程能力。
 
-运行时最低版本由 README 声明；Rust 最低版本为 1.88，与 `Cargo.toml` 的 `rust-version`
+运行时最低版本由 README 声明；Rust 最低版本为 1.89，与 `Cargo.toml` 的 `rust-version`
 一致。CI 固定 Node 22.12 和 Babashka 1.13.219，在 Linux、macOS 运行 Rust、Clojure 和 Web
-测试，并单独使用 Rust 1.88 与锁定依赖构建全部 Rust targets。主分支应要求 `CI / Test`、
-`CI / MSRV 1.88` 的所有平台检查与 `CI / Dependency audit` 通过。
+测试，并单独使用 Rust 1.89 与锁定依赖构建全部 Rust targets。主分支应要求 `CI / Test`、
+`CI / MSRV 1.89` 的所有平台检查与 `CI / Dependency audit` 通过。
 
 ```bash
 export OPENAI_API_KEY="..."
@@ -58,7 +58,7 @@ npm run test:web-ui
 cargo fmt --manifest-path apps/tui-rs/Cargo.toml --all -- --check
 cargo clippy --manifest-path apps/tui-rs/Cargo.toml --all-targets -- -D warnings
 cargo test --locked --manifest-path apps/tui-rs/Cargo.toml
-cargo +1.88.0 build --locked --all-targets --manifest-path apps/tui-rs/Cargo.toml
+cargo +1.89.0 build --locked --all-targets --manifest-path apps/tui-rs/Cargo.toml
 cargo build --release --locked --manifest-path apps/tui-rs/Cargo.toml
 expect apps/tui-rs/tests/pty-smoke.exp
 ```

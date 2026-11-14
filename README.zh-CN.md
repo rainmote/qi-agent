@@ -78,8 +78,8 @@ flowchart LR
 
 ## 快速运行
 
-要求 Git 2.30、Babashka 1.13、Rust 1.88 或更新版本。最低 Rust 版本与 `Cargo.toml` 的
-`rust-version` 保持一致，CI 会在 Linux 和 macOS 上使用 Rust 1.88 与锁定依赖构建全部
+要求 Git 2.30、Babashka 1.13、Rust 1.89 或更新版本。最低 Rust 版本与 `Cargo.toml` 的
+`rust-version` 保持一致，CI 会在 Linux 和 macOS 上使用 Rust 1.89 与锁定依赖构建全部
 Rust targets。默认交互界面使用 Rust/Ratatui；首次运行先构建
 release TUI：
 
