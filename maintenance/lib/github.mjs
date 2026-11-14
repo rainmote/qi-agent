@@ -1,8 +1,8 @@
 // Read-only GitHub gates. Missing data, pagination races and API errors fail closed.
 export const REQUIRED_JOBS = Object.freeze([
-  'Test (ubuntu-24.04)', 'Test (macos-14)',
+  'Test (ubuntu-24.04)', 'Test (macos-15)',
   'Headless UI (ubuntu-24.04, chromium)', 'Headless UI (macos-15, webkit)', 'UI Gate',
-  'MSRV 1.88 (ubuntu-24.04)', 'MSRV 1.88 (macos-14)', 'Dependency audit',
+  'MSRV 1.88 (ubuntu-24.04)', 'MSRV 1.88 (macos-15)', 'Dependency audit',
 ]);
 export const commitSHA = (sha) => {
   if (!/^[0-9a-f]{40}$/.test(sha ?? '')) throw new Error('An exact 40-character commit SHA is required');
