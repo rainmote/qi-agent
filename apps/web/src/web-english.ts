@@ -1,6 +1,25 @@
 // Shared Harness copy adapted from reference 687f282 (MIT); see THIRD_PARTY_NOTICES.md.
 // qi-specific capabilities and safeguards retain their own semantics.
 export const english: Record<string, string> = {
+  "会话统计": "Session statistics",
+  "运行统计": "Activity",
+  "会话用量": "Session usage",
+  "{0} 轮 {1} 步": "{0} turns {1} steps",
+  "缓存命中 {0}%": "Cache hit {0}%",
+  "工具累计耗时": "Total tool time",
+  "模型请求耗时": "Model request time",
+  "模型请求": "Model requests",
+  "输入 tokens": "Input tokens",
+  "输出 tokens": "Output tokens",
+  "缓存读取 tokens": "Cached input tokens",
+  "用量未知": "Usage unknown",
+  "已知": "Known",
+  "上下文未知": "Context unknown",
+  "尚未取得上下文用量，模型容量不代表实际已用量。": "Context usage is not available yet. Model capacity does not indicate actual usage.",
+  "当前会话的逻辑请求用量，包含失败请求中已知的用量。": "Logical request usage for this session, including known usage from failed requests.",
+  "{0} 次请求用量未完整返回；以上仅为已知小计。": "Usage is incomplete for {0} requests; only known subtotals are shown.",
+  "项目受限 · 仍受权限和审批约束": "Restricted project · permissions and approvals still apply",
+
   "执行 Shell 命令": "Execute shell command",
   "执行代码": "Execute code",
   "查看工具详情": "View tool details",

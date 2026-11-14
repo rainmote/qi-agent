@@ -83,20 +83,38 @@ try {
         if (new URL(route.request().url()).origin !== base) { errors.push('External request blocked'); await route.abort(); }
         else await route.fallback();
       });
-      await page.addInitScript(() => {
+      await page.addInitScript(theme => {
         localStorage.setItem('qi-agent.web-preferences.v1', JSON.stringify({ locale: 'zh' }));
         localStorage.setItem('qi-agent.transcript-view', 'compact');
-      });
+        localStorage.setItem('qi-agent.theme', theme || 'dark');
+      }, row.theme);
       const trust = { configured: true, root: '/mock', decision: row.trust, 'explicit?': true,
         'matched-root': '/mock', source: 'fixture', mutable: true };
       controls.trustStates = { A: trust, B: trust };
       controls.snapshotOverride = { ...snapshot('A', 0), trust, state: { phase: row.phase || 'idle', revision: 2 },
         interactions: row.approval ? [{ id: 'approval', title: '需要确认操作', message: '这是离线验收，请检查按钮可见性。',
           items: [{ value: 'allow', label: '允许' }] }] : [] };
+      const events = [{ type: 'message', data: { message: { role: 'user', content: '库存核算' } } },
+        { type: 'step/start', data: { step: 1 } },
+        { type: 'usage/request', data: { request_id: 'one', scope: 'logical_request', status: 'started' } },
+        { type: 'usage/request', data: { request_id: 'one', scope: 'logical_request', status: 'completed', duration_ms: 1000,
+          usage: { prompt_tokens: 1000, completion_tokens: 100, prompt_tokens_details: { cached_tokens: 800 } } } },
+        // Replayed starts and repeated terminal facts must not double-count or erase settled usage.
+        { type: 'usage/request', data: { request_id: 'one', scope: 'logical_request', status: 'started' } },
+        { type: 'usage/request', data: { request_id: 'one', scope: 'logical_request', status: 'completed', duration_ms: 1000,
+          usage: { prompt_tokens: 1000, completion_tokens: 100, prompt_tokens_details: { cached_tokens: 800 } } } },
+        { type: 'step/end', data: { step: 1 } },
+        { type: 'agent/run/end', data: { status: 'completed', verification: 'not-run', usage: { total_tokens: 1100 } } }];
+      if (row.stats) controls.snapshotOverride.events = events.map((event, i) => ({ ...event, id: `stats-${i}`, seq: i + 1, at: '2026-11-14T14:00:00Z' }));
+      if (row.stats === 'unknown') controls.snapshotOverride.events.push({ id: 'unknown', seq: 20, at: '2026-11-14T14:01:00Z', type: 'usage/request', data: { request_id: 'two', scope: 'logical_request', status: 'failed' } });
+      if (row.stats !== 'unknown') controls.snapshotOverride.context = { used_tokens: 2400, context_window: 10000, percent: 24, system_tokens: 800, tool_tokens: 600, message_tokens: 1000 };
+      controls.modelCatalog = { current: { id: 'mock-a', model: 'Model A', 'context-window': 10000 }, providers: [{ id: 'mock-a', model: 'Model A', 'context-window': 10000 }] };
+      controls.snapshotOverride.models = controls.modelCatalog;
+      controls.contextStatus = controls.snapshotOverride.context;
       await page.goto(base);
       const input = page.locator('.session-view .composer textarea');
       await input.waitFor();
-      await page.locator('.composer-trust').waitFor();
+      await page.locator('.permission-trigger').waitFor();
       assert.equal(await page.locator('.desktop-preview-notice').count(), 1, 'Real Core Preview banner required');
       await input.focus();
       if (row.long) await input.fill(Array.from({ length: 40 }, (_, i) => `第${i + 1}行，检查输入框在窗口内的高度。`).join('\n'));
@@ -112,6 +130,33 @@ try {
         assert.equal(row.expansion.open, true, 'Run details really expanded');
         assert(row.expansion.after > before, 'Expanded details occupy more height');
       }
+      const dock = page.locator('.session-run-summary');
+      const active = !!row.phase || !!row.approval;
+      const contextBelow = await page.locator('.composer .context-control').count() === 0 &&
+        (active ? await dock.locator('.context-control').count() === 0 : await dock.locator('.context-control').count() === 1);
+      let statistics = true, details = true;
+      if (row.stats) {
+        const reading = await dock.innerText();
+        statistics = /1 轮 1 步/.test(reading) && /1.1K tok/.test(reading) &&
+          (row.stats === 'unknown' ? /已知/.test(reading) && /上下文未知/.test(reading) && !/缓存命中/.test(reading) : /缓存命中 80%/.test(reading) && /24%/.test(reading));
+        if (statistics) {
+          const usage = dock.locator('[data-composer-stat="usage"] button');
+          await usage.focus(); await usage.press('Enter');
+          await page.getByRole('dialog', { name: '会话用量', exact: true }).waitFor();
+          details = /1,000/.test(await page.getByRole('dialog', { name: '会话用量', exact: true }).innerText());
+          await page.keyboard.press('Escape');
+          details = details && await usage.evaluate(el => el === document.activeElement);
+          const context = dock.locator('.context-trigger'); await context.click();
+          await page.getByRole('dialog', { name: '上下文占用', exact: true }).waitFor();
+          await page.keyboard.press('Escape');
+          details = details && await context.evaluate(el => el === document.activeElement);
+        } else details = false;
+      }
+      await page.locator('.permission-trigger').click();
+      const trustReading = await page.locator('.permission-menu').innerText();
+      const reviewReachable = /管理项目信任/.test(trustReading) && /仍受权限和审批约束/.test(trustReading);
+      await page.keyboard.press('Escape');
+      await settleLayout(page);
       row.metrics = await measure(page);
       const m = row.metrics, b = m.boxes, card = b['.composer'], footer = b['.composer-footer'];
       const wrap = b['.composer-wrap'], summary = b['.session-run-summary'], textarea = b['.composer textarea'];
@@ -122,7 +167,11 @@ try {
         'composer wrap stays in viewport': wrap.top >= b['.session-header'].bottom - 1 && wrap.bottom <= m.height + 1,
         'footer fully inside card': footer.top >= card.top && footer.bottom <= card.bottom + 1,
         'all footer buttons in viewport': m.buttons.length >= 3 && m.buttons.every(button => button.top >= 0 && button.bottom <= m.height - 8 && button.left >= 0 && button.right <= m.width + 1),
-        'trust stays above input card': b['.composer-trust'].bottom <= card.top + 1,
+        'trusted notice in permission menu; restricted notice above card': row.trust === 'allow' ? !b['.composer-trust'] : b['.composer-trust']?.bottom <= card.top + 1,
+        'context below card and absent during activity': contextBelow,
+        'session statistics use durable records': statistics,
+        'statistics keyboard details and focus return': details,
+        'trust review remains reachable without mutation': reviewReachable,
         'no horizontal page overflow': m.documentWidth <= m.width,
         'empty placeholder cannot create scrollbar': row.long || textarea.overflowY === 'hidden',
         'long drafts remain scrollable': !row.long || textarea.scrollHeight <= textarea.clientHeight + 1 || textarea.overflowY === 'auto',
@@ -156,8 +205,8 @@ try {
   }
   report.errors.push(...errors);
   assert(!interrupted, 'Run interrupted');
-  assert.equal(report.cases.length, 11);
-  assert(report.cases.every(row => row.status === 'PASS'), 'All 11 scenarios must pass');
+  assert.equal(report.cases.length, 15);
+  assert(report.cases.every(row => row.status === 'PASS'), 'All 15 scenarios must pass');
   assert.deepEqual(report.errors, []);
   report.status = 'PASS';
 } catch (error) { report.status = 'FAIL'; report.error = String(error.stack || error); }

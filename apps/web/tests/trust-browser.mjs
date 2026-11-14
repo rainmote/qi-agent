@@ -10,7 +10,13 @@ const undecided={...restricted,'explicit?':false,'matched-root':null};
 const manager=page=>page.getByRole('dialog',{name:'项目信任',exact:true});
 const initial=page=>page.getByRole('dialog',{name:'是否信任这个项目？',exact:true});
 const input=page=>page.getByRole('textbox',{name:'给代理发送消息',exact:true});
-const entry=page=>page.locator('.composer-trust').getByRole('button',{name:'管理项目信任',exact:true});
+const entry=async page=>{
+ const banner=page.locator('.composer-trust').getByRole('button',{name:'管理项目信任',exact:true});
+ if(await banner.isVisible())return banner;
+ const trigger=page.locator('.permission-trigger');
+ if(await trigger.getAttribute('aria-expanded')!=='true')await trigger.click();
+ return page.getByRole('menuitem',{name:'管理项目信任',exact:true});
+};
 const settingsEntry=page=>page.getByRole('dialog',{name:'设置',exact:true}).getByRole('button',{name:'管理项目信任',exact:true});
 const shot=async(page,name)=>{
  if(!artifacts)return;await fs.mkdir(artifacts,{recursive:true});await settle(page);
@@ -20,7 +26,7 @@ const shot=async(page,name)=>{
  await fs.writeFile(`${artifacts}/trust-${name}.json`,JSON.stringify({capturedAt:new Date().toISOString(),browser:browser.version(),viewport:page.viewportSize(),state},null,2)+'\n');
 };
 const ready=async page=>{await page.goto(base);await page.locator('.session-header-title button').waitFor();await settle(page);};
-const openManager=async page=>{await entry(page).click();await manager(page).waitFor();await manager(page).getByText('当前项目',{exact:true}).waitFor();};
+const openManager=async page=>{await (await entry(page)).click();await manager(page).waitFor();await manager(page).getByText('当前项目',{exact:true}).waitFor();};
 const settings=async page=>{await page.locator('.sidebar-settings').click();await page.getByRole('menuitem',{name:'设置',exact:true}).click();await page.getByRole('dialog',{name:'设置',exact:true}).waitFor();};
 const noDispatch=controls=>assert.equal(controls.submissions.length+controls.followUps.length+controls.steers.length+controls.policySelections.length,0);
 async function setup(state=allowed){
@@ -54,15 +60,16 @@ try{
  if(!reviewCase){
  {
   const {page,controls,h}=await setup();await ready(page);await shot(page,'trusted-1440');
-  assert.equal(await entry(page).count(),1,'trusted projects must expose a trust review and revocation entry');
-  assert.match(await page.locator('.composer-trust').innerText(),/项目已信任/);
+  assert.equal(await (await entry(page)).count(),1,'trusted projects must expose a trust review and revocation entry');
+  assert.equal(await page.locator('.composer-trust').count(),0);
+  assert.match(await page.locator('.permission-menu').innerText(),/项目已信任/);await page.keyboard.press('Escape');
   await input(page).fill('管理信任不应发送的草稿');await settings(page);await shot(page,'settings-1440');await settingsEntry(page).click();
   await manager(page).getByText('/mock/project-a',{exact:true}).waitFor();await shot(page,'manage-trusted-1440');
   assert.equal(await manager(page).getByRole('button',{name:'返回',exact:true}).evaluate(el=>el===document.activeElement),true,'safe return action gets initial focus');
   await page.keyboard.press('Escape');await page.getByRole('dialog',{name:'设置',exact:true}).waitFor();
   assert.equal(await settingsEntry(page).evaluate(el=>el===document.activeElement),true,'return restores the settings opener');
   await page.keyboard.press('Escape');assert.equal(await input(page).inputValue(),'管理信任不应发送的草稿');assert.equal(h.writes.length,0);noDispatch(controls);
-  await entry(page).focus();await page.keyboard.press('Enter');await manager(page).getByText('/mock/project-a',{exact:true}).waitFor();
+  await (await entry(page)).focus();await page.keyboard.press('Enter');await manager(page).getByText('/mock/project-a',{exact:true}).waitFor();
   const held=gate('A');h.writeGates.push(held);
   await manager(page).getByRole('button',{name:'撤销信任',exact:true}).evaluate(button=>{button.click();button.click();});await held.seen.promise;
   assert.equal(h.writes.length,1);assert.ok(h.writes[0].commandId.startsWith('web-'));await shot(page,'saving-1440');
@@ -84,7 +91,7 @@ try{
  }
  {
   const {page,controls,h}=await setup();await ready(page);
-  h.failRead=true;await entry(page).click();await manager(page).getByRole('alert').filter({hasText:'Fixture trust read failed'}).waitFor();await shot(page,'read-error-1440');
+  h.failRead=true;await (await entry(page)).click();await manager(page).getByRole('alert').filter({hasText:'Fixture trust read failed'}).waitFor();await shot(page,'read-error-1440');
   assert.equal(await manager(page).getByRole('button',{name:'撤销信任',exact:true}).count(),0);await manager(page).getByRole('button',{name:'重新读取',exact:true}).click();await manager(page).getByText('当前项目',{exact:true}).waitFor();
   h.failWrite=true;await manager(page).getByRole('button',{name:'撤销信任',exact:true}).click();await manager(page).getByRole('alert').filter({hasText:'Fixture trust write failed'}).waitFor();await shot(page,'write-error-1440');assert.equal(controls.trustStates.A.decision,'allow');
   // An external change must be reviewed again, not silently overwritten by the old choice.
@@ -93,14 +100,14 @@ try{
   h.dropWrite=true;await manager(page).getByRole('button',{name:'信任项目',exact:true}).click();await manager(page).getByRole('alert').filter({hasText:'操作结果尚未确认'}).waitFor();assert.equal(h.writes.length,2);
   controls.operationStatus='pending';await manager(page).getByRole('button',{name:'信任项目',exact:true}).click();await manager(page).getByRole('alert').filter({hasText:'上次确认的结果尚不明确'}).waitFor();assert.equal(h.writes.length,2);
   controls.operationStatus='completed';await manager(page).getByRole('button',{name:'信任项目',exact:true}).click();await manager(page).waitFor({state:'hidden'});assert.equal(h.writes.length,2,'lost response reconciliation must not write twice');noDispatch(controls);
-  controls.trustStates.A={configured:true,decision:'allow'};await entry(page).click();await manager(page).getByRole('alert').filter({hasText:'无法确认项目的信任状态'}).waitFor();assert.equal(await manager(page).getByRole('button',{name:'撤销信任',exact:true}).count(),0);await page.keyboard.press('Escape');
+  controls.trustStates.A={configured:true,decision:'allow'};await (await entry(page)).click();await manager(page).getByRole('alert').filter({hasText:'无法确认项目的信任状态'}).waitFor();assert.equal(await manager(page).getByRole('button',{name:'撤销信任',exact:true}).count(),0);await page.keyboard.press('Escape');
   await page.close();console.log(JSON.stringify({trustRecovery:'passed',cases:['read error with retry','definitive save failure','changed state requires re-review','unknown does not retry','completed receipt reconciles without new ID','malformed trust cannot mutate']}));
  }
  {
-  const {page,controls,h}=await setup();await ready(page);const old=gate('A');h.readGates.push(old);await entry(page).click();await old.seen.promise;
+  const {page,controls,h}=await setup();await ready(page);const old=gate('A');h.readGates.push(old);await (await entry(page)).click();await old.seen.promise;
   await manager(page).getByRole('status').filter({hasText:'正在核对'}).waitFor();await shot(page,'loading-1440');await page.keyboard.press('Escape');
   await page.locator('.session-link').filter({hasText:'会话B'}).click();await page.locator('.session-header-title button').filter({hasText:'会话B'}).waitFor();
-  const newer=gate('B');h.readGates.push(newer);await entry(page).click();await newer.seen.promise;old.release.resolve();await old.done.promise;await settle(page);
+  const newer=gate('B');h.readGates.push(newer);await (await entry(page)).click();await newer.seen.promise;old.release.resolve();await old.done.promise;await settle(page);
   assert.equal(await manager(page).getByRole('status').filter({hasText:'正在核对'}).count(),1,'late old read must not end new request loading');assert.equal(await manager(page).getByText('/mock/project-a',{exact:true}).count(),0);
   newer.release.resolve();await newer.done.promise;await manager(page).getByText('/mock/project-b',{exact:true}).waitFor();await page.keyboard.press('Escape');
   // Navigate A -> B -> A while A's write response is late. The old completion must not unlock a new write.
@@ -163,7 +170,7 @@ try{
   await manager(page).getByRole('button',{name:'信任项目',exact:true}).click();await manager(page).waitFor({state:'hidden'});assert.equal(h.writes.length,2);noDispatch(controls);await page.close();console.log(JSON.stringify({trustLateJournal:'passed'}));
  }
  if(!reviewCase||reviewCase==='retry-focus'){
-  const {page,h}=await setup();await ready(page);h.failRead=true;await entry(page).click();await manager(page).getByRole('alert').waitFor();
+  const {page,h}=await setup();await ready(page);h.failRead=true;await (await entry(page)).click();await manager(page).getByRole('alert').waitFor();
   const held=gate('A');h.readGates.push(held);await manager(page).getByRole('button',{name:'重新读取',exact:true}).click();await held.seen.promise;
   assert.equal(await manager(page).evaluate(el=>el.contains(document.activeElement)),true,'removed retry button must leave focus on a stable modal control');
   await page.keyboard.press('Tab');assert.equal(await manager(page).evaluate(el=>el.contains(document.activeElement)),true);
@@ -191,7 +198,7 @@ try{
  }
  if(!reviewCase){
   const {page,controls,h}=await setup();await page.addInitScript(()=>{localStorage.setItem('qi-agent.theme','dark');localStorage.setItem('qi-agent.web-preferences.v1',JSON.stringify({locale:'en'}));});await ready(page);
-  await page.locator('.composer-trust button').click();const translated=page.getByRole('dialog',{name:'Project trust',exact:true});await translated.getByText('/mock/project-a',{exact:true}).waitFor();
+  await page.locator('.permission-trigger').click();await page.getByRole('menuitem',{name:'Manage project trust',exact:true}).click();const translated=page.getByRole('dialog',{name:'Project trust',exact:true});await translated.getByText('/mock/project-a',{exact:true}).waitFor();
   assert.match(await translated.innerText(),/Tools still follow session permissions/);assert.equal(await page.locator('body').getAttribute('data-theme'),'dark');await shot(page,'english-dark-1440');
   await page.setViewportSize({width:390,height:844});await shot(page,'english-dark-390');assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
   await translated.getByRole('button',{name:'Back',exact:true}).click();noDispatch(controls);assert.equal(h.writes.length,0);await page.close();console.log(JSON.stringify({trustEnglishDark:'passed'}));

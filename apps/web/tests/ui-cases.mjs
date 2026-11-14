@@ -1,5 +1,9 @@
 // Reviewed UI case catalog. IDs and assertion names are part of acceptance.
 export const composerSpecs = [
+  { id: 'trusted-stats-1440', width: 1440, height: 900, trust: 'allow', stats: true },
+  { id: 'trusted-stats-320', width: 320, height: 844, trust: 'allow', stats: true },
+  { id: 'trusted-stats-light', width: 1440, height: 900, trust: 'allow', stats: true, theme: 'light' },
+  { id: 'trusted-unknown-stats-320', width: 320, height: 844, trust: 'allow', stats: 'unknown' },
   { id: 'trusted-empty-1250x760', width: 1250, height: 760, trust: 'allow' },
   { id: 'trusted-empty-1280x840', width: 1280, height: 840, trust: 'allow' },
   { id: 'restricted-empty-1024x600', width: 1024, height: 600, trust: 'deny' },
@@ -20,7 +24,11 @@ export const composerAssertions = [
   "composer wrap stays in viewport",
   "footer fully inside card",
   "all footer buttons in viewport",
-  "trust stays above input card",
+  "trusted notice in permission menu; restricted notice above card",
+  "context below card and absent during activity",
+  "session statistics use durable records",
+  "statistics keyboard details and focus return",
+  "trust review remains reachable without mutation",
   "no horizontal page overflow",
   "empty placeholder cannot create scrollbar",
   "long drafts remain scrollable",

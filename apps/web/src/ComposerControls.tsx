@@ -174,9 +174,10 @@ export function SessionActions({ onRename, onFork, onArchive }: {
   </div>;
 }
 
-export function PermissionControl({ policy, onChange }: {
+export function PermissionControl({ policy, onChange, trust }: {
   policy: PolicyStatus;
   onChange: (mode: PolicyStatus["mode"]) => void;
+  trust?: { allowed: boolean; disabled: boolean; onManage: () => void };
 }) {
   const [open, setOpen] = useState(false);
   const close = () => setOpen(false);
@@ -205,6 +206,10 @@ export function PermissionControl({ policy, onChange }: {
         </button></div>;
       })}
       </div>
+      {trust && <div className="permission-trust menu-footer">
+        <p>{t(trust.allowed ? "项目已信任 · 仍受权限和审批约束" : "项目受限 · 仍受权限和审批约束")}</p>
+        <button type="button" role="menuitem" disabled={trust.disabled} onClick={() => { popover.dismiss(); trust.onManage(); }}>{t("管理项目信任")}</button>
+      </div>}
     </MenuSurface>}
   </div>;
 }
@@ -350,38 +355,39 @@ export function formatTokenCount(value: number): string {
   return String(value);
 }
 
-export function ContextMeter({ status }: { status: ContextStatus }) {
+export function ContextMeter({ status, capacity }: { status: ContextStatus | null; capacity?: number }) {
   const [open, setOpen] = useState(false);
   const close = () => setOpen(false);
   const popover = useComposerPopover(open, close, false);
   const panelId = useId();
-  const percent = Math.max(0, Math.min(100, Math.round(status.percent || 0)));
-  const usageDescription = Number.isFinite(status.used_tokens) && status.used_tokens >= 0
-    && Number.isFinite(status.context_window) && status.context_window > 0
-    ? `${status.used_tokens.toLocaleString("zh-CN", { maximumFractionDigits: 0 })} / ${status.context_window.toLocaleString("zh-CN", { maximumFractionDigits: 0 })} tokens`
-    : t("上下文用量未知");
+  const windowSize = status?.context_window ?? capacity;
+  const known = !!status && Number.isSafeInteger(status.used_tokens) && status.used_tokens >= 0
+    && Number.isSafeInteger(windowSize) && windowSize! > 0;
+  const percent = known ? Math.max(0, Math.min(100, Math.round(status.used_tokens / windowSize! * 100))) : null;
+  const label = percent === null ? t("上下文用量未知") : t("上下文已用 {0}%", percent);
+  const usageDescription = known ? `${contextTokenCount(status.used_tokens)} / ${contextTokenCount(windowSize)} tokens` : t("上下文用量未知");
   return <div className="composer-control context-control" ref={popover.root} onKeyDown={popover.onKeyDown}>
-    <button ref={popover.trigger} type="button" className="context-trigger" aria-label={t("上下文已用 {0}%", percent)}
+    <button ref={popover.trigger} type="button" className="context-trigger" aria-label={label} title={label}
       aria-description={usageDescription}
       aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? panelId : undefined}
       onClick={() => setOpen((value) => !value)}>
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <circle className="context-ring-track" cx="12" cy="12" r="8.5" pathLength="100" />
         <circle className="context-ring-value" cx="12" cy="12" r="8.5" pathLength="100"
-          strokeDasharray={`${percent} 100`} />
-      </svg>
+          strokeDasharray={`${percent ?? 0} 100`} />
+      </svg><span>{percent === null ? t("上下文未知") : `${percent}%`}</span>
     </button>
     {open && <MenuSurface ref={popover.panel} id={panelId} className="composer-popover context-popover" role="dialog" aria-label={t("上下文占用")}>
-      <div className="context-popover-head"><div><strong>{t("上下文")}</strong><span>{t("已用") + " "}{percent}%</span></div>
-        <b>{formatTokenCount(status.used_tokens)} <small>/ {formatTokenCount(status.context_window)}</small></b></div>
-      <div className="context-progress"><span style={{ width: `${percent}%` }} /></div>
+      <div className="context-popover-head"><div><strong>{t("上下文")}</strong><span>{percent === null ? t("未知") : `${t("已用")} ${percent}%`}</span></div>
+        <b>{known ? formatTokenCount(status.used_tokens) : t("未知")} <small>/ {windowSize ? formatTokenCount(windowSize) : t("未知")}</small></b></div>
+      <div className="context-progress"><span style={{ width: `${percent ?? 0}%` }} /></div>
       <div className="context-breakdown">
-        <span><i className="system" />{t("系统指令")}<strong>{formatTokenCount(status.system_tokens)}</strong></span>
-        <span><i className="tools" />{t("工具定义")}<strong>{formatTokenCount(status.tool_tokens)}</strong></span>
-        <span><i className="messages" />{t("会话消息")}<strong>{formatTokenCount(status.message_tokens)}</strong></span>
-        <span>{t("请求选项")}<strong>{contextTokenCount(status.option_tokens)}</strong></span>
+        <span><i className="system" />{t("系统指令")}<strong>{contextTokenCount(status?.system_tokens)}</strong></span>
+        <span><i className="tools" />{t("工具定义")}<strong>{contextTokenCount(status?.tool_tokens)}</strong></span>
+        <span><i className="messages" />{t("会话消息")}<strong>{contextTokenCount(status?.message_tokens)}</strong></span>
+        <span>{t("请求选项")}<strong>{contextTokenCount(status?.option_tokens)}</strong></span>
       </div>
-      <p>{contextBudgetExplanation(status)}</p>
+      <p>{status ? contextBudgetExplanation(status) : t("尚未取得上下文用量，模型容量不代表实际已用量。")}</p>
     </MenuSurface>}
   </div>;
 }
