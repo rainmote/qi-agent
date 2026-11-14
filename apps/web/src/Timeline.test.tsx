@@ -93,7 +93,7 @@ test("describes and truncates tool operation targets", () => {
   });
 
   assert.equal(operationTarget(grep), "src · tool_calls");
-  assert.equal(operationTarget(bash, 20), "apps/web · npm run …");
+  assert.equal(operationTarget(bash, 20), "执行 Shell 命令");
 });
 
 
@@ -117,7 +117,8 @@ test("completed tool groups are summarized while failures and unconfirmed result
   const result = snapshot.events.find(event => event.type === "tool/result")!;
   result.data = { ...result.data, ok: false, error: "Permission denied" };
   assert.match(render(), /1 失败/);
-  assert.match(render(), /Permission denied/);
+  assert.match(render(), /调用失败，展开查看详情/);
+  assert.doesNotMatch(render(), /Permission denied/);
   snapshot.events = snapshot.events.filter(event => event.type !== "tool/result");
   assert.match(render(), /2 项结果未确认/);
   assert.doesNotMatch(render(), /is-running|项完成/);

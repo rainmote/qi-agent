@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { processCategory, processDetail, processSummary } from "./process-summary";
+import { processCategory, processDetail, processSummary, toolSummary } from "./process-summary";
 import { buildTimeline } from "./timeline-model";
 import { displayTranscript, foldedReplies, transcriptView } from "./transcript-display";
 import type { DurableEvent } from "./types";
@@ -45,4 +45,29 @@ test("command exit status is distinct from transport success and stderr text", a
   assert(toolFailed(result({ok:true,name:"bash",details:{"exit-code":2}})));
   assert(!toolFailed(result({ok:true,name:"bash",details:{"exit-code":0},content:"stderr: error is a sample word"})));
   assert(!toolFailed(undefined));
+});
+
+test("tool summaries use valid prose without exposing raw commands, code or arbitrary arguments", () => {
+  const raw = { command: "python3 -c 'print(123)'", cwd: "/private/workspace" };
+  assert.equal(toolSummary("bash", { ...raw, description: "  核对\n库存汇总 ", title: "other" }), "核对 库存汇总");
+  assert.equal(toolSummary("bash", { ...raw, description: " ", title: "计算总收入" }), "计算总收入");
+  for (const description of [undefined, null, "", " ", {}, ["raw"], 42]) {
+    assert.equal(toolSummary("bash", { ...raw, description }), "执行 Shell 命令");
+  }
+  assert.equal(toolSummary("exec_command", { cmd: "rm example" }), "执行 Shell 命令");
+  assert.equal(toolSummary("bb_repl", { code: "(println :raw)" }), "执行代码");
+  assert.equal(toolSummary("unknown", { code: "raw", metadata: { secret: "raw" } }), "查看工具详情");
+  assert.equal(processDetail(raw), "");
+  assert.equal(toolSummary("read", { path: "inventory.csv" }), "inventory.csv");
+  const emoji = "👩🏽‍💻";
+  assert.equal(toolSummary("bash", { description: emoji.repeat(8) }, 4), emoji.repeat(3) + "…");
+  assert.equal(toolSummary("bash", { description: "<script>literal text</script>" }), "<script>literal text</script>");
+});
+
+test("collapsed failures retain structured status without leaking raw stderr", async () => {
+  const { toolFailureSummary } = await import("./tool-status");
+  const result = (details: Record<string, unknown>): DurableEvent => ({ id: "r", seq: 1, at: "", type: "tool/result",
+    data: { status: "error", content: "raw stdout and stderr", error: "raw error", details } });
+  assert.equal(toolFailureSummary(result({ "exit-code": 127 })), "命令失败 · exit 127 · 展开查看详情");
+  for (const exit of [undefined, null, {}, "127", 0]) assert.equal(toolFailureSummary(result({ "exit-code": exit })), "调用失败，展开查看详情");
 });

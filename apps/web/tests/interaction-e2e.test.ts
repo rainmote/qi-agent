@@ -306,14 +306,18 @@ test("production Web trust, cancellation, recovery and composer E2E", { timeout:
       const child = join(project, "child"), session = await latestSession(child);
       const before = submitCount(), writes = calls.filter(call => call.body.params?.command === "/trust deny").length;
       const manage = p.getByRole("dialog", { name: "项目信任", exact: true });
-      const entry = p.locator(".composer-trust").getByRole("button", { name: "管理项目信任", exact: true });
-      await input.fill("管理信任时保留的草稿"); await entry.click();
+      const openTrust = async () => {
+        const banner = p.locator(".composer-trust").getByRole("button", { name: "管理项目信任", exact: true });
+        if (await banner.isVisible()) await banner.click();
+        else { await p.locator(".permission-trigger").click(); await p.getByRole("menuitem", { name: "管理项目信任", exact: true }).click(); }
+      };
+      await input.fill("管理信任时保留的草稿"); await openTrust();
       await manage.getByText("继承自父目录", { exact: true }).waitFor();
       assert.equal(await manage.getByText(project, { exact: true }).count(), 1);
       if (artifacts) await p.screenshot({ path: join(artifacts, "trust-real-inherited-1440.png") });
       await manage.getByRole("button", { name: "返回", exact: true }).click();
       assert.equal(submitCount(), before); assert.equal(await input.inputValue(), "管理信任时保留的草稿");
-      await entry.click(); await manage.getByText(child, { exact: true }).waitFor();
+      await openTrust(); await manage.getByText(child, { exact: true }).waitFor();
       await p.setViewportSize({ width: 390, height: 844 });
       if (artifacts) await p.screenshot({ path: join(artifacts, "trust-real-inherited-390.png") });
       assert.ok(await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
@@ -333,7 +337,7 @@ test("production Web trust, cancellation, recovery and composer E2E", { timeout:
       const persisted = await readFile(join(env.QI_AGENT_HOME, "trust.edn"), "utf8");
       assert.ok(persisted.includes(child) && persisted.includes(":deny"));
       if (artifacts) await p.screenshot({ path: join(artifacts, "trust-real-revoked-reload.png") });
-      await entry.click(); await manage.getByRole("button", { name: "信任项目", exact: true }).click(); await manage.waitFor({ state: "hidden" });
+      await openTrust(); await manage.getByRole("button", { name: "信任项目", exact: true }).click(); await manage.waitFor({ state: "hidden" });
       assert.equal((await rpc<SessionSnapshot>(session.id, "session.snapshot")).trust?.decision, "allow"); assert.equal(submitCount(), before);
     });
 

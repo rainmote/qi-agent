@@ -3,6 +3,7 @@
             [qi.jobs :as jobs]
             [qi.kernel :as kernel]
             [qi.plugin :as plugin]
+            [qi.schema :as schema]
             [qi.plugins.execution-world :as execution-world]
             [babashka.fs :as fs]
             [babashka.process :as process]
@@ -142,6 +143,28 @@
         (is (= :cancelled (:status (await-status manager (:job-id job)))))
         (is (empty? (:callbacks @(:state parent)))))
       (finally ((:close! manager))))))
+
+(deftest bash-description-is-display-metadata-only
+  (let [directory (fs/create-temp-dir {:prefix "qi-bash-description-"})
+        ctx (plugin/boot! {:plugins [{:ns 'qi.plugins.execution-world
+                                     :config {:root (str directory) :sandbox :none}}
+                                    {:ns 'qi.plugins.tools}]})]
+    (try
+      (let [bash (kernel/tool ctx "bash")
+            args {:command "printf actual-output"
+                  :description "Show output; $(touch must-not-exist)"}]
+        (is (= "string" (get-in bash [:parameters :properties "description" :type])))
+        (is (str/includes? (:description bash) "user's language"))
+        (is (= args (schema/validate! (:parameters bash) args)))
+        (is (= {:command "printf legacy"}
+               (schema/validate! (:parameters bash) {:command "printf legacy"})))
+        (is (thrown? clojure.lang.ExceptionInfo
+                     (schema/validate! (:parameters bash) (assoc args :description {}))))
+        (is (= ((:approval-target bash) args)
+               ((:approval-target bash) (dissoc args :description))))
+        (is (= "actual-output" (:stdout ((:execute bash) args {}))))
+        (is (not (fs/exists? (fs/path directory "must-not-exist")))))
+      (finally (kernel/dispose-all! ctx) (fs/delete-tree directory)))))
 
 (deftest plugin-completion-is-a-session-event-and-bash-is-backward-compatible
   (let [directory (fs/create-temp-dir {:prefix "qi-jobs-"})

@@ -200,12 +200,16 @@
 (defn- bash-tool [ctx world default-timeout]
   {:name "bash"
    :description (str "Run a shell command in the execution world. "
+                     "Provide description before command: a concise natural-language summary "
+                     "of the command's purpose in the user's language, shown in the UI. "
                      "Set run_in_background to return a job ID immediately; "
                      "use job_output, job_list and job_kill to manage it.")
    :execution-mode :sequential
    :parameters {:type "object"
                 :required ["command"]
-                :properties {"command" {:type "string"}
+                :properties {"description" {:type "string" :minLength 1
+                                             :description "Brief active-voice summary of what this command does; no raw command or output. Display metadata only."}
+                             "command" {:type "string"}
                              "cwd" {:type "string"}
                              "run_in_background" {:type "boolean"}
                              "timeout_ms" {:type "integer" :minimum 1}}

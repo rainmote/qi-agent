@@ -1,3 +1,4 @@
+import { ComposerStats } from "./ComposerStats";
 import { uiText as t } from "./i18n";
 import { desktopDirectory } from "./desktop-directory";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -5,7 +6,7 @@ import { uncertainOperation, type PendingOperation, api, type Bootstrap } from "
 import { RequestScope } from "./request-scope";
 import { BrandMark } from "./BrandMark";
 import { version as webVersion } from "../../../package.json";
-import { useComposerPopover, SidebarMenu, ComposerTools, SessionActions, ContextMeter, ModelControl, PermissionControl } from "./ComposerControls";
+import { useComposerPopover, SidebarMenu, ComposerTools, SessionActions, ModelControl, PermissionControl } from "./ComposerControls";
 import { useProjectTrust } from "./ProjectTrust";
 import { ApprovalPanel, FullAccessDialog, SettingsDialog, WorkspaceDialog } from "./Dialogs";
 import { Icon } from "./icons";
@@ -431,13 +432,15 @@ export function App() {
         { id: "allow", label: "Full Access" },
       ],
     };
-    const [runtimeStatus, subagentStatus, policyStatus] = await Promise.all([
+    const [runtimeStatus, subagentStatus, policyStatus, context] = await Promise.all([
       api.rpc<RuntimeStatus>(id, "runtime.status"),
       api.rpc<SubagentStatus>(id, "subagent.status"),
       api.rpc<PolicyStatus>(id, "policy.status").catch(() => fallbackPolicy),
+      api.rpc<ContextStatus | null>(id, "context.status").catch(() => null),
     ]);
     if (!current() || activeSessionId.current !== id || request !== runtimeRequest.current) return;
     setRuntime(runtimeStatus);
+    if (context) setContextStatus(current => current || context);
     setSubagents(subagentStatus);
     if (policyCurrent()) setPolicy(policyStatus);
   }, []);
@@ -1012,14 +1015,6 @@ export function App() {
   const commandSuggestions = matchingCommands(runtime?.commands, composer);
   const selectedModel = models?.providers.find((entry) => entry.id === pendingModel)
     || models?.current || null;
-  const composerContext = contextStatus?.context_window ? contextStatus : (selectedModel?.["context-window"] ? {
-    used_tokens: 0,
-    context_window: selectedModel["context-window"],
-    percent: 0,
-    system_tokens: 0,
-    tool_tokens: 0,
-    message_tokens: 0,
-  } : null);
 
   useEffect(() => setCommandIndex(0), [composer.split(/\s/, 1)[0], commandSuggestions.length]);
 
@@ -1161,7 +1156,7 @@ export function App() {
         onMouseEnter={() => setCommandIndex(index)} onClick={() => chooseCommand(index)}>
         <code>{command.name}</code><span>{command.description}</span></button>)}
     </div>}
-      {trust.status?.configured && <div className="composer-trust" role="status">
+      {trust.status?.configured && (trust.status.decision !== "allow" || !policy) && <div className="composer-trust" role="status">
         <Icon name={trust.status.decision === "allow" ? "shield" : "eye"} />
         <span>{t(trust.status.decision === "allow" ? "项目已信任 · 仍受权限和审批约束" : "项目受限 · 需要信任的命令已禁用")}</span>
         <button type="button" disabled={busy} onClick={() => void manageTrust()}>{t("管理项目信任")}</button>
@@ -1208,14 +1203,13 @@ export function App() {
             { label: t("自动化"), icon: "clock", disabled: !activeSession, run: () => setWorkbench("automation") },
             { label: t("插件"), icon: "settings", disabled: !activeSession, run: () => setWorkbench("plugins") },
           ]} />
-          {policy && <PermissionControl policy={policy} onChange={requestPolicy} />}
+          {policy && <PermissionControl policy={policy} onChange={requestPolicy} trust={trust.status?.configured ? { allowed: trust.status.decision === "allow", disabled: busy, onManage: () => void manageTrust() } : undefined} />}
         </div>
         <div className="composer-right">
           {!!models?.providers.length && <ModelControl models={models.providers}
             selectedId={pendingModel || models.current?.id || null} thinkingLevel={pendingThinking}
             onSelectModel={(provider) => void selectModel(provider)}
             onSelectThinking={(level) => void selectThinking(level)} />}
-          {composerContext && <ContextMeter status={composerContext} />}
           {phase !== "idle" && activeSession && (composer.trim() || attachments.length > 0) && !projection?.interactions.length && <button type="button" className="busy-submit-button"
             disabled={busy || uploading || stopping || !!pendingOperation} aria-label={preferences.busyEnter === "steer" ? t("插话发送") : t("排队发送")}
             onClick={() => void send()}><Icon name="send" /></button>}
@@ -1365,7 +1359,9 @@ export function App() {
             continueDisabled={busy || uploading || stopping || !!pendingOperation} />}
           {conversationView === "trajectory" && <Trajectory key={activeSession.id} events={projection?.events || []} />}
         </div>
-        <div className="composer-wrap">{composerNode}<div className="session-run-summary">{runSummary}</div></div>
+        <div className="composer-wrap">{composerNode}<ComposerStats summary={projection?.summary || { turns: 0, steps: 0, calls: 0, durationMs: 0 }}
+          events={projection?.events || []} context={contextStatus} capacity={selectedModel?.["context-window"]}
+          active={phase !== "idle" || stopping || !!projection?.interactions.length} /></div>
       </section>}
     </main>
 

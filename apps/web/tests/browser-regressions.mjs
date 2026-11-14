@@ -508,11 +508,15 @@ try{
    const source=window.sources.findLast(source=>!source.closed);
    events.forEach(([event,data],i)=>source.dispatchEvent(new MessageEvent('worker',{data:JSON.stringify({type:'event',event,data,event_id:`compact-${i}`,seq:3+i,durable:true})})));
   });
-  await page.getByText('Search permission denied',{exact:false}).waitFor();
+  await page.getByText('调用失败，展开查看详情',{exact:true}).waitFor();
+  assert.equal(await page.getByText('Search permission denied',{exact:false}).count(),0,'Raw failure output stays in disclosed details');
   const groups=page.locator('.process-group');assert.equal(await groups.count(),1);
   assert.equal(await page.locator('.tool-batch-row').count(),0);
   assert.match(await groups.last().innerText(),/结果未确认/);assert.doesNotMatch(await groups.last().getAttribute('class'),/is-running|is-success/);
   await groups.first().locator('.compact-step-toggle').click();assert.equal(await page.locator('.tool-batch-row').count(),3);
+  const failedTool=page.locator('.tool-batch-row').filter({has:page.locator('.tool-item-status.failed')});
+  await failedTool.click();await page.getByText('Search permission denied',{exact:true}).waitFor();
+  await failedTool.click();assert.equal(await page.getByText('Search permission denied',{exact:false}).count(),0);
   await page.locator('.tool-batch-row').filter({hasText:'sample-a.ts'}).click();await page.getByText('FIRST-DETAIL',{exact:true}).waitFor();
   assert.equal(await page.locator('.tool-details').count(),1);
   await groups.first().locator('.compact-step-toggle').click();await groups.first().locator('.compact-step-toggle').click();

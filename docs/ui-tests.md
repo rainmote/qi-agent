@@ -22,7 +22,7 @@ npm run test:web-headless
 npm run test:web-headless -- --suite composer --ui-root /absolute/production-assets
 ```
 
-单引擎或单套件通过只代表所选范围，不代表完整 UI 验收。默认 `--suite all --browser all`，每个浏览器必须执行 **11 个输入区场景 + 16 个对话过程场景，共 54 个场景**。每个引擎、每套场景限时 180 秒；无自动重试。
+单引擎或单套件通过只代表所选范围，不代表完整 UI 验收。默认 `--suite all --browser all`，每个浏览器必须执行 **15 个输入区场景 + 20 个对话过程场景，共 70 个场景**。每个引擎、每套场景限时 180 秒；无自动重试。
 
 ## 用例目录
 
@@ -41,10 +41,12 @@ npm run test:web-headless -- --suite composer --ui-root /absolute/production-ass
 | --- | --- |
 | `transcript-{compact,standard,detailed,verbose}-{1440,390,320}`（12） | 四种模式、三种宽度；七次调用完整且不重复；两段回复保留；桌面工具行 24–25px，窄屏 24–36px；分组跨模型步骤；键盘展开；重新打开分组保留详情；无横向溢出或运行时写入 |
 | `transcript-default-live` | 无保存偏好时默认 detailed；运行中的过程平铺，七次调用可访问 |
-| `transcript-failure-recovery-320` | `ok:true` 但 `status:error`、exit 127 的命令仍显示失败；折叠摘要、分组和详情一致；后续成功不能抹除失败；八次调用完整 |
+| `transcript-command-summary-{live,history}-{1440,320}`（4） | 自然语言摘要与悬停提示一致；缺失、空白、非法描述使用有效标题或通用摘要；默认不显示命令和输出；键盘展开保留原始参数与输出，收起后隐藏；刷新后摘要一致 |
+| `transcript-failure-recovery-320` | `ok:true` 但 `status:error`、exit 127 的命令仍显示失败；折叠摘要、分组和详情一致；收起时保留退出码，原始错误输出仅在详情显示；后续成功不能抹除失败；八次调用完整 |
 | `transcript-focus-settlement` | 流式结束保留原焦点控件；整轮折叠重置子详情；历史分组标题焦点稳定；可重新打开结果 |
 | `transcript-scroll-cap-320` | 实际制造超长列表；分组高度不超过 `min(400px,50vh)`；内部可滚动，最后一个工具可点击 |
-| `trusted-empty-*`、`restricted-empty-*` | 不同窗口中的完整输入卡、提示、底部状态条和工具栏 |
+| `trusted-stats-{1440,320,light}`、`trusted-unknown-stats-320` | 下方轮次/步数、真实 token 与缓存读数；去重、未知小计；上下文移到卡片外；明暗主题；键盘展开统计详情及焦点返回 |
+| `trusted-empty-*`、`restricted-empty-*` | 不同窗口中的完整输入卡、底部统计栏和工具栏；已信任状态移入权限菜单且保留管理入口；受限警示仍在卡片上方 |
 | `trusted-running-*`、`trusted-pending-*` | 运行中和审批状态保持可操作输入区 |
 | `trusted-long-*`、`trusted-resize-*`、`trusted-height-only` | 长草稿、手机、宽度/高度变化后输入区不溢出 |
 
