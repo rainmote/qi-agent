@@ -1,6 +1,11 @@
 // Shared Harness copy adapted from reference 687f282 (MIT); see THIRD_PARTY_NOTICES.md.
 // qi-specific capabilities and safeguards retain their own semantics.
 export const english: Record<string, string> = {
+  "执行 Shell 命令": "Execute shell command",
+  "执行代码": "Execute code",
+  "查看工具详情": "View tool details",
+  "命令失败 · exit {0} · 展开查看详情": "Command failed · exit {0} · Expand for details",
+  "调用失败，展开查看详情": "Tool failed; expand for details",
   "读取文件": "Read files", "读取图片": "Read images", "写入文件": "Write files", "编辑文件": "Edit files",
   "运行代码": "Run code", "更新计划": "Update plan", "询问用户": "Ask user", "调用工具": "Use tools", "注入上下文": "Injected context",
   "收起后保留的回复": "Replies after collapse", "选择工作步骤收起后仍然显示的助手回复": "Choose which assistant replies stay visible when work details collapse",

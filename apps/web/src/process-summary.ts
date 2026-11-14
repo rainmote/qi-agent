@@ -21,7 +21,35 @@ export function processCategory(name: string): { label: string; icon: IconName }
 }
 
 const detailFields = ["title", "description", "objective", "task", "task_name", "name", "question", "questions",
-  "prompt", "message", "command", "cmd", "queries", "query", "pattern", "url", "uri", "file_path", "path", "target", "action", "status"];
+  "prompt", "message", "queries", "query", "pattern", "url", "uri", "file_path", "path", "target", "action", "status"];
+
+function prose(value: unknown): string {
+  return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+}
+
+function shorten(value: string, limit: number): string {
+  const parts = [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(value)];
+  return parts.length <= limit ? value : parts.slice(0, Math.max(0, limit - 1)).map(p => p.segment).join("") + "…";
+}
+
+/** Presentation metadata is never interpreted as a command or inferred from its output. */
+export function toolSummary(name: string, value: unknown, limit = 96): string {
+  const args = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const description = prose(args.description) || prose(args.title);
+  if (description) return shorten(description, limit);
+  const category = processCategory(name);
+  // Old transcripts and providers that omit descriptions still have an honest label.
+  // Raw commands/code remain available only in the disclosed argument block.
+  if (category.icon === "terminal") return t("执行 Shell 命令");
+  if (category.icon === "command") return t("执行代码");
+  const path = prose(args.path) || prose(args.file_path) || prose(args.file) || prose(args.url);
+  let detail = path;
+  if (name === "grep") detail = [path || ".", prose(args.query)].filter(Boolean).join(" · ");
+  else if (name === "find") detail = [path || ".", prose(args.pattern)].filter(Boolean).join(" · ");
+  else if (name === "lsp_query") detail = [path || ".", prose(args.action), prose(args.symbol)].filter(Boolean).join(" · ");
+  else if (name === "delegate_task" || name === "fork_agent") detail = prose(args.label) || processDetail(args);
+  return shorten(detail || processDetail(args) || t("查看工具详情"), limit);
+}
 export function processDetail(value: unknown): string {
   if (!value || typeof value !== "object" || Array.isArray(value)) return "";
   const args = value as Record<string, unknown>;
@@ -31,10 +59,7 @@ export function processDetail(value: unknown): string {
       ? field === "questions" ? v.find(q => typeof q?.question === "string" && q.question.trim())?.question || ""
         : v.every(s => typeof s === "string") ? v.join(", ") : "" : "";
     const normalized = text.replace(/\s+/g, " ").trim();
-    if (normalized) {
-      const parts = [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(normalized)];
-      return parts.length <= 160 ? normalized : parts.slice(0, 159).map(p => p.segment).join("") + "…";
-    }
+    if (normalized) return shorten(normalized, 160);
   }
   return "";
 }

@@ -240,7 +240,7 @@ npx playwright install --with-deps chromium webkit
 npm run test:ui:e2e
 ```
 
-完整入口还需要现有 E2E 的 Rust 和 Babashka。页面改动必须通过独立入口 `npm run test:ui`，仅需 Node 与浏览器；包含类型、UI 单元、回执检查及 Chromium、WebKit 各 27 个场景。完整用例与门禁约定见 [独立 UI 回归](ui-tests.md)。只运行浏览器部分可用 `npm run test:web-headless`。
+完整入口还需要现有 E2E 的 Rust 和 Babashka。页面改动必须通过独立入口 `npm run test:ui`，仅需 Node 与浏览器；包含类型、UI 单元、回执检查及 Chromium、WebKit 各 31 个场景。完整用例与门禁约定见 [独立 UI 回归](ui-tests.md)。只运行浏览器部分可用 `npm run test:web-headless`。
 它构建独立的生产 Core Preview 资源，不覆盖 `apps/web/dist`。顶部提示条来自真实编译常量，不能用普通 Web 构建或注入 CSS 代替。
 场景覆盖信任/受限提示、待审批、运行中、360×480 最小窗口、长草稿、窄屏、缩窗、只缩高度和展开运行详情；断言检查完整输入卡、底部状态条、工具栏按钮、输入内部滚动和页面横向溢出。
 
@@ -279,6 +279,11 @@ CI 在 Linux Chromium 和 macOS WebKit 自动执行该专项，并通过 `always
   布局切换保留手动选择，整轮主动收起才重置内部展开；运行结束不能卸载持有焦点的工具控件。
 - 命令的结构化 `status:error` 或非零 `details.exit-code` 即使同时具有 `ok:true`，也显示失败；
   `ok` 仅表示工具调用传输完成。恢复后的成功调用不抹去先前失败，stderr 文案本身不会被猜测为失败。
+- 工具行和悬停提示优先显示有效的 `description`，其次是 `title`；空白和非字符串不作摘要。
+  Bash schema 提示模型提供用户语言的目的描述，字段为兼容已有调用保持可选，只作显示元数据，
+  不进入命令执行或审批目标。旧命令缺少描述时显示“执行 Shell 命令”，不推断命令意图。
+  原始参数、命令和 stdout/stderr 在展开详情后查看；收起时保留失败状态和结构化退出码。
+  这一展示方式对应 Harness `tool-bash` 的描述字段和 `ToolRow` 的命令摘要逻辑。
 
 空文本块不占消息行，流式思考与正文进入同一分组模型；工具、重试、压缩与空闲阶段不显示残留流式消息。
 最新运行因模型请求失败或输出上限结束时，可点击“继续生成”，继续原始对话并保留输入区草稿与附件。

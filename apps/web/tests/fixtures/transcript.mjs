@@ -3,7 +3,14 @@
 export const progress = '已读取三个输入文件，接下来计算并校验汇总。';
 export const answer = '售出 A 5 件、B 4 件；剩余 A 5 件、B 4 件；收入 94.5。校验输出 VERIFIED。';
 
-export function transcript({ failure = false, extraCalls = 0, active = false } = {}) {
+export const commandSummaries = [
+  { command: "printf 'RAW_COMMAND_LIST' && ls inventory.csv orders.csv prices.json", description: '  列出三个库存\n来源文件  ' },
+  { command: "python3 -c 'print(\"RAW_COMMAND_CALCULATE\")'", description: '  ', title: '计算库存与收入并写入汇总' },
+  { command: "python3 -c 'print(\"RAW_COMMAND_VERIFY\")'", description: { invalid: 'not prose' } },
+];
+export const summaryOutput = 'exit 0\nstdout:\nRAW_OUTPUT_LIST\ninventory.csv orders.csv prices.json';
+
+export function transcript({ failure = false, extraCalls = 0, active = false, summaries = false } = {}) {
   const events = [];
   const emit = (type, data) => {
     const seq = events.length + 1;
@@ -34,13 +41,13 @@ export function transcript({ failure = false, extraCalls = 0, active = false } =
   call('read', { path: 'inventory.csv' }, 'sku,stock\nA,10\nB,8');
   call('read', { path: 'orders.csv' }, 'sku,quantity\nA,5\nB,4');
   call('read', { path: 'prices.json' }, '{"A":10.5,"B":10.5}');
-  call('bash', { command: 'ls inventory.csv orders.csv prices.json' }, 'exit 0\nstdout:\ninventory.csv orders.csv prices.json');
+  call('bash', summaries ? commandSummaries[0] : { command: 'ls inventory.csv orders.csv prices.json' }, summaries ? summaryOutput : 'exit 0\nstdout:\ninventory.csv orders.csv prices.json');
   message('assistant', progress);
   if (failure) call('bash', { command: 'python calculate.py' }, 'exit 127\nstderr:\npython: command not found', 127);
-  call('bash', { command: 'python3 calculate.py' }, 'exit 0\nstdout:\nsummary.json written');
+  call('bash', summaries ? commandSummaries[1] : { command: 'python3 calculate.py' }, 'exit 0\nstdout:\nsummary.json written');
   for (let i = 0; i < extraCalls; i++) call('read', { path: `extra-${i}.csv` }, `extra row ${i}`);
   call('read', { path: 'summary.json' }, '{"sold":{"A":5,"B":4},"remaining":{"A":5,"B":4},"revenue":94.5}');
-  call('bash', { command: 'python3 verify.py' }, 'exit 0\nstdout:\nVERIFIED\nstderr:\nwarning: optional cache unavailable');
+  call('bash', summaries ? commandSummaries[2] : { command: 'python3 verify.py' }, 'exit 0\nstdout:\nVERIFIED\nstderr:\nwarning: optional cache unavailable');
   if (active) {
     // Last call is still running, after six completed calls and a progress reply.
     events.splice(events.findLastIndex(event => event.type === 'tool/start') + 1);

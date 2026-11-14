@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { transcriptSpecs } from './ui-cases.mjs';
-import { transcript, progress, answer } from './fixtures/transcript.mjs';
+import { transcript, progress, answer, commandSummaries, summaryOutput } from './fixtures/transcript.mjs';
 
 const output = resolve(process.env.QI_AGENT_BROWSER_ARTIFACTS);
 await mkdir(output, { recursive: false });
@@ -68,8 +68,8 @@ try {
         if (mode) localStorage.setItem('qi-agent.transcript-view', mode);
         else localStorage.removeItem('qi-agent.transcript-view');
       }, row.mode);
-      const active = row.kind === 'default' || row.kind === 'focus';
-      const events = transcript({ active, failure: row.kind === 'failure', extraCalls: row.kind === 'scroll' ? 24 : 0 });
+      const active = row.kind === 'default' || row.kind === 'focus' || row.live === true;
+      const events = transcript({ active, summaries: row.kind === 'summary', failure: row.kind === 'failure', extraCalls: row.kind === 'scroll' ? 24 : 0 });
       controls.snapshotOverride = { ...snapshot('A', 0), events, cursor: { generation: 1, sequence: events.length },
         state: { phase: active ? 'tool' : 'idle', revision: 2 } };
       await page.goto(base);
@@ -78,7 +78,31 @@ try {
       await page.evaluate(() => document.fonts.ready);
       await settle(page);
 
-      if (row.kind === 'density') {
+      if (row.kind === 'summary') {
+        await expandTurn(page); await expandGroups(page);
+        const commands = page.locator('[data-tool-call="bash"] .tool-batch-row');
+        const targets = commands.locator('.tool-target');
+        const labels = await targets.allTextContents();
+        check('natural language summaries', labels.length === 3 && labels[0] === '列出三个库存 来源文件' && labels[1] === '计算库存与收入并写入汇总');
+        check('no raw command in collapsed rows or tooltips', await commands.evaluateAll(nodes => nodes.every(node =>
+          !/RAW_COMMAND|python3|printf/.test(node.textContent + ' ' + [...node.querySelectorAll('[title]')].map(el => el.title).join(' ')))));
+        check('legacy command has neutral fallback', labels[2] === '执行 Shell 命令');
+        check('raw output hidden until disclosure', await page.locator('.tool-details').count() === 0 &&
+          !(await page.locator('body').innerText()).includes('RAW_OUTPUT_LIST'));
+        await commands.first().focus(); await page.keyboard.press('Enter');
+        const detail = page.locator('[data-tool-call="bash"]').first().locator('.tool-details');
+        await detail.waitFor();
+        const args = JSON.parse(await detail.locator('pre').nth(0).innerText());
+        check('keyboard reveals exact command and output', args.command === commandSummaries[0].command &&
+          args.description === commandSummaries[0].description && await detail.locator('pre').nth(1).innerText() === summaryOutput);
+        await page.keyboard.press('Enter');
+        check('collapse hides raw details', await page.locator('.tool-details').count() === 0 &&
+          !(await page.locator('body').innerText()).includes('RAW_OUTPUT_LIST'));
+        await page.reload(); await page.locator('.virtualized-timeline').waitFor(); await settle(page);
+        await expandTurn(page); await expandGroups(page);
+        check('summaries survive reload', JSON.stringify(await targets.allTextContents()) === JSON.stringify(labels) &&
+          await page.locator('.tool-details').count() === 0);
+      } else if (row.kind === 'density') {
         const replies = page.locator('.message-assistant');
         check('all replies retained once', await replies.filter({ hasText: progress }).count() === 1 &&
           await replies.filter({ hasText: answer }).count() === 1);
@@ -111,7 +135,10 @@ try {
         check('failure retained in group', await failed.count() === 1 && /exit 127/.test(await failed.innerText()));
         await expandGroups(page);
         check('failed command visible', await page.locator('.tool-item-status.failed').count() === 1 &&
-          /python: command not found/.test(await page.locator('.tool-failure').innerText()));
+          /exit 127/.test(await page.locator('.tool-failure').innerText()) &&
+          !(await page.locator('body').innerText()).includes('python: command not found'));
+        await page.locator('[data-tool-call="bash"]').filter({ has: page.locator('.tool-item-status.failed') }).locator('.tool-batch-row').click();
+        check('failed raw output in details', /python: command not found/.test(await page.locator('.tool-details').innerText()));
         check('all eight calls accessible once', await page.locator('.tool-batch-row').count() === 8);
         check('success does not erase failure', await page.locator('.message-assistant').filter({ hasText: answer }).count() === 1 &&
           /1 失败/.test(await page.locator('.turn-process-toggle').innerText()));

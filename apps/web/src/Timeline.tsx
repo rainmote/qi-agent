@@ -14,8 +14,8 @@ import { messageText } from "./message-content";
 import { continuableRun } from "./run-continuation";
 import { displayTranscript, type CollapseTiming, type TranscriptView, type TranscriptRow, type StepControl, type FoldedReplies } from "./transcript-display";
 
-import { toolFailed } from "./tool-status";
-import { processCategory, processDetail, processSummary } from "./process-summary";
+import { toolFailed, toolFailureSummary } from "./tool-status";
+import { processCategory, processSummary, toolSummary } from "./process-summary";
 
 function text(value: unknown): string {
   if (typeof value === "string") return value;
@@ -27,36 +27,8 @@ function callId(event: DurableEvent): string {
   return String(event.data["call-id"] || event.data.call_id || "");
 }
 
-function oneLine(value: unknown): string {
-  return text(value).replace(/\s+/g, " ").trim();
-}
-
-function truncated(value: string, maxLength: number): string {
-  return value.length <= maxLength ? value : `${value.slice(0, Math.max(1, maxLength - 1))}…`;
-}
-
 export function operationTarget(call: DurableEvent, maxLength = 96): string {
-  const name = String(call.data.name || "tool");
-  const args = call.data.arguments && typeof call.data.arguments === "object" &&
-    !Array.isArray(call.data.arguments)
-    ? call.data.arguments as Record<string, unknown>
-    : {};
-  const path = oneLine(args.path || args.file || args.url);
-  const cwd = oneLine(args.cwd || ".");
-  let target = path;
-  if (name === "bash") target = [cwd, oneLine(args.command)].filter(Boolean).join(" · ");
-  else if (name === "bb_repl") target = oneLine(args.code);
-  else if (name === "grep") target = [path || ".", oneLine(args.query)].filter(Boolean).join(" · ");
-  else if (name === "find") target = [path || ".", oneLine(args.pattern)].filter(Boolean).join(" · ");
-  else if (name === "lsp_query") {
-    target = [path || ".", oneLine(args.action), oneLine(args.symbol)].filter(Boolean).join(" · ");
-  } else if (name === "delegate_task" || name === "fork_agent") {
-    target = oneLine(args.label || args.prompt || args.task);
-  } else if (!target) {
-    target = oneLine(args.title || args.name || args.id || args.agent_id || args.query || args.command ||
-      args.code || args.prompt || args);
-  }
-  return truncated(target || "—", maxLength);
+  return toolSummary(String(call.data.name || "tool"), call.data.arguments, maxLength);
 }
 
 export type { ToolBatch } from "./timeline-model";
@@ -126,7 +98,7 @@ function ProcessGroup({ row, results, activeCalls, mode, reasoning, onToggle, ch
     !latest || Date.parse(call.at) >= Date.parse(latest.at) ? call : latest, undefined);
   const category = current ? processCategory(String(current.data.name || "")) : {label:"正在思考", icon:"think" as const};
   const summary = processSummary(row.batch.calls, row.content.some(item => item.kind === "context"));
-  const detail = current ? processDetail(current.data.arguments) : reasoning.trim().split(/\n\s*\n/).at(-1)?.replace(/\s+/g, " ") || "";
+  const detail = current ? operationTarget(current, 160) : reasoning.trim().split(/\n\s*\n/).at(-1)?.replace(/\s+/g, " ") || "";
   const nextTitle = row.closed ? summary.label : `${t(category.label)}${mode === "standard" && detail ? ` · ${detail}` : ""}`;
   const [title, setTitle] = useState(nextTitle);
   const shownAt = useRef(0);
@@ -162,7 +134,7 @@ function ProcessGroup({ row, results, activeCalls, mode, reasoning, onToggle, ch
       <span className="process-label" title={nextTitle}>{row.closed ? nextTitle : title}</span>
       {warnings && <span className="process-warning">{warnings}</span>}
     </button>
-    {!row.open && failure && <p className="tool-failure">{truncated(oneLine(failure.data.error || failure.data.content) || t("调用失败，展开查看参数"), 140)}</p>}
+    {!row.open && failure && <p className="tool-failure">{toolFailureSummary(failure)}</p>}
     {row.open && <div id={`${row.id}:body`} className={`process-body ${fades}`} ref={body} onScroll={updateFades}>
       <div className="process-content">{children}</div>
     </div>}
@@ -197,7 +169,7 @@ function ToolRows({ batch, results, active, expanded, onToolToggle, pluginSlots 
           <button type="button" className="tool-batch-row" aria-expanded={detailOpen}
             onClick={() => onToolToggle(detailId, !detailOpen)}>
           <span className="tool-batch-name"><Icon name={processCategory(String(call.data.name || "")).icon} />{t(processCategory(String(call.data.name || "")).label)}</span>
-          <span className="tool-target" title={operationTarget(call, 10_000)}>{call.data.name === "bash" && call.data.arguments && typeof call.data.arguments === "object" && "description" in call.data.arguments ? String(call.data.arguments.description) : operationTarget(call)}</span>
+          <span className="tool-target" title={operationTarget(call, 10_000)}>{operationTarget(call)}</span>
           <span className={`tool-item-status ${toolFailed(result) ? "failed" : result ? "completed" : ""}`}>
             {result ? (toolFailed(result) ? t("失败") : t("完成")) : active ? t("等待") : t("未确认")}
           </span>
@@ -206,7 +178,7 @@ function ToolRows({ batch, results, active, expanded, onToolToggle, pluginSlots 
             : <span className="tool-duration" />}
           <Icon name="chevron" className={detailOpen ? "rotate" : ""} />
           </button>
-          {result && toolFailed(result) && !detailOpen && <p className="tool-failure">{truncated(oneLine(result.data.error || result.data.content), 140)}</p>}
+          {result && toolFailed(result) && !detailOpen && <p className="tool-failure">{toolFailureSummary(result)}</p>}
           {detailOpen && <ToolDetails call={call} result={result} pluginSlots={pluginSlots} />}
         </section>;
       })}

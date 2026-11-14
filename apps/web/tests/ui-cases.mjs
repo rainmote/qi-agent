@@ -31,13 +31,21 @@ export const composerAssertions = [
 const common = ['no horizontal overflow', 'no runtime mutation'];
 const density = ['all replies retained once', 'all seven calls accessible once', 'dense tool rows', 'bounded process panels', 'keyboard disclosure', 'tool details retained on group reopen'];
 export const transcriptSpecs = [
+  ...[1440, 320].flatMap(width => [false, true].map(live => ({
+    id: `transcript-command-summary-${live ? 'live' : 'history'}-${width}`, width, height: 1000,
+    mode: live ? 'detailed' : 'standard', kind: 'summary', live,
+    assertions: ['natural language summaries', 'no raw command in collapsed rows or tooltips',
+      'legacy command has neutral fallback', 'raw output hidden until disclosure',
+      'keyboard reveals exact command and output', 'collapse hides raw details',
+      'summaries survive reload', ...common],
+  }))),
   ...[1440, 390, 320].flatMap(width => ['compact', 'standard', 'detailed', 'verbose'].map(mode => ({
     id: `transcript-${mode}-${width}`, width, height: 1000, mode, kind: 'density', assertions: [...density, ...common],
   }))),
   { id: 'transcript-default-live', width: 1440, height: 1000, kind: 'default',
     assertions: ['default detailed', 'live process flat', 'all seven calls accessible once', ...common] },
   { id: 'transcript-failure-recovery-320', width: 320, height: 844, mode: 'standard', kind: 'failure',
-    assertions: ['failure retained in turn', 'failure retained in group', 'failed command visible', 'all eight calls accessible once', 'success does not erase failure', ...common] },
+    assertions: ['failure retained in turn', 'failure retained in group', 'failed command visible', 'failed raw output in details', 'all eight calls accessible once', 'success does not erase failure', ...common] },
   { id: 'transcript-focus-settlement', width: 390, height: 844, mode: 'detailed', kind: 'focus',
     assertions: ['focused control survives settlement', 'outer collapse resets details', 'group header keeps focus', 'reopened details accessible', ...common] },
   { id: 'transcript-scroll-cap-320', width: 320, height: 600, mode: 'standard', kind: 'scroll',
